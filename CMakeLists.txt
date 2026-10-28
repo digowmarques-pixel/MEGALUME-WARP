@@ -120,7 +120,9 @@ target_include_directories(lumen PRIVATE
 target_link_libraries(lumen PRIVATE imgui glfw OpenGL::GL lumen_ffmpeg rtmidi)
 if(WIN32)
   target_link_libraries(lumen PRIVATE spout)
-elseif(NOT APPLE)
+elseif(APPLE)
+  target_link_libraries(lumen PRIVATE "-framework CoreFoundation" "-framework CoreAudio" "-framework AudioToolbox")
+else()
   target_link_libraries(lumen PRIVATE ${CMAKE_DL_LIBS} m) # miniaudio loads backends at runtime
 endif()
 target_compile_definitions(lumen PRIVATE GLFW_INCLUDE_NONE LUMEN_VERSION="${PROJECT_VERSION}")

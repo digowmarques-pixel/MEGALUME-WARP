@@ -58,6 +58,23 @@ jobs:
           name: Lumen-windows-x64
           path: dist/Lumen
 
+  macos:
+    runs-on: macos-latest # Apple Silicon
+    steps:
+      - uses: actions/checkout@v4
+      - name: Dependencies
+        run: brew install cmake pkg-config glfw ffmpeg dylibbundler
+      - name: Build, test and package Lumen.app
+        run: ./scripts/package-macos.sh
+      - name: Zip
+        run: |
+          cd build-macos
+          ditto -c -k --keepParent Lumen.app Lumen-macos-arm64.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Lumen-macos-arm64
+          path: build-macos/Lumen-macos-arm64.zip
+
   linux:
     runs-on: ubuntu-24.04
     steps:

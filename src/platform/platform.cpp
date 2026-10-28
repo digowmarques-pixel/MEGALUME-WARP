@@ -16,6 +16,9 @@
 #include <process.h>
 #else
 #include <unistd.h>
+#ifdef __APPLE__
+#include <mach-o/dyld.h>
+#endif
 #endif
 
 namespace lumen::platform {
@@ -227,7 +230,7 @@ std::string executableDir() {
   return toUtf8(std::filesystem::path(std::wstring(buf, n)).parent_path());
 }
 
-#else // Linux / macOS fallback via zenity, mostly for development.
+#else // macOS (osascript) and Linux (zenity)
 
 static std::string runCapture(const std::string &cmd) {
   std::string out;
@@ -240,17 +243,42 @@ static std::string runCapture(const std::string &cmd) {
   return out;
 }
 
+#ifdef __APPLE__
+// AppleScript string literal (titles and names are short UI strings).
+static std::string asQuote(const std::string &s) {
+  std::string out = "\"";
+  for (char c : s) {
+    if (c == '"' || c == '\\') out += '\\';
+    if (c == '\'') { out += "'\\''"; continue; } // we are inside a single-quoted shell arg
+    out += c;
+  }
+  return out + "\"";
+}
+#endif
+
 bool hasNativeDialogs() {
+#ifdef __APPLE__
+  return true;
+#else
   static int has = -1;
   if (has < 0) has = std::system("command -v zenity >/dev/null 2>&1") == 0 ? 1 : 0;
   return has == 1;
+#endif
 }
 
 std::vector<std::string> openFileDialog(const std::string &title, const std::string &,
                                         bool multiple) {
   if (!hasNativeDialogs()) return {};
+#ifdef __APPLE__
+  std::string cmd = multiple
+      ? "osascript -e 'set fs to choose file with prompt " + asQuote(title) +
+            " with multiple selections allowed' -e 'set out to \"\"' -e 'repeat with f in fs' "
+            "-e 'set out to out & POSIX path of f & linefeed' -e 'end repeat' -e 'return out'"
+      : "osascript -e 'POSIX path of (choose file with prompt " + asQuote(title) + ")'";
+#else
   std::string cmd = "zenity --file-selection --separator='\n' --title='" + title + "'";
   if (multiple) cmd += " --multiple";
+#endif
   std::string out = runCapture(cmd + " 2>/dev/null");
   std::vector<std::string> result;
   std::stringstream ss(out);
@@ -262,8 +290,13 @@ std::vector<std::string> openFileDialog(const std::string &title, const std::str
 std::string saveFileDialog(const std::string &title, const std::string &,
                            const std::string &defaultName) {
   if (!hasNativeDialogs()) return {};
+#ifdef __APPLE__
+  return runCapture("osascript -e 'POSIX path of (choose file name with prompt " + asQuote(title) +
+                    " default name " + asQuote(defaultName) + ")' 2>/dev/null");
+#else
   return runCapture("zenity --file-selection --save --confirm-overwrite --title='" + title +
                     "' --filename='" + defaultName + "' 2>/dev/null");
+#endif
 }
 
 void attachConsole() {}
@@ -272,6 +305,10 @@ std::string logPath() { return ""; }
 
 void fatalError(const std::string &message) {
   std::fprintf(stderr, "[fatal] %s\n", message.c_str());
+#ifdef __APPLE__
+  // Apps opened from Finder have no terminal: show the error.
+  runCapture("osascript -e 'display alert \"Lumen\" message " + asQuote(message) + " as critical' 2>/dev/null");
+#endif
 }
 
 std::vector<std::string> utf8Args(int argc, char **argv) {
@@ -279,9 +316,16 @@ std::vector<std::string> utf8Args(int argc, char **argv) {
 }
 
 std::string executableDir() {
+#ifdef __APPLE__
+  char buf[4096];
+  uint32_t size = sizeof(buf);
+  if (_NSGetExecutablePath(buf, &size) == 0) return toUtf8(std::filesystem::path(buf).parent_path());
+  return ".";
+#else
   std::error_code ec;
   auto p = std::filesystem::read_symlink("/proc/self/exe", ec);
   return ec ? std::string(".") : toUtf8(p.parent_path());
+#endif
 }
 
 #endif

@@ -380,6 +380,11 @@ void Ui::library(App &app) {
       ImGui::CloseCurrentPopup();
     };
     ImGui::SeparatorText("Câmeras e placas de captura");
+#ifdef __APPLE__
+    // FFmpeg cannot list AVFoundation devices: offer the usual indexes.
+    if (ImGui::MenuItem("Câmera 1 do Mac (AVFoundation)")) add(p.addLive("Câmera 1", "0", "avfoundation", "framerate=30"));
+    if (ImGui::MenuItem("Câmera 2 do Mac (AVFoundation)")) add(p.addLive("Câmera 2", "1", "avfoundation", "framerate=30"));
+#endif
     if (captureDevices_.empty()) ImGui::TextDisabled("Nenhum dispositivo encontrado");
     for (auto &d : captureDevices_)
       if (ImGui::MenuItem(d.name.c_str())) add(p.addLive(d.name, d.url, d.format, ""));
@@ -390,7 +395,7 @@ void Ui::library(App &app) {
     ImGui::SameLine();
     if (ImGui::Button("Adicionar") && liveUrl_[0]) add(p.addLive("", liveUrl_, "", ""));
     ImGui::SeparatorText("Spout (Windows)");
-    if (!spoutAvailable()) ImGui::TextDisabled("Disponível só no Windows");
+    if (!spoutAvailable()) ImGui::TextDisabled("Disponível só no Windows (no Mac o equivalente é o Syphon)");
     else {
       if (ImGui::MenuItem("Sender ativo (qualquer um)")) add(p.addSpout(""));
       for (auto &n : spoutSenders_)
