@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(Lumen VERSION 0.2.0 LANGUAGES C CXX)
+project(Lumen VERSION 0.2.1 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -45,7 +45,8 @@ add_library(imgui STATIC
   ${IMGUI_DIR}/backends/imgui_impl_opengl3.cpp)
 target_include_directories(imgui PUBLIC ${IMGUI_DIR} ${IMGUI_DIR}/backends)
 target_link_libraries(imgui PUBLIC glfw OpenGL::GL)
-target_compile_definitions(imgui PUBLIC GLFW_INCLUDE_NONE)
+target_compile_definitions(imgui PUBLIC GLFW_INCLUDE_NONE IMGUI_USER_CONFIG="lumen_imconfig.h")
+target_include_directories(imgui PUBLIC ${CMAKE_SOURCE_DIR}/src)
 
 # ---------------------------------------------------------------- RtMidi (MIDI input)
 add_library(rtmidi STATIC third_party/rtmidi/RtMidi.cpp)

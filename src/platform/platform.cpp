@@ -4,6 +4,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
+#include <csignal>
 #include <exception>
 #include <sstream>
 
@@ -11,6 +12,8 @@
 #include <windows.h>
 #include <commdlg.h>
 #include <shellapi.h>
+#include <io.h>
+#include <process.h>
 #else
 #include <unistd.h>
 #endif
@@ -194,13 +197,18 @@ void attachConsole() {
     std::freopen("CONOUT$", "w", stdout);
     std::freopen("CONOUT$", "w", stderr);
   } else {
+    // One file, both streams in append mode so neither overwrites the other.
     std::wstring path = logPathW();
-    _wfreopen(path.c_str(), L"w", stdout);
+    _wfreopen(path.c_str(), L"a", stdout);
     _wfreopen(path.c_str(), L"a", stderr);
   }
   std::setvbuf(stdout, nullptr, _IONBF, 0);
   std::setvbuf(stderr, nullptr, _IONBF, 0);
   SetUnhandledExceptionFilter(onCrash);
+  std::signal(SIGABRT, [](int) {
+    fatalError("O Lumen foi interrompido (abort). Veja o final do log.");
+    _exit(3);
+  });
   std::set_terminate([] {
     std::string what = "erro interno";
     if (auto e = std::current_exception()) {
@@ -279,3 +287,11 @@ std::string executableDir() {
 #endif
 
 } // namespace lumen::platform
+
+// Called by IM_ASSERT (see lumen_imconfig.h).
+void lumenAssertFail(const char *expr, const char *file, int line) {
+  char msg[1024];
+  std::snprintf(msg, sizeof(msg), "Falha interna da interface: %s\n(%s:%d)", expr, file, line);
+  lumen::platform::fatalError(msg);
+  std::abort();
+}

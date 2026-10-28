@@ -305,8 +305,16 @@ int App::run(const Options &opts) {
     }
 
     // Engine: playback, OSC, then compose the canvas.
+    // The first frames log each stage: if something crashes at startup, the
+    // last line of lumen.log says where.
+    auto step = [&](const char *what) {
+      if (frame < 3) std::printf("[frame %d] %s\n", frame, what);
+    };
+    step("update");
     engine.update(dt);
+    step("render");
     engine.render();
+    step("ui");
 
     // UI.
     ImGui_ImplOpenGL3_NewFrame();
@@ -352,6 +360,7 @@ int App::run(const Options &opts) {
       ImGui::EndPopup();
     }
 
+    step("imgui render");
     ImGui::Render();
     int fbw, fbh;
     glfwGetFramebufferSize(window, &fbw, &fbh);
@@ -393,9 +402,12 @@ int App::run(const Options &opts) {
     }
 
     if (!opts.noOutputs) {
+      step("outputs sync");
       outputs.sync(engine.project);
+      step("outputs render");
       outputs.render(engine.project, engine.canvas().texture(), engine.time(), engine.blackout);
     }
+    step("swap");
     glfwSwapBuffers(window);
 
     commitIfNeeded();

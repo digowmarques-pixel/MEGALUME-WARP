@@ -15,7 +15,7 @@ mkdir -p "$OUT/obj" "$OUT/Lumen"
 CXXFLAGS="-std=c++20 -O2 -Wall -Wno-unused-parameter -DNOMINMAX -DWIN32_LEAN_AND_MEAN -DGLFW_INCLUDE_NONE -DLUMEN_VERSION=\"$(grep -oP 'project\(Lumen VERSION \K[0-9.]+' "$ROOT/CMakeLists.txt")\" \
   -I$ROOT/src -I$ROOT/third_party -I$ROOT/third_party/khr -I$ROOT/third_party/imgui -I$ROOT/third_party/imgui/backends \
   -I$FF/include -I$GLFW/include -I$ROOT/third_party/spout -I$ROOT/third_party/spout/shim \
-  -D__WINDOWS_MM__ -DSPOUT_BUILD_STATIC $EXTRA_CXXFLAGS"
+  -D__WINDOWS_MM__ -DSPOUT_BUILD_STATIC -DIMGUI_USER_CONFIG=\"lumen_imconfig.h\" $EXTRA_CXXFLAGS"
 SOURCES="$(cd "$ROOT" && ls src/*.cpp src/*/*.cpp) third_party/imgui/imgui.cpp third_party/imgui/imgui_draw.cpp \
   third_party/imgui/imgui_tables.cpp third_party/imgui/imgui_widgets.cpp third_party/imgui/imgui_demo.cpp \
   third_party/imgui/backends/imgui_impl_glfw.cpp third_party/imgui/backends/imgui_impl_opengl3.cpp \
