@@ -74,7 +74,9 @@ public:
   // Per-frame.
   void update(double dt);
   void render();
-  Framebuffer &canvas() { return compositor_.canvas(); }
+  Framebuffer &canvas() { return compositor_.canvas(); } // main canvas
+  // Composed texture of any canvas (the main one for unknown ids).
+  const Texture &canvasTexture(int canvasId);
   double time() const { return time_; }
 
   // Shared GPU helpers for the main context.
@@ -132,6 +134,7 @@ private:
   MediaContext context();
   void runColumnActions(const Column &c, int index);
   void applyColumnStates(int index, float duration);
+  void renderCanvas(int canvasId);
   void updateTweens(double dt);
   void updateAutoGo();
   void updateSchedule();
@@ -139,7 +142,8 @@ private:
   bool handleMillumin(const std::vector<std::string> &path, const OscMessage &m);
   bool setLayerProperty(Layer &l, const std::vector<std::string> &prop, const OscMessage &m);
 
-  Compositor compositor_;
+  Compositor compositor_;                                 // main canvas
+  std::map<int, std::unique_ptr<Compositor>> extraCompositors_; // other canvases
   std::map<int, LayerState> states_;
   std::vector<MappingState> mappingStates_;
   int activeColumn_ = -1;

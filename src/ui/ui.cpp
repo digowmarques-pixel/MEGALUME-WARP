@@ -1,6 +1,7 @@
 #include "ui/ui.h"
 
 #include "app.h"
+#include "core/svg.h"
 #include "engine/outputs.h"
 #include "io/spout.h"
 #include "media/decoder.h"
@@ -74,6 +75,19 @@ void fittedImage(const Texture *tex, ImVec2 box, bool flip = false) {
   ImGui::Dummy(box);
 }
 
+bool canvasCombo(const char *label, const Project &p, int &id) {
+  bool changed = false;
+  if (ImGui::BeginCombo(label, p.canvasLabel(id).c_str())) {
+    for (int c : p.canvasIds()) {
+      char item[160];
+      std::snprintf(item, sizeof(item), "%s  (%d×%d)##%d", p.canvasLabel(c).c_str(), p.canvasWidth(c), p.canvasHeight(c), c);
+      if (ImGui::Selectable(item, c == id)) { id = c; changed = true; }
+    }
+    ImGui::EndCombo();
+  }
+  return changed;
+}
+
 const char *mediaTypeLabel(MediaType t) {
   switch (t) {
   case MediaType::Video: return "Vídeo";
@@ -81,6 +95,7 @@ const char *mediaTypeLabel(MediaType t) {
   case MediaType::Generator: return "Gerador";
   case MediaType::Live: return "Ao vivo";
   case MediaType::Spout: return "Spout";
+  case MediaType::Canvas: return "Canvas";
   }
   return "";
 }
@@ -204,6 +219,7 @@ void Ui::draw(App &app) {
   ImGui::PopStyleVar();
 
   outputsWindow(app);
+  inputMeshWindow(app);
   if (showDemo_) ImGui::ShowDemoWindow(&showDemo_);
   if (showHelp_) {
     ImGui::SetNextWindowSize({520, 460}, ImGuiCond_FirstUseEver);
@@ -249,7 +265,7 @@ void Ui::menuBar(App &app) {
     if (ImGui::MenuItem("Refazer", "Ctrl+Y")) app.redo();
     ImGui::Separator();
     if (ImGui::MenuItem("Nova layer")) {
-      Layer &l = app.engine.project.addLayer();
+      Layer &l = app.engine.project.addLayer("", workspace.viewCanvas);
       app.sel.layerId = l.id;
       app.edited();
     }
@@ -402,6 +418,13 @@ void Ui::library(App &app) {
       for (auto &n : spoutSenders_)
         if (ImGui::MenuItem(n.c_str())) add(p.addSpout(n));
     }
+    ImGui::SeparatorText("Canvas (video routing)");
+    for (int c : p.canvasIds()) {
+      char label[160];
+      std::snprintf(label, sizeof(label), "%s (%d×%d)##cvm%d", p.canvasLabel(c).c_str(), p.canvasWidth(c), p.canvasHeight(c), c);
+      if (ImGui::MenuItem(label)) add(p.addCanvasMedia(c));
+    }
+    ImGui::TextDisabled("Mostra um canvas dentro de outro (posição, escala e mapping da layer).");
     ImGui::SeparatorText("Teste");
     if (ImGui::MenuItem("Sinal de teste ao vivo (lavfi)"))
       add(p.addLive("Sinal de teste", "testsrc2=size=1280x720:rate=30", "lavfi", ""));
@@ -440,7 +463,11 @@ void Ui::library(App &app) {
     ImDrawList *dl = ImGui::GetWindowDrawList();
     ImVec2 tl{start.x + 2, start.y + 2}, br{start.x + 78, start.y + 46};
     dl->AddRectFilled(tl, br, IM_COL32(15, 15, 15, 255));
-    if (thumb && !thumb->empty()) dl->AddImage(texId(*thumb), tl, br);
+    if (m.type == MediaType::Canvas) // live picture of the canvas (bottom-up texture)
+      dl->AddImage(texId(app.engine.canvasTexture(m.canvasRef)), tl, br, {0, 1}, {1, 0});
+    else if (thumb && !thumb->empty()) dl->AddImage(texId(*thumb), tl, br);
+    else if (m.type == MediaType::Live || m.type == MediaType::Spout)
+      dl->AddText({tl.x + 6, tl.y + 14}, IM_COL32(150, 150, 150, 255), "parado");
     else dl->AddText({tl.x + 6, tl.y + 14}, IM_COL32(200, 80, 80, 255), "erro");
     dl->AddText({start.x + 86, start.y + 6}, IM_COL32(230, 230, 230, 255), m.name.c_str());
     dl->AddText({start.x + 86, start.y + 25}, IM_COL32(140, 140, 140, 255), mediaTypeLabel(m.type));
@@ -464,7 +491,7 @@ void Ui::dashboard(App &app) {
   Project &p = e.project;
 
   if (ImGui::Button("+ Layer")) {
-    Layer &l = p.addLayer();
+    Layer &l = p.addLayer("", workspace.viewCanvas);
     app.sel.layerId = l.id;
     app.sel.slice = 0;
     app.edited();
@@ -675,10 +702,12 @@ void Ui::dashboard(App &app) {
     if (ImGui::Checkbox("##vis", &l.visible)) app.edited();
     ImGui::SetItemTooltip("Visível");
     ImGui::SameLine();
-    if (ImGui::Selectable(l.name.c_str(), selected, 0, {nameW - 36, 0})) {
+    std::string rowName = p.canvases.empty() ? l.name : l.name + "  \xc2\xb7 " + p.canvasLabel(l.canvasId); // ·
+    if (ImGui::Selectable(rowName.c_str(), selected, 0, {nameW - 36, 0})) {
       app.sel.layerId = l.id;
       app.sel.slice = 0;
       app.sel.inspector = Inspector::Layer;
+      if (workspace.viewOutputId < 0) workspace.viewCanvas = l.canvasId;
     }
     if (ImGui::BeginPopupContextItem()) {
       ImGui::SetNextItemWidth(160);
@@ -851,6 +880,262 @@ void Ui::inspector(App &app) {
   shown = app.sel.inspector;
 }
 
+// Mask list and properties, shared by layer masks (canvas px, unit = 1) and
+// output masks (unit = output size in px, points stored 0..1).
+void Ui::maskList(App &app, std::vector<Mask> &masks, int &sel, int &selPoint, Vec2 unit, Vec2 area,
+                  bool outputSpace) {
+  int remove = -1, move = -1, dir = 0;
+  for (size_t i = 0; i < masks.size(); ++i) {
+    Mask &m = masks[i];
+    ImGui::PushID(int(i) + 9100);
+    if (ImGui::Checkbox("##en", &m.enabled)) app.edited();
+    ImGui::SameLine();
+    bool valid = m.points.size() >= 3;
+    if (!valid) ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.98f, 0.62f, 0.18f, 1)); // like Millumin: orange = no shape yet
+    char label[160];
+    std::snprintf(label, sizeof(label), "%s  %s%s", m.name.c_str(), m.subtract ? "(esconde)" : "(mostra)",
+                  m.inverted ? " inv." : "");
+    if (ImGui::Selectable(label, sel == int(i))) { sel = int(i); selPoint = -1; }
+    if (!valid) ImGui::PopStyleColor();
+    if (ImGui::BeginPopupContextItem()) {
+      if (ImGui::MenuItem("Subir", nullptr, false, i > 0)) { move = int(i); dir = -1; }
+      if (ImGui::MenuItem("Descer", nullptr, false, i + 1 < masks.size())) { move = int(i); dir = 1; }
+      if (ImGui::MenuItem("Duplicar")) {
+        Mask c = m;
+        c.name += " cópia";
+        masks.insert(masks.begin() + int(i) + 1, c);
+        app.edited();
+        ImGui::EndPopup();
+        ImGui::PopID();
+        break;
+      }
+      if (ImGui::MenuItem("Remover")) remove = int(i);
+      ImGui::EndPopup();
+    }
+    ImGui::PopID();
+  }
+  if (remove >= 0) {
+    masks.erase(masks.begin() + remove);
+    sel = -1;
+    app.edited();
+  }
+  if (move >= 0) {
+    std::swap(masks[size_t(move)], masks[size_t(move + dir)]);
+    sel = move + dir;
+    app.edited();
+  }
+  ImGui::TextDisabled("Aplicadas de cima para baixo (botão direito: subir / descer).");
+
+  auto add = [&](Mask m) {
+    m.name = "Máscara " + std::to_string(masks.size() + 1);
+    if (outputSpace) { m.subtract = true; m.feather = 20; }
+    masks.push_back(m);
+    sel = int(masks.size()) - 1;
+    selPoint = -1;
+    workspace.tool = Tool::Mask;
+    app.edited();
+  };
+  if (ImGui::Button("+ Máscara")) add(Mask{});
+  ImGui::SameLine();
+  if (ImGui::Button("Forma...")) ImGui::OpenPopup("##shape");
+  if (ImGui::BeginPopup("##shape")) {
+    // Centred, a third of the area (canvas or output).
+    Vec2 c{area.x * 0.5f, area.y * 0.5f};
+    float r = std::min(area.x * unit.x, area.y * unit.y) / 6.0f; // pixels
+    float rx = r / unit.x, ry = r / unit.y;
+    Mask m;
+    if (ImGui::MenuItem("Quadrado")) {
+      m.points = {{c.x - rx, c.y - ry}, {c.x + rx, c.y - ry}, {c.x + rx, c.y + ry}, {c.x - rx, c.y + ry}};
+      add(m);
+    }
+    if (ImGui::MenuItem("Círculo")) {
+      const float k = 0.5522847f;
+      m.points = {{c.x + rx, c.y}, {c.x, c.y + ry}, {c.x - rx, c.y}, {c.x, c.y - ry}};
+      m.tanIn = {{0, -ry * k}, {rx * k, 0}, {0, ry * k}, {-rx * k, 0}};
+      m.tanOut = {{0, ry * k}, {-rx * k, 0}, {0, -ry * k}, {rx * k, 0}};
+      add(m);
+    }
+    if (ImGui::MenuItem("Triângulo")) {
+      m.points = {{c.x, c.y - ry}, {c.x + rx, c.y + ry}, {c.x - rx, c.y + ry}};
+      add(m);
+    }
+    ImGui::EndPopup();
+  }
+  ImGui::SameLine();
+  if (ImGui::Button("Importar SVG")) {
+    auto files = platform::openFileDialog("Importar máscaras (SVG)", "SVG|*.svg|Todos|*.*", false);
+    std::string text, err;
+    if (!files.empty() && platform::readFile(files[0], text)) {
+      auto imported = masksFromSvg(text, area.x * unit.x, area.y * unit.y, &err);
+      for (auto &m : imported) {
+        for (auto &v : m.points) v = {v.x / unit.x, v.y / unit.y};
+        for (auto &v : m.tanIn) v = {v.x / unit.x, v.y / unit.y};
+        for (auto &v : m.tanOut) v = {v.x / unit.x, v.y / unit.y};
+        if (outputSpace) m.subtract = true;
+        masks.push_back(m);
+      }
+      if (!imported.empty()) {
+        sel = int(masks.size()) - 1;
+        app.edited();
+        app.status(std::to_string(imported.size()) + " máscara(s) importada(s) do SVG");
+      } else {
+        app.status("SVG: " + err, true);
+      }
+    }
+  }
+  ImGui::SameLine();
+  ImGui::BeginDisabled(masks.empty());
+  if (ImGui::Button("Exportar SVG")) {
+    std::string path = platform::saveFileDialog("Exportar máscaras (SVG)", "SVG|*.svg", "mascaras.svg");
+    if (!path.empty()) {
+      std::vector<Mask> scaled = masks;
+      for (auto &m : scaled) {
+        for (auto &v : m.points) v = {v.x * unit.x, v.y * unit.y};
+        for (auto &v : m.tanIn) v = {v.x * unit.x, v.y * unit.y};
+        for (auto &v : m.tanOut) v = {v.x * unit.x, v.y * unit.y};
+      }
+      if (platform::writeFile(path, masksToSvg(scaled, area.x * unit.x, area.y * unit.y))) app.status("Máscaras exportadas: " + path);
+      else app.status("Não foi possível salvar " + path, true);
+    }
+  }
+  ImGui::EndDisabled();
+  helpMarker("SVG: desenhe as formas no Illustrator / Inkscape sobre uma foto do cenário no tamanho "
+             "do canvas (ou do projetor) e importe. Caminhos, polígonos, retângulos, círculos e "
+             "curvas viram máscaras.");
+
+  if (sel < 0 || sel >= int(masks.size())) return;
+  Mask &m = masks[size_t(sel)];
+  ImGui::SeparatorText(m.name.c_str());
+  ImGui::PushID("maskprops");
+  if (inputText("Nome", m.name)) app.edited();
+  int mode = m.subtract ? 1 : 0;
+  if (ImGui::Combo("Modo", &mode, "Mostrar pixels\0Esconder pixels\0")) { m.subtract = mode == 1; app.edited(); }
+  ImGui::SameLine();
+  if (ImGui::Checkbox("Invertida", &m.inverted)) app.edited();
+  helpMarker("Invertida: age fora da forma em vez de dentro.");
+  if (ImGui::SliderFloat("Opacidade", &m.opacity, 0, 1)) app.edited();
+  if (ImGui::SliderFloat("Suavizar borda (px)", &m.feather, 0, 300)) app.edited();
+  if (ImGui::DragFloat("Escala", &m.scale, 0.005f, 0.001f, 20, "%.3f")) { m.scale = std::max(0.001f, m.scale); app.edited(); }
+  ImGui::Text("%zu pontos", m.points.size());
+  ImGui::SameLine();
+  if (ImGui::SmallButton("Tudo curvo")) {
+    m.ensureTangents();
+    size_t n = m.points.size();
+    for (size_t i = 0; i < n && n >= 3; ++i) {
+      Vec2 d = (m.points[(i + 1) % n] - m.points[(i + n - 1) % n]) * (1.0f / 6.0f);
+      m.tanIn[i] = d * -1.0f;
+      m.tanOut[i] = d;
+    }
+    app.edited();
+  }
+  ImGui::SameLine();
+  if (ImGui::SmallButton("Tudo reto")) { m.tanIn.clear(); m.tanOut.clear(); app.edited(); }
+  ImGui::SameLine();
+  if (ImGui::SmallButton("Limpar pontos")) { m.points.clear(); m.tanIn.clear(); m.tanOut.clear(); selPoint = -1; app.edited(); }
+  ImGui::TextDisabled("Alt+clique num ponto: curva / canto. Arraste as alças (Shift: só uma).");
+  ImGui::PopID();
+}
+
+void Ui::openInputMesh(int layerId, int slice, int outputId) {
+  inputMesh_ = {true, layerId, slice, outputId};
+}
+
+// Input side of a mesh warp: the control points over the content itself.
+void Ui::inputMeshWindow(App &app) {
+  if (!inputMesh_.open) return;
+  Project &p = app.engine.project;
+  Warp *w = nullptr;
+  const Texture *tex = nullptr;
+  bool flip = false;
+  float u0 = 0, v0 = 0, u1 = 1, v1 = 1;
+  std::string title;
+  if (OutputConfig *o = p.output(inputMesh_.outputId)) {
+    w = &o->warp;
+    tex = &app.engine.canvas().texture();
+    flip = true; // the canvas texture is bottom-up
+    float cw = float(p.canvasWidth(o->canvasId)), ch = float(p.canvasHeight(o->canvasId));
+    u0 = o->srcX / cw; v0 = o->srcY / ch; u1 = (o->srcX + o->srcW) / cw; v1 = (o->srcY + o->srcH) / ch;
+    title = "Saída " + o->name;
+  } else if (Layer *l = p.layer(inputMesh_.layerId)) {
+    if (inputMesh_.slice >= 0 && inputMesh_.slice < int(l->slices.size())) {
+      Slice &s = l->slices[size_t(inputMesh_.slice)];
+      w = &s.warp;
+      u0 = s.u0; v0 = s.v0; u1 = s.u1; v1 = s.v1;
+      if (const LayerState *st = app.engine.layerState(l->id)) tex = st->currentTex;
+      title = l->name + " / " + s.name;
+    }
+  }
+  if (!w) { inputMesh_.open = false; return; }
+  ImGui::SetNextWindowSize({720, 520}, ImGuiCond_FirstUseEver);
+  if (!ImGui::Begin(("Malha de entrada — " + title + "###inputmesh").c_str(), &inputMesh_.open)) {
+    ImGui::End();
+    return;
+  }
+  int grid[2] = {w->meshCols, w->meshRows};
+  ImGui::SetNextItemWidth(140);
+  if (ImGui::InputInt2("Divisão", grid)) { w->resampleMesh(grid[0], grid[1]); app.edited(); }
+  ImGui::SameLine();
+  if (ImGui::Button("Grade regular")) { w->uvMesh.clear(); app.edited(); }
+  ImGui::SameLine();
+  ImGui::TextDisabled("Arraste os pontos para cima dos detalhes da imagem · duplo clique adiciona linha e coluna");
+  ImVec2 avail = ImGui::GetContentRegionAvail();
+  float aspect = tex && !tex->empty() ? float(tex->width()) * (u1 - u0) / std::max(1.0f, float(tex->height()) * (v1 - v0)) : 16.0f / 9.0f;
+  float bw = avail.x, bh = bw / aspect;
+  if (bh > avail.y) { bh = avail.y; bw = bh * aspect; }
+  ImVec2 o = ImGui::GetCursorScreenPos();
+  ImGui::InvisibleButton("##inmesh", {std::max(bw, 10.0f), std::max(bh, 10.0f)});
+  ImDrawList *dl = ImGui::GetWindowDrawList();
+  dl->AddRectFilled(o, {o.x + bw, o.y + bh}, IM_COL32(20, 20, 22, 255));
+  if (tex && !tex->empty()) {
+    ImVec2 a = flip ? ImVec2(u0, 1 - v0) : ImVec2(u0, v0), b = flip ? ImVec2(u1, 1 - v1) : ImVec2(u1, v1);
+    dl->AddImage(texId(*tex), o, {o.x + bw, o.y + bh}, a, b);
+  } else {
+    dl->AddText({o.x + 10, o.y + 10}, IM_COL32(200, 200, 200, 255), "Dispare uma mídia nesta layer para ver a imagem.");
+  }
+  w->ensureUvMesh();
+  auto toScreen = [&](Vec2 uv) { return ImVec2{o.x + uv.x * bw, o.y + uv.y * bh}; };
+  for (int r = 0; r < w->meshRows; ++r)
+    for (int c = 0; c < w->meshCols; ++c) {
+      if (c + 1 < w->meshCols) dl->AddLine(toScreen(w->uvAt(c, r)), toScreen(w->uvAt(c + 1, r)), IM_COL32(250, 158, 46, 150));
+      if (r + 1 < w->meshRows) dl->AddLine(toScreen(w->uvAt(c, r)), toScreen(w->uvAt(c, r + 1)), IM_COL32(250, 158, 46, 150));
+    }
+  ImGuiIO &io = ImGui::GetIO();
+  Vec2 mouse{std::clamp((io.MousePos.x - o.x) / bw, 0.0f, 1.0f), std::clamp((io.MousePos.y - o.y) / bh, 0.0f, 1.0f)};
+  if (ImGui::IsItemClicked()) {
+    inputMesh_.point = -1;
+    float best = 10;
+    for (int i = 0; i < w->meshCols * w->meshRows; ++i) {
+      ImVec2 sp = toScreen(w->uvMesh[size_t(i)]);
+      float d = std::hypot(sp.x - io.MousePos.x, sp.y - io.MousePos.y);
+      if (d < best) { best = d; inputMesh_.point = i; }
+    }
+  }
+  if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
+    // The clicked content point becomes a new row / column of the grid.
+    Vec2 uv;
+    Warp unit; // grid parameter of a content point: invert the input grid
+    unit.corners = {Vec2{0, 0}, Vec2{1, 0}, Vec2{1, 1}, Vec2{0, 1}};
+    unit.meshCols = w->meshCols;
+    unit.meshRows = w->meshRows;
+    unit.mesh = w->uvMesh;
+    if (unit.unmap(mouse, uv) && w->insertLines(uv.x, uv.y)) app.edited();
+    inputMesh_.point = -1;
+  }
+  if (inputMesh_.point >= 0 && inputMesh_.point < int(w->uvMesh.size()) && ImGui::IsItemActive() &&
+      ImGui::IsMouseDragging(ImGuiMouseButton_Left, 0)) {
+    w->uvMesh[size_t(inputMesh_.point)] = mouse;
+    app.edited();
+  }
+  for (int i = 0; i < w->meshCols * w->meshRows; ++i) {
+    ImVec2 sp = toScreen(w->uvMesh[size_t(i)]);
+    bool selPt = i == inputMesh_.point;
+    dl->AddCircleFilled(sp, selPt ? 6.0f : 4.5f, selPt ? IM_COL32(255, 255, 255, 255) : IM_COL32(20, 20, 20, 230));
+    dl->AddCircle(sp, selPt ? 6.0f : 4.5f, IM_COL32(250, 158, 46, 255), 0, 2);
+  }
+  if (w->uvIsIdentity()) w->uvMesh.clear();
+  ImGui::End();
+}
+
 void Ui::layerInspector(App &app) {
   Project &p = app.engine.project;
   Layer *l = p.layer(app.sel.layerId);
@@ -859,7 +1144,21 @@ void Ui::layerInspector(App &app) {
     return;
   }
   ImGui::PushID(l->id);
+  const float CW = float(p.canvasWidth(l->canvasId)), CH = float(p.canvasHeight(l->canvasId));
   if (inputText("Nome", l->name)) app.edited();
+  if (p.canvases.size() > 0) {
+    int cid = l->canvasId;
+    if (canvasCombo("Canvas", p, cid)) {
+      // Keep the mapping proportional to the new canvas.
+      float sx = float(p.canvasWidth(cid)) / CW, sy = float(p.canvasHeight(cid)) / CH;
+      for (auto &sl : l->slices)
+        for (auto &c : sl.warp.corners) c = {c.x * sx, c.y * sy};
+      l->canvasId = cid;
+      workspace.viewCanvas = cid;
+      workspace.viewOutputId = -1;
+      app.edited();
+    }
+  }
   if (ImGui::Checkbox("Visível", &l->visible)) app.edited();
   if (ImGui::SliderFloat("Opacidade", &l->opacity, 0, 1)) app.edited();
   if (ImGui::SliderFloat("Volume", &l->volume, 0, 2, "%.2f")) app.edited();
@@ -924,8 +1223,8 @@ void Ui::layerInspector(App &app) {
     if (ImGui::Button("+ Fatia")) {
       Slice s;
       s.name = "Fatia " + std::to_string(l->slices.size() + 1);
-      float w = float(p.canvasW) * 0.3f, h = float(p.canvasH) * 0.3f;
-      s.warp.setRect({float(p.canvasW) * 0.35f, float(p.canvasH) * 0.35f}, {w, h});
+      float w = CW * 0.3f, h = CH * 0.3f;
+      s.warp.setRect({CW * 0.35f, CH * 0.35f}, {w, h});
       l->slices.push_back(s);
       si = int(l->slices.size()) - 1;
       app.edited();
@@ -1019,25 +1318,31 @@ void Ui::layerInspector(App &app) {
       }
       int grid[2] = {s.warp.meshCols, s.warp.meshRows};
       if (ImGui::InputInt2("Malha (col × lin)", grid)) {
-        grid[0] = std::clamp(grid[0], 2, 33);
-        grid[1] = std::clamp(grid[1], 2, 33);
-        s.warp.resetMesh(grid[0], grid[1]);
+        s.warp.resampleMesh(grid[0], grid[1]); // keeps the current warp
         app.edited();
       }
+      helpMarker("Mudar a divisão mantém a deformação atual. No workspace (ferramenta Malha), "
+                 "duplo clique adiciona uma linha e uma coluna de pontos passando pelo clique.");
+      if (ImGui::Button("Malha de entrada...")) openInputMesh(l->id, si, -1);
+      ImGui::SameLine();
+      ImGui::TextDisabled(s.warp.uvIsIdentity() ? "(regular)" : "(ajustada)");
+      helpMarker("Lado da mídia da malha: coloque cada ponto sobre um detalhe da imagem (janelas "
+                 "de uma fachada, quinas). Depois, na ferramenta Malha, leve os pontos até o "
+                 "mesmo detalhe no prédio real.");
       if (ImGui::Button("Retângulo da mídia")) {
         // Fit the slice to the media aspect ratio, centred on the canvas.
         float aspect = 16.0f / 9.0f;
         if (const LayerState *st = app.engine.layerState(l->id); st && st->currentTex)
           aspect = float(st->currentTex->width()) / float(std::max(1, st->currentTex->height()));
         aspect *= (s.u1 - s.u0) / std::max(1e-3f, s.v1 - s.v0);
-        float h = float(p.canvasH) * 0.8f, w = h * aspect;
-        if (w > float(p.canvasW) * 0.95f) { w = float(p.canvasW) * 0.95f; h = w / aspect; }
-        s.warp.setRect({(float(p.canvasW) - w) * 0.5f, (float(p.canvasH) - h) * 0.5f}, {w, h});
+        float h = CH * 0.8f, w = h * aspect;
+        if (w > CW * 0.95f) { w = CW * 0.95f; h = w / aspect; }
+        s.warp.setRect({(CW - w) * 0.5f, (CH - h) * 0.5f}, {w, h});
         app.edited();
       }
       ImGui::SameLine();
       if (ImGui::Button("Tela cheia")) {
-        s.warp.setRect({0, 0}, {float(p.canvasW), float(p.canvasH)});
+        s.warp.setRect({0, 0}, {CW, CH});
         app.edited();
       }
       ImGui::SameLine();
@@ -1050,50 +1355,7 @@ void Ui::layerInspector(App &app) {
 
   if (ImGui::CollapsingHeader("Máscaras", ImGuiTreeNodeFlags_DefaultOpen)) {
     ImGui::TextWrapped("Ferramenta Máscara (K): clique no workspace para adicionar pontos.");
-    int &mi = app.sel.mask;
-    for (size_t i = 0; i < l->masks.size(); ++i) {
-      ImGui::PushID(1000 + int(i));
-      if (ImGui::Checkbox("##en", &l->masks[i].enabled)) app.edited();
-      ImGui::SameLine();
-      if (ImGui::Selectable(l->masks[i].name.c_str(), mi == int(i))) {
-        mi = int(i);
-        app.sel.maskPoint = -1;
-      }
-      ImGui::PopID();
-    }
-    if (ImGui::Button("+ Máscara")) {
-      Mask m;
-      m.name = "Máscara " + std::to_string(l->masks.size() + 1);
-      l->masks.push_back(m);
-      mi = int(l->masks.size()) - 1;
-      app.sel.maskPoint = -1;
-      workspace.tool = Tool::Mask;
-      app.edited();
-    }
-    if (mi >= 0 && mi < int(l->masks.size())) {
-      Mask &m = l->masks[size_t(mi)];
-      ImGui::SameLine();
-      if (ImGui::Button("Remover máscara")) {
-        l->masks.erase(l->masks.begin() + mi);
-        mi = -1;
-        app.edited();
-      } else {
-        ImGui::SeparatorText(m.name.c_str());
-        if (inputText("Nome da máscara", m.name)) app.edited();
-        int mode = m.subtract ? 1 : 0;
-        if (ImGui::Combo("Modo", &mode, "Revelar dentro\0Esconder dentro\0")) {
-          m.subtract = mode == 1;
-          app.edited();
-        }
-        if (ImGui::SliderFloat("Suavizar borda (px)", &m.feather, 0, 200)) app.edited();
-        ImGui::Text("%zu pontos", m.points.size());
-        ImGui::SameLine();
-        if (ImGui::SmallButton("Limpar pontos")) {
-          m.points.clear();
-          app.edited();
-        }
-      }
-    }
+    maskList(app, l->masks, app.sel.mask, app.sel.maskPoint, {1, 1}, {CW, CH}, false);
   }
   ImGui::PopID();
 }
@@ -1194,6 +1456,15 @@ void Ui::mediaInspector(App &app) {
       app.edited();
     }
     ImGui::TextDisabled("A entrada abre quando alguma layer a dispara e fecha quando ninguém a usa.");
+  } else if (m->type == MediaType::Canvas) {
+    int cid = m->canvasRef;
+    if (canvasCombo("Canvas mostrado", p, cid)) {
+      m->canvasRef = cid;
+      m->name = "Canvas: " + p.canvasLabel(cid);
+      app.edited();
+    }
+    helpMarker("Coloque esta mídia numa layer de outro canvas: posição, escala, rotação e mapping "
+               "da layer posicionam o canvas inteiro. Um canvas que mostra a si mesmo cria um eco.");
   } else if (m->type == MediaType::Spout) {
     if (inputText("Sender", m->path)) {
       app.engine.cache.invalidate(m->id);
@@ -1359,6 +1630,44 @@ void Ui::outputInspector(App &app) {
   }
   helpMarker("Em um monitor a saída ocupa a tela inteira, sem bordas. Desative o espelhamento "
              "de telas no Windows (Win+P → Estender).");
+  if (p.canvases.size() > 0) {
+    int cid = o->canvasId;
+    if (canvasCombo("Canvas", p, cid)) {
+      o->canvasId = cid;
+      o->srcX = o->srcY = 0;
+      o->srcW = float(p.canvasWidth(cid));
+      o->srcH = float(p.canvasHeight(cid));
+      app.edited();
+    }
+    helpMarker("Qual canvas esta saída mostra. Ex.: um canvas 3840×2160 para o processador de LED "
+               "e o canvas principal para os projetores.");
+  }
+  ImGui::SeparatorText("Spout desta saída");
+  {
+    bool on = !o->spoutName.empty();
+    if (ImGui::Checkbox("Enviar por Spout", &on)) {
+      o->spoutName = on ? "Lumen " + o->name : "";
+      if (!on) o->windowless = false;
+      app.edited();
+    }
+    helpMarker("Envia a imagem final desta saída (com warp, blend e cor) para outro programa ou "
+               "para um processador de LED / NDI (via Spout to NDI). Funciona quando as saídas estão abertas.");
+    if (on) {
+      ImGui::SetNextItemWidth(200);
+      if (inputText("Nome do Spout", o->spoutName)) app.edited();
+      if (ImGui::Checkbox("Sem janela (só Spout)", &o->windowless)) app.edited();
+      if (o->windowless) {
+        int sz[2] = {o->winW, o->winH};
+        if (ImGui::InputInt2("Tamanho (px)", sz)) {
+          o->winW = std::max(16, sz[0]);
+          o->winH = std::max(16, sz[1]);
+          app.edited();
+        }
+      }
+      std::string st = app.outputs.spoutStatus(o->id);
+      if (!st.empty()) ImGui::TextDisabled("%s", st.c_str());
+    }
+  }
   if (o->monitor < 0) {
     int sz[2] = {o->winW, o->winH};
     if (ImGui::InputInt2("Tamanho da janela", sz)) {
@@ -1375,22 +1684,30 @@ void Ui::outputInspector(App &app) {
     o->srcW = std::max(1.0f, src[2]); o->srcH = std::max(1.0f, src[3]);
     app.edited();
   }
+  const float OW = float(p.canvasWidth(o->canvasId)), OH = float(p.canvasHeight(o->canvasId));
   if (ImGui::Button("Canvas inteiro")) {
     o->srcX = o->srcY = 0;
-    o->srcW = float(p.canvasW);
-    o->srcH = float(p.canvasH);
+    o->srcW = OW;
+    o->srcH = OH;
     app.edited();
   }
   ImGui::SameLine();
   if (ImGui::Button("Metade esq.")) {
-    o->srcX = 0; o->srcY = 0; o->srcW = float(p.canvasW) * 0.5f; o->srcH = float(p.canvasH);
+    o->srcX = 0; o->srcY = 0; o->srcW = OW * 0.5f; o->srcH = OH;
     app.edited();
   }
   ImGui::SameLine();
   if (ImGui::Button("Metade dir.")) {
-    o->srcX = float(p.canvasW) * 0.5f; o->srcY = 0; o->srcW = float(p.canvasW) * 0.5f; o->srcH = float(p.canvasH);
+    o->srcX = OW * 0.5f; o->srcY = 0; o->srcW = OW * 0.5f; o->srcH = OH;
     app.edited();
   }
+  if (ImGui::Button("Blend automático pelas sobreposições")) {
+    int n = autoBlendOverlaps(p, o->canvasId);
+    app.status(std::to_string(n) + " emenda(s) com soft edge calculado pelas regiões das saídas");
+    app.edited();
+  }
+  helpMarker("Para projetores fora de uma grade (tamanhos ou posições diferentes): ajuste a região "
+             "de cada saída no canvas e o Lumen calcula as bordas suaves de cada sobreposição.");
 
   ImGui::SeparatorText("Warp da saída");
   bool viewing = workspace.viewOutputId == o->id;
@@ -1399,9 +1716,11 @@ void Ui::outputInspector(App &app) {
              "a geometria do projetor inteiro (keystone / superfícies curvas).");
   int grid[2] = {o->warp.meshCols, o->warp.meshRows};
   if (ImGui::InputInt2("Malha (col × lin)", grid)) {
-    o->warp.resetMesh(std::clamp(grid[0], 2, 33), std::clamp(grid[1], 2, 33));
+    o->warp.resampleMesh(grid[0], grid[1]); // keeps the current warp
     app.edited();
   }
+  ImGui::SameLine();
+  if (ImGui::Button("Malha de entrada...")) openInputMesh(-1, 0, o->id);
   if (ImGui::Button("Zerar warp")) {
     o->warp.setRect({0, 0}, {1, 1});
     o->warp.resetMesh(2, 2);
@@ -1492,41 +1811,17 @@ void Ui::outputMaskControls(App &app, OutputConfig *o, Workspace &ws) {
   ImGui::TextWrapped("Recortam a imagem deste projetor (obstáculos, bordas irregulares, cúpulas). "
                      "Edite no workspace com a saída em vista e a ferramenta Máscara (K).");
   {
-    int removeMask = -1;
-    for (size_t i = 0; i < o->masks.size(); ++i) {
-      ImGui::PushID(3000 + int(i));
-      Mask &m = o->masks[i];
-      if (ImGui::Checkbox("##en", &m.enabled)) app.edited();
-      ImGui::SameLine();
-      if (ImGui::Selectable(m.name.c_str(), app.sel.outMask == int(i))) app.sel.outMask = int(i);
-      if (ImGui::BeginPopupContextItem()) {
-        if (ImGui::MenuItem("Remover")) removeMask = int(i);
-        ImGui::EndPopup();
-      }
-      ImGui::PopID();
+    float w = float(o->winW), h = float(o->winH);
+    auto mons = OutputManager::monitors();
+    if (o->monitor >= 0 && o->monitor < int(mons.size())) {
+      w = float(mons[size_t(o->monitor)].w);
+      h = float(mons[size_t(o->monitor)].h);
     }
-    if (removeMask >= 0) {
-      o->masks.erase(o->masks.begin() + removeMask);
-      app.sel.outMask = -1;
-      app.edited();
-    }
-    if (ImGui::Button("+ Máscara de saída")) {
-      Mask m;
-      m.name = "Máscara " + std::to_string(o->masks.size() + 1);
-      m.subtract = true;
-      m.feather = 20;
-      o->masks.push_back(m);
-      app.sel.outMask = int(o->masks.size()) - 1;
+    size_t before = o->masks.size();
+    maskList(app, o->masks, app.sel.outMask, app.sel.outMaskPoint, {w, h}, {1, 1}, true);
+    if (o->masks.size() > before) { // edit the new mask on this output right away
       ws.viewOutputId = o->id;
       ws.tool = Tool::Mask;
-      app.edited();
-    }
-    if (app.sel.outMask >= 0 && app.sel.outMask < int(o->masks.size())) {
-      Mask &m = o->masks[size_t(app.sel.outMask)];
-      int mode = m.subtract ? 1 : 0;
-      if (ImGui::Combo("Modo##om", &mode, "Revelar dentro\0Esconder dentro\0")) { m.subtract = mode == 1; app.edited(); }
-      if (ImGui::SliderFloat("Suavizar (px)##om", &m.feather, 0, 300)) app.edited();
-      ImGui::Text("%zu pontos", m.points.size());
     }
   }
 }
@@ -1868,7 +2163,14 @@ void Ui::ledInspector(App &app) {
   }
   if (ImGui::Button("+ Fita de LED")) {
     if (p.dmxDevices.empty()) p.addDmxDevice(DmxProtocol::ArtNet);
-    app.sel.ledId = p.addLedMapping().id;
+    LedMapping &nm = p.addLedMapping();
+    if (workspace.viewOutputId < 0 && workspace.viewCanvas != 0) {
+      float sx = float(p.canvasWidth(workspace.viewCanvas)) / float(p.canvasW);
+      float sy = float(p.canvasHeight(workspace.viewCanvas)) / float(p.canvasH);
+      for (auto &c : nm.area.corners) c = {c.x * sx, c.y * sy};
+      nm.canvasId = workspace.viewCanvas;
+    }
+    app.sel.ledId = nm.id;
     workspace.tool = Tool::Led;
     app.edited();
   }
@@ -1879,6 +2181,15 @@ void Ui::ledInspector(App &app) {
     ImGui::PushID(m->id);
     ImGui::SeparatorText(m->name.c_str());
     if (inputText("Nome", m->name)) app.edited();
+    if (!p.canvases.empty()) {
+      int cid = m->canvasId;
+      if (canvasCombo("Canvas", p, cid)) {
+        m->canvasId = cid;
+        workspace.viewCanvas = cid;
+        workspace.viewOutputId = -1;
+        app.edited();
+      }
+    }
     DmxDevice *dev = p.dmxDevice(m->deviceId);
     if (ImGui::BeginCombo("Controlador", dev ? dev->name.c_str() : "(nenhum)")) {
       for (auto &d : p.dmxDevices)
@@ -1926,12 +2237,12 @@ void Ui::ledInspector(App &app) {
       ImGui::TextColored({1, 0.6f, 0.3f, 1}, "sACN não tem universo 0: use 1.");
 
     if (ImGui::Button("Ocupar o canvas")) {
-      m->area.setRect({0, 0}, {float(p.canvasW), float(p.canvasH)});
+      m->area.setRect({0, 0}, {float(p.canvasWidth(m->canvasId)), float(p.canvasHeight(m->canvasId))});
       app.edited();
     }
     ImGui::SameLine();
     if (ImGui::Button("Faixa horizontal")) {
-      m->area.setRect({float(p.canvasW) * 0.05f, float(p.canvasH) * 0.47f}, {float(p.canvasW) * 0.9f, float(p.canvasH) * 0.06f});
+      m->area.setRect({float(p.canvasWidth(m->canvasId)) * 0.05f, float(p.canvasHeight(m->canvasId)) * 0.47f}, {float(p.canvasWidth(m->canvasId)) * 0.9f, float(p.canvasHeight(m->canvasId)) * 0.06f});
       app.edited();
     }
     ImGui::PopID();
@@ -1980,7 +2291,8 @@ void Ui::ledInspector(App &app) {
 
 void Ui::projectInspector(App &app) {
   Project &p = app.engine.project;
-  ImGui::SeparatorText("Canvas");
+  ImGui::SeparatorText("Canvas principal");
+  if (inputText("Nome##cv0", p.canvasName)) app.edited();
   int size[2] = {p.canvasW, p.canvasH};
   if (ImGui::InputInt2("Resolução", size, ImGuiInputTextFlags_EnterReturnsTrue)) {
     p.canvasW = std::clamp(size[0], 16, 16384);
@@ -2000,6 +2312,55 @@ void Ui::projectInspector(App &app) {
     }
   }
   if (colorEdit("Fundo", p.background)) app.edited();
+
+  ImGui::SeparatorText("Outros canvases (video routing)");
+  ImGui::TextWrapped("Cada canvas tem as suas layers. Uma saída escolhe qual canvas mostra, e um "
+                     "canvas pode virar mídia dentro de outro (Biblioteca → + Ao vivo → Canvas). "
+                     "Ex.: vários canvases montados num único sinal 4K para o processador de LED.");
+  int removeCanvas = -1;
+  for (auto &c : p.canvases) {
+    ImGui::PushID(c.id);
+    ImGui::SetNextItemWidth(140);
+    if (inputText("##name", c.name)) app.edited();
+    ImGui::SameLine();
+    int sz[2] = {c.width, c.height};
+    ImGui::SetNextItemWidth(130);
+    if (ImGui::InputInt2("##size", sz, ImGuiInputTextFlags_EnterReturnsTrue)) {
+      c.width = std::clamp(sz[0], 16, 16384);
+      c.height = std::clamp(sz[1], 16, 16384);
+      app.edited();
+    }
+    ImGui::SameLine();
+    if (colorEdit("##bg", c.background)) app.edited();
+    ImGui::SameLine();
+    if (ImGui::SmallButton("Ver")) { workspace.viewCanvas = c.id; workspace.viewOutputId = -1; }
+    ImGui::SameLine();
+    if (ImGui::SmallButton("x")) removeCanvas = c.id;
+    ImGui::PopID();
+  }
+  if (removeCanvas >= 0) ImGui::OpenPopup("Remover canvas?");
+  static int pendingRemove = -1;
+  if (removeCanvas >= 0) pendingRemove = removeCanvas;
+  if (ImGui::BeginPopupModal("Remover canvas?", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+    ImGui::Text("As layers deste canvas serão apagadas. As saídas voltam para o canvas principal.");
+    if (ImGui::Button("Remover")) {
+      p.removeCanvas(pendingRemove);
+      if (workspace.viewCanvas == pendingRemove) workspace.viewCanvas = 0;
+      app.edited();
+      ImGui::CloseCurrentPopup();
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Cancelar")) ImGui::CloseCurrentPopup();
+    ImGui::EndPopup();
+  }
+  if (ImGui::Button("+ Canvas")) {
+    CanvasConfig &c = p.addCanvas(1920, 1080);
+    Layer &l = p.addLayer(c.name + " layer", c.id);
+    app.sel.layerId = l.id;
+    workspace.viewCanvas = c.id;
+    workspace.viewOutputId = -1;
+    app.edited();
+  }
   ImGui::SeparatorText("Show");
   if (ImGui::DragFloat("Fade padrão (s)", &p.defaultTransition, 0.05f, 0, 60)) app.edited();
 

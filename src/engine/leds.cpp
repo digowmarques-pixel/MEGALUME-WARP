@@ -47,7 +47,8 @@ const std::vector<float> *LedEngine::colours(int id) const {
   return it == samplers_.end() ? nullptr : &it->second->rgb;
 }
 
-void LedEngine::update(const Project &p, const Texture &canvas, DynamicMesh &mesh, double now) {
+void LedEngine::update(const Project &p, const std::function<const Texture &(int)> &canvasOf,
+                       DynamicMesh &mesh, double now) {
   // Drop samplers of deleted mappings.
   for (auto it = samplers_.begin(); it != samplers_.end();)
     it = p.ledMapping(it->first) ? std::next(it) : samplers_.erase(it);
@@ -59,10 +60,10 @@ void LedEngine::update(const Project &p, const Texture &canvas, DynamicMesh &mes
 
   shader_.use();
   shader_.set("uCanvas", 0);
-  shader_.set("uCanvasSize", float(std::max(1, p.canvasW)), float(std::max(1, p.canvasH)));
-  canvas.bind(0);
   glDisable(GL_BLEND);
   for (auto &m : p.ledMappings) {
+    shader_.set("uCanvasSize", float(p.canvasWidth(m.canvasId)), float(p.canvasHeight(m.canvasId)));
+    canvasOf(m.canvasId).bind(0);
     auto &s = samplers_[m.id];
     if (!s) s = std::make_unique<Sampler>();
     int cols = std::clamp(m.cols, 1, 4096), rows = std::clamp(m.rows, 1, 4096);

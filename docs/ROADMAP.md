@@ -52,6 +52,16 @@ Ordem pensada para **videomapping** e **instalações interativas**.
 - Saídas: **atraso em quadros** por projetor e **controles desenhados no projetor**
   (Ctrl+Shift+D); cor por coluna
 
+## ✅ v0.7
+- **Máscaras**: curvas bezier (Alt+clique), pilha Mostrar / Esconder aplicada em ordem,
+  invertida, opacidade, suavização e escala por máscara, formas prontas (quadrado, círculo,
+  triângulo), **importar / exportar SVG** (Illustrator, Inkscape)
+- **Warp**: **malha de entrada** (pontos sobre os detalhes da mídia), mudar a divisão sem
+  perder a deformação, **duplo clique adiciona linha e coluna** de pontos no lugar clicado
+- **Vários canvases** com layers próprias, saída escolhe o canvas, **canvas como mídia**
+  (video routing), **blend automático** para projetores fora de grade, **Spout por saída**
+  com ou sem janela, LED mapping por canvas
+
 ## ⚠️ Pendente de teste em Windows real
 Tudo foi compilado para Windows, mas **ainda não rodou numa máquina Windows**:
 Spout, WASAPI, DirectShow, D3D11VA e WinMM precisam de um teste de verdade.
@@ -66,9 +76,8 @@ Spout, WASAPI, DirectShow, D3D11VA e WinMM precisam de um teste de verdade.
 4. **Blob tracking** na câmera (posição das pessoas → parâmetros) e modos de **matte**
    (alpha / luma) para usar uma layer como máscara da de baixo
 5. **NDI** (receber e enviar), **texto dinâmico** (OSC `/layer/media/text`, arquivo .txt)
-6. **Video routing**: vários canvases, saídas sem tela (NDI/Spout), blend entre fatias livres
-7. **Máscaras** com pontos bezier, modo mostrar/esconder em pilha, opacidade, SVG;
-   **warp com pontos de entrada** (malha do lado da mídia) e malha bezier
+6. NDI nativo (sem passar pelo Spout); triângulo e cantos soldados nas surfaces
+7. Mapping 3D / anamorfose (veja o item 10)
 8. Data-tracks: comandos MIDI / DMX / PJLink (ligar projetor, obturador) / string TCP por coluna
 9. Timecode LTC/MTC (entrada e geração), cues de ensaio, transição manual por fader
 10. Estrutura 3D (anamorfose): importar OBJ, câmera do público, calibração por 6 pontos (DLT)

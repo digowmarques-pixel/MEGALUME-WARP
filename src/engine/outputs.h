@@ -4,7 +4,10 @@
 
 #include "core/project.h"
 #include "render/gpu.h"
+#include "io/spout.h"
 #include "render/mask.h"
+
+#include <functional>
 
 #include <map>
 
@@ -36,7 +39,8 @@ public:
   // Opens / closes / moves windows so they match the project.
   void sync(Project &p);
   // Draws every output from the canvas texture. Restores the main context.
-  void render(const Project &p, const Texture &canvas, double time, bool blackout,
+  using CanvasLookup = std::function<const Texture &(int canvasId)>;
+  void render(const Project &p, const CanvasLookup &canvases, double time, bool blackout,
               const OutputControls *controls = nullptr);
   // Draws an output into a framebuffer of the main context (workspace preview).
   void renderPreview(const Project &p, const OutputConfig &o, int outputIndex,
@@ -64,8 +68,10 @@ private:
   void destroy(Window &w);
   void drawControls(const OutputConfig &o, const OutputControls &c, DynamicMesh &mesh, int w, int h);
   // Canvas history for outputs with a frame delay (main-context framebuffers).
-  const Texture &delayedCanvas(const Texture &canvas, int delay);
-  void pushHistory(const Project &p, const Texture &canvas);
+  const Texture &delayedCanvas(int canvasId, const Texture &canvas, int delay);
+  void pushHistory(const Project &p, const CanvasLookup &canvases);
+  // Spout senders of the outputs (rendered off-screen in the main context).
+  void sendSpout(const Project &p, const CanvasLookup &canvases, double time, bool blackout);
   void draw(const Project &p, const OutputConfig &o, int index, const Texture &canvas,
             const Texture *mask, DynamicMesh &mesh, int w, int h, double time, bool blackout);
   void updateSwapIntervals();
@@ -73,8 +79,21 @@ private:
 
   GLFWwindow *main_ = nullptr;
   Shader shader_, solid_, copy_;
-  std::vector<std::unique_ptr<Framebuffer>> history_;
-  int historyHead_ = -1, historyCount_ = 0;
+  struct History {
+    std::vector<std::unique_ptr<Framebuffer>> frames;
+    int head = -1, count = 0;
+  };
+  std::map<int, History> history_; // by canvas
+  struct SpoutTarget {
+    Framebuffer fb;
+    SpoutOut out;
+  };
+  std::map<int, std::unique_ptr<SpoutTarget>> spout_; // by output
+public:
+  // Status line of an output's Spout sender ("" = off).
+  std::string spoutStatus(int outputId) const;
+private:
+  std::map<int, std::string> spoutStatus_;
   std::vector<std::unique_ptr<Window>> windows_;
   bool swapDirty_ = true;
   MaskRenderer masks_;

@@ -196,43 +196,80 @@ void OutputManager::shutdown() {
   for (auto &w : windows_) destroy(*w);
   windows_.clear();
   history_.clear();
-  historyHead_ = -1;
-  historyCount_ = 0;
+  spout_.clear();
 }
 
-void OutputManager::pushHistory(const Project &p, const Texture &canvas) {
-  int maxDelay = 0;
+void OutputManager::pushHistory(const Project &p, const CanvasLookup &canvases) {
+  std::map<int, int> maxDelay; // per canvas
   for (auto &o : p.outputs)
-    if (o.enabled) maxDelay = std::max(maxDelay, std::clamp(o.delayFrames, 0, 8));
-  if (maxDelay == 0) {
-    history_.clear();
-    historyHead_ = -1;
-    historyCount_ = 0;
-    return;
+    if (o.enabled && o.delayFrames > 0)
+      maxDelay[o.canvasId] = std::max(maxDelay[o.canvasId], std::clamp(o.delayFrames, 0, 8));
+  for (auto it = history_.begin(); it != history_.end();)
+    it = maxDelay.count(it->first) ? std::next(it) : history_.erase(it);
+  for (auto &[canvasId, delay] : maxDelay) {
+    History &h = history_[canvasId];
+    const Texture &canvas = canvases(canvasId);
+    size_t n = size_t(delay) + 1;
+    while (h.frames.size() < n) h.frames.push_back(std::make_unique<Framebuffer>());
+    h.head = (h.head + 1) % int(h.frames.size());
+    Framebuffer &fb = *h.frames[size_t(h.head)];
+    if (fb.width() != canvas.width() || fb.height() != canvas.height()) fb.resize(canvas.width(), canvas.height());
+    fb.bind();
+    glDisable(GL_BLEND);
+    copy_.use();
+    copy_.set("uTarget", float(fb.width()), float(fb.height()));
+    copy_.set("uTex", 0);
+    canvas.bind(0);
+    // Same orientation as the canvas (bottom-up).
+    mainMesh_.drawQuad(0, 0, float(fb.width()), float(fb.height()), 0, 1, 1, 0);
+    Framebuffer::unbind();
+    h.count = std::min(h.count + 1, int(h.frames.size()));
   }
-  size_t n = size_t(maxDelay) + 1;
-  while (history_.size() < n) history_.push_back(std::make_unique<Framebuffer>());
-  historyHead_ = (historyHead_ + 1) % int(history_.size());
-  Framebuffer &fb = *history_[size_t(historyHead_)];
-  if (fb.width() != canvas.width() || fb.height() != canvas.height()) fb.resize(canvas.width(), canvas.height());
-  fb.bind();
-  glViewport(0, 0, fb.width(), fb.height());
-  glDisable(GL_BLEND);
-  copy_.use();
-  copy_.set("uTarget", float(fb.width()), float(fb.height()));
-  copy_.set("uTex", 0);
-  canvas.bind(0);
-  // Same orientation as the canvas (bottom-up).
-  mainMesh_.drawQuad(0, 0, float(fb.width()), float(fb.height()), 0, 1, 1, 0);
-  Framebuffer::unbind();
-  historyCount_ = std::min(historyCount_ + 1, int(history_.size()));
 }
 
-const Texture &OutputManager::delayedCanvas(const Texture &canvas, int delay) {
-  if (delay <= 0 || history_.empty() || historyHead_ < 0) return canvas;
-  delay = std::min(delay, historyCount_ - 1);
-  int n = int(history_.size());
-  return history_[size_t(((historyHead_ - delay) % n + n) % n)]->texture();
+const Texture &OutputManager::delayedCanvas(int canvasId, const Texture &canvas, int delay) {
+  auto it = history_.find(canvasId);
+  if (delay <= 0 || it == history_.end() || it->second.head < 0) return canvas;
+  History &h = it->second;
+  delay = std::min(delay, h.count - 1);
+  int n = int(h.frames.size());
+  return h.frames[size_t(((h.head - delay) % n + n) % n)]->texture();
+}
+
+std::string OutputManager::spoutStatus(int outputId) const {
+  auto it = spoutStatus_.find(outputId);
+  return it == spoutStatus_.end() ? std::string() : it->second;
+}
+
+void OutputManager::sendSpout(const Project &p, const CanvasLookup &canvases, double time, bool blackout) {
+  spoutStatus_.clear();
+  for (auto it = spout_.begin(); it != spout_.end();) {
+    const OutputConfig *o = p.output(it->first);
+    if (!o || !o->enabled || o->spoutName.empty()) it = spout_.erase(it);
+    else ++it;
+  }
+  auto mons = monitors();
+  for (size_t i = 0; i < p.outputs.size(); ++i) {
+    const OutputConfig &o = p.outputs[i];
+    if (!o.enabled || o.spoutName.empty()) continue;
+    if (!spoutAvailable()) { spoutStatus_[o.id] = "Spout só existe no Windows"; continue; }
+    int w = std::max(16, o.winW), h = std::max(16, o.winH);
+    if (!o.windowless && o.monitor >= 0 && o.monitor < int(mons.size())) {
+      w = mons[size_t(o.monitor)].w;
+      h = mons[size_t(o.monitor)].h;
+    }
+    auto &t = spout_[o.id];
+    if (!t) t = std::make_unique<SpoutTarget>();
+    t->fb.resize(w, h);
+    const Texture *mask = outputMask(o, w, h, true, mainMesh_);
+    t->fb.bind();
+    draw(p, o, int(i), delayedCanvas(o.canvasId, canvases(o.canvasId), o.delayFrames), mask, mainMesh_, w, h,
+         time, blackout);
+    Framebuffer::unbind();
+    bool ok = t->out.send(t->fb.texture().id(), w, h, o.spoutName);
+    spoutStatus_[o.id] = ok ? "enviando \"" + o.spoutName + "\" " + std::to_string(w) + "×" + std::to_string(h)
+                            : "erro ao enviar";
+  }
 }
 
 void OutputManager::drawControls(const OutputConfig &o, const OutputControls &c, DynamicMesh &mesh,
@@ -299,7 +336,7 @@ void OutputManager::sync(Project &p) {
   // Close windows whose output was removed or disabled.
   for (auto it = windows_.begin(); it != windows_.end();) {
     OutputConfig *o = p.output((*it)->outputId);
-    if (!o || !o->enabled) {
+    if (!o || !o->enabled || o->windowless) {
       destroy(**it);
       it = windows_.erase(it);
     } else {
@@ -308,7 +345,7 @@ void OutputManager::sync(Project &p) {
   }
 
   for (auto &o : p.outputs) {
-    if (!o.enabled) continue;
+    if (!o.enabled || o.windowless) continue;
     auto it = std::find_if(windows_.begin(), windows_.end(),
                            [&](auto &w) { return w->outputId == o.id; });
     Window *w = it == windows_.end() ? nullptr : it->get();
@@ -422,7 +459,7 @@ void OutputManager::draw(const Project &p, const OutputConfig &o, int index,
   shader_.use();
   shader_.set("uTarget", float(w), float(h));
   shader_.set("uCanvas", 0);
-  float cw = float(std::max(1, p.canvasW)), ch = float(std::max(1, p.canvasH));
+  float cw = float(p.canvasWidth(o.canvasId)), ch = float(p.canvasHeight(o.canvasId));
   shader_.set("uRect", o.srcX / cw, o.srcY / ch, o.srcW / cw, o.srcH / ch);
   shader_.set("uSoft", o.softEdge.left, o.softEdge.right, o.softEdge.top, o.softEdge.bottom);
   shader_.set("uGamma", std::max(0.1f, o.softEdge.gamma));
@@ -448,11 +485,15 @@ void OutputManager::draw(const Project &p, const OutputConfig &o, int index,
   mesh.draw(verts);
 }
 
-void OutputManager::render(const Project &p, const Texture &canvas, double time, bool blackout,
+void OutputManager::render(const Project &p, const CanvasLookup &canvases, double time, bool blackout,
                            const OutputControls *controls) {
+  bool anySpout = std::any_of(p.outputs.begin(), p.outputs.end(),
+                              [](const OutputConfig &o) { return o.enabled && !o.spoutName.empty(); });
+  if (windows_.empty() && !anySpout && spout_.empty()) return;
+  pushHistory(p, canvases);
+  sendSpout(p, canvases, time, blackout);
   if (windows_.empty()) return;
   if (swapDirty_) updateSwapIntervals();
-  pushHistory(p, canvas);
 
   // The canvas was drawn in the main context: make sure it is complete before
   // other contexts sample it.
@@ -481,7 +522,8 @@ void OutputManager::render(const Project &p, const Texture &canvas, double time,
     int fw, fh;
     glfwGetFramebufferSize(w->handle, &fw, &fh);
     if (fw > 0 && fh > 0) {
-      draw(p, *o, index, delayedCanvas(canvas, o->delayFrames), masks[k], *w->mesh, fw, fh, time, blackout);
+      draw(p, *o, index, delayedCanvas(o->canvasId, canvases(o->canvasId), o->delayFrames), masks[k], *w->mesh,
+           fw, fh, time, blackout);
       if (controls && controls->outputId == o->id) drawControls(*o, *controls, *w->mesh, fw, fh);
     }
   }

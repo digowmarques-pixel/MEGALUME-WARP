@@ -16,6 +16,8 @@ struct Vec2 {
   Vec2 operator-(Vec2 o) const { return {x - o.x, y - o.y}; }
   Vec2 operator*(float s) const { return {x * s, y * s}; }
   Vec2 &operator+=(Vec2 o) { x += o.x; y += o.y; return *this; }
+  bool operator==(Vec2 o) const { return x == o.x && y == o.y; }
+  bool operator!=(Vec2 o) const { return !(*this == o); }
   float length() const { return std::sqrt(x * x + y * y); }
 };
 
@@ -35,12 +37,28 @@ struct Warp {
   // meshCols x meshRows. A 2x2 mesh is the identity (no deformation).
   int meshCols = 2, meshRows = 2;
   std::vector<Vec2> mesh;
+  // Input side of the mesh: which point of the content (unit space) each
+  // control point shows. Empty = the regular grid (no input warp). Lets the
+  // grid follow features of the image (windows of a façade...).
+  std::vector<Vec2> uvMesh;
 
   Warp() { setRect({0, 0}, {1, 1}); }
   void setRect(Vec2 topLeft, Vec2 size);
   void resetMesh(int cols, int rows);
-  bool hasMesh() const { return meshCols > 2 || meshRows > 2 || !meshIsIdentity(); }
+  bool hasMesh() const { return meshCols > 2 || meshRows > 2 || !meshIsIdentity() || !uvIsIdentity(); }
   bool meshIsIdentity() const;
+  bool uvIsIdentity() const;
+  void ensureUvMesh(); // fills uvMesh with the regular grid
+  Vec2 &uvAt(int c, int r) { return uvMesh[size_t(r * meshCols + c)]; }
+  // Content point shown at grid parameter (u, v).
+  Vec2 uvMap(float u, float v) const;
+  // Changes the grid size keeping the current deformation (Millumin's "division").
+  void resampleMesh(int cols, int rows);
+  // Adds a column of control points at grid parameter u and a row at v
+  // (0..1), without moving the image. Returns false if the grid is full.
+  bool insertLines(float u, float v);
+  // Grid parameter (u, v) of a destination point (inverse of map, mesh included).
+  bool unmap(Vec2 p, Vec2 &uv) const;
 
   Vec2 &meshAt(int c, int r) { return mesh[r * meshCols + c]; }
   const Vec2 &meshAt(int c, int r) const { return mesh[r * meshCols + c]; }

@@ -1,9 +1,11 @@
 // Control window user interface (Dear ImGui).
 #pragma once
 
+#include "core/project.h"
 #include "media/decoder.h"
 #include "render/gpu.h"
 
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -21,6 +23,7 @@ public:
   void draw(App &app, ImVec2 size);
   Tool tool = Tool::Select;
   int viewOutputId = -1; // -1: canvas view, otherwise preview of that output
+  int viewCanvas = 0;    // canvas shown when viewOutputId < 0
   bool fitRequested = false;
   bool lockView = false; // embedded use: no canvas/output view selector
   void handleShortcuts(App &app);
@@ -31,6 +34,10 @@ private:
   // Draws LED mappings; with the LED tool also edits them. Returns true if it handled the input.
   bool drawLedOverlay(App &app, ImDrawList *dl, ImVec2 origin, float scale);
   void fit(ImVec2 avail, float contentW, float contentH);
+  // Point editing shared by layer masks (canvas px) and output masks (0..1).
+  // Returns true when the mask changed. dragBase: first of 4 drag kinds.
+  bool editMask(Mask &m, int &point, const std::function<ImVec2(Vec2)> &toScreen, Vec2 mouse,
+                float pixelsPerUnit, ImDrawList *dl, ImU32 color, int dragBase);
 
   float zoom_ = 1;
   ImVec2 pan_{0, 0};
@@ -65,6 +72,11 @@ private:
   void interactionInspector(App &app);
   void softEdgeControls(App &app, OutputConfig *o);
   void blackAndColorControls(App &app, OutputConfig *o);
+  void openInputMesh(int layerId, int slice, int outputId);
+  void inputMeshWindow(App &app);
+  struct InputMeshEdit { bool open = false; int layerId = -1, slice = 0, outputId = -1, point = -1; } inputMesh_;
+  void maskList(App &app, std::vector<Mask> &masks, int &sel, int &selPoint, Vec2 unit, Vec2 area,
+                bool outputSpace);
   void outputMaskControls(App &app, OutputConfig *o, Workspace &ws);
   void outputsWindow(App &app);   // Millumin-style output setup (layout + mapping pages)
   void columnPopup(App &app, int columnIndex);

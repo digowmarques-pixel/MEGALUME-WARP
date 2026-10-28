@@ -107,7 +107,26 @@ bool Generators::init() {
     std::string fs = std::string(kGenHeader) + kGenBodies[i];
     ok &= shaders_[i].build(kPixelVertexShader, fs.c_str());
   }
+  ok &= copy_.build(kPixelVertexShader, R"(#version 330 core
+in vec2 vUV;
+out vec4 fragColor;
+uniform sampler2D uTex;
+void main() { fragColor = texture(uTex, vUV); }
+)");
   return ok;
+}
+
+void Generators::copyFlipped(const Texture &src, Framebuffer &fb, DynamicMesh &mesh) {
+  fb.resize(src.width(), src.height());
+  fb.bind();
+  glDisable(GL_BLEND);
+  copy_.use();
+  copy_.set("uTarget", float(src.width()), float(src.height()));
+  copy_.set("uTex", 0);
+  src.bind(0);
+  // Pixel y = h (stored in row 0) samples v = 1, the source's top row.
+  mesh.drawQuad(0, 0, float(src.width()), float(src.height()), 0, 0, 1, 1);
+  Framebuffer::unbind();
 }
 
 void Generators::render(const MediaItem &m, double time, Framebuffer &fb, DynamicMesh &mesh) {
@@ -236,6 +255,7 @@ const Texture *MediaCache::thumbnail(const MediaItem &m, Generators &gen, Dynami
     return &e.thumbFb->texture();
   }
   if (m.type == MediaType::Live || m.type == MediaType::Spout) return e.liveTex;
+  if (m.type == MediaType::Canvas) return nullptr; // shown by name
   if (e.thumb) return e.thumb.get();
   if (e.failed) return nullptr;
   VideoFrame f;
@@ -327,6 +347,15 @@ const Texture *Playback::update(double dt, const MediaItem &m, MediaContext &ctx
     if (!genFb_) genFb_ = std::make_unique<Framebuffer>();
     ctx.generators.render(m, clock_, *genFb_, ctx.mesh);
     return &genFb_->texture();
+  case MediaType::Canvas: {
+    if (started_) clock_ += dt * double(speed);
+    started_ = true;
+    const Texture *src = ctx.canvasTexture ? ctx.canvasTexture(m.canvasRef) : nullptr;
+    if (!src || src->empty()) return nullptr;
+    if (!genFb_) genFb_ = std::make_unique<Framebuffer>();
+    ctx.generators.copyFlipped(*src, *genFb_, ctx.mesh);
+    return &genFb_->texture();
+  }
   case MediaType::Live:
   case MediaType::Spout: {
     clock_ += dt;

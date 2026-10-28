@@ -39,6 +39,47 @@ const char *scheduleActionName(ScheduleAction a) {
   return n[int(a)];
 }
 
+bool Mask::isBezier(size_t i) const {
+  auto nz = [](Vec2 v) { return v.x != 0 || v.y != 0; };
+  return (i < tanIn.size() && nz(tanIn[i])) || (i < tanOut.size() && nz(tanOut[i]));
+}
+
+void Mask::ensureTangents() {
+  tanIn.resize(points.size());
+  tanOut.resize(points.size());
+}
+
+Vec2 maskCenter(const Mask &m) {
+  Vec2 c;
+  for (auto &p : m.points) c += p;
+  return m.points.empty() ? c : c * (1.0f / float(m.points.size()));
+}
+
+std::vector<Vec2> maskOutline(const Mask &m, int steps) {
+  std::vector<Vec2> out;
+  size_t n = m.points.size();
+  if (n == 0) return out;
+  auto tin = [&](size_t i) { return i < m.tanIn.size() ? m.tanIn[i] : Vec2{}; };
+  auto tout = [&](size_t i) { return i < m.tanOut.size() ? m.tanOut[i] : Vec2{}; };
+  for (size_t i = 0; i < n; ++i) {
+    size_t j = (i + 1) % n;
+    Vec2 p0 = m.points[i], p3 = m.points[j];
+    Vec2 c1 = p0 + tout(i), c2 = p3 + tin(j);
+    out.push_back(p0);
+    bool curve = tout(i).x != 0 || tout(i).y != 0 || tin(j).x != 0 || tin(j).y != 0;
+    if (!curve || n < 2) continue;
+    for (int k = 1; k < steps; ++k) {
+      float t = float(k) / float(steps), u = 1 - t;
+      out.push_back(p0 * (u * u * u) + c1 * (3 * u * u * t) + c2 * (3 * u * t * t) + p3 * (t * t * t));
+    }
+  }
+  if (m.scale != 1) {
+    Vec2 c = maskCenter(m);
+    for (auto &p : out) p = c + (p - c) * m.scale;
+  }
+  return out;
+}
+
 Surface *Project::surface(int id) {
   for (auto &s : surfaces)
     if (s.id == id) return &s;
@@ -98,12 +139,13 @@ OutputConfig *Project::output(int id) {
   return nullptr;
 }
 
-Layer &Project::addLayer(const std::string &name) {
+Layer &Project::addLayer(const std::string &name, int canvasId) {
   Layer l;
   l.id = newId();
   l.name = name.empty() ? "Layer " + std::to_string(layers.size() + 1) : name;
+  l.canvasId = hasCanvas(canvasId) ? canvasId : 0;
   Slice s;
-  s.warp.setRect({0, 0}, {float(canvasW), float(canvasH)});
+  s.warp.setRect({0, 0}, {float(canvasWidth(l.canvasId)), float(canvasHeight(l.canvasId))});
   l.slices.push_back(s);
   layers.insert(layers.begin(), l); // new layers go on top
   return layers.front();
@@ -190,6 +232,77 @@ MediaItem &Project::addSpout(const std::string &sender) {
   return library.back();
 }
 
+CanvasConfig *Project::extraCanvas(int id) {
+  if (id == 0) return nullptr;
+  for (auto &c : canvases)
+    if (c.id == id) return &c;
+  return nullptr;
+}
+
+std::vector<int> Project::canvasIds() const {
+  std::vector<int> ids{0};
+  for (auto &c : canvases) ids.push_back(c.id);
+  return ids;
+}
+
+int Project::canvasWidth(int id) const {
+  const CanvasConfig *c = const_cast<Project *>(this)->extraCanvas(id);
+  return std::max(16, c ? c->width : canvasW);
+}
+
+int Project::canvasHeight(int id) const {
+  const CanvasConfig *c = const_cast<Project *>(this)->extraCanvas(id);
+  return std::max(16, c ? c->height : canvasH);
+}
+
+Color Project::canvasBackground(int id) const {
+  const CanvasConfig *c = const_cast<Project *>(this)->extraCanvas(id);
+  return c ? c->background : background;
+}
+
+std::string Project::canvasLabel(int id) const {
+  const CanvasConfig *c = const_cast<Project *>(this)->extraCanvas(id);
+  return c ? c->name : canvasName;
+}
+
+CanvasConfig &Project::addCanvas(int w, int h) {
+  CanvasConfig c;
+  c.id = newId();
+  c.name = "Canvas " + std::to_string(canvases.size() + 2);
+  c.width = std::clamp(w, 16, 16384);
+  c.height = std::clamp(h, 16, 16384);
+  canvases.push_back(c);
+  return canvases.back();
+}
+
+void Project::removeCanvas(int id) {
+  if (id == 0) return;
+  std::vector<int> gone;
+  for (auto &l : layers)
+    if (l.canvasId == id) gone.push_back(l.id);
+  for (int l : gone) removeLayer(l);
+  for (auto &o : outputs)
+    if (o.canvasId == id) o.canvasId = 0;
+  for (auto &m : ledMappings)
+    if (m.canvasId == id) m.canvasId = 0;
+  for (auto &m : library)
+    if (m.type == MediaType::Canvas && m.canvasRef == id) m.canvasRef = 0;
+  canvases.erase(std::remove_if(canvases.begin(), canvases.end(), [&](auto &c) { return c.id == id; }),
+                 canvases.end());
+}
+
+MediaItem &Project::addCanvasMedia(int canvasId) {
+  MediaItem m;
+  m.id = newId();
+  m.type = MediaType::Canvas;
+  m.canvasRef = canvasId;
+  m.name = "Canvas: " + canvasLabel(canvasId);
+  m.width = canvasWidth(canvasId);
+  m.height = canvasHeight(canvasId);
+  library.push_back(m);
+  return library.back();
+}
+
 DmxDevice *Project::dmxDevice(int id) {
   for (auto &d : dmxDevices)
     if (d.id == id) return &d;
@@ -271,23 +384,34 @@ void applyBlendLayout(Project &p, const BlendLayoutParams &params, int firstMoni
     float sx = float(lay.canvasW) / float(p.canvasW), sy = float(lay.canvasH) / float(p.canvasH);
     auto scale = [&](Vec2 &v) { v = {v.x * sx, v.y * sy}; };
     for (auto &l : p.layers) {
+      if (l.canvasId != 0) continue; // the layout belongs to the main canvas
       for (auto &sl : l.slices)
         for (auto &c : sl.warp.corners) scale(c);
-      for (auto &m : l.masks)
+      for (auto &m : l.masks) {
         for (auto &pt : m.points) scale(pt);
+        for (auto &pt : m.tanIn) scale(pt);
+        for (auto &pt : m.tanOut) scale(pt);
+      }
       scale(l.transform.position);
     }
     for (auto &m : p.ledMappings)
-      for (auto &c : m.area.corners) scale(c);
+      if (m.canvasId == 0)
+        for (auto &c : m.area.corners) scale(c);
     for (auto &sf : p.surfaces)
       for (auto &c : sf.warp.corners) scale(c);
   }
   p.canvasW = lay.canvasW;
   p.canvasH = lay.canvasH;
 
+  // Outputs of the main canvas are reused (warps and colours survive); the
+  // outputs of other canvases are kept as they are, after them.
   size_t n = lay.projectors.size();
+  std::vector<OutputConfig> mainOuts, others;
+  for (auto &o : p.outputs) (o.canvasId == 0 ? mainOuts : others).push_back(o);
+  p.outputs = mainOuts;
   while (p.outputs.size() < n) p.addOutput();
   p.outputs.resize(n);
+  p.outputs.insert(p.outputs.end(), others.begin(), others.end());
   for (size_t i = 0; i < n; ++i) {
     OutputConfig &o = p.outputs[i];
     const BlendProjector &b = lay.projectors[i];
@@ -373,6 +497,16 @@ static json toJson(const Warp &w) {
     j["mesh"] = json::array();
     for (auto &p : w.mesh) j["mesh"].push_back(toJson(p));
   }
+  if (!w.uvIsIdentity()) {
+    j["meshCols"] = w.meshCols;
+    j["meshRows"] = w.meshRows;
+    if (!j.contains("mesh")) {
+      j["mesh"] = json::array();
+      for (auto &p : w.mesh) j["mesh"].push_back(toJson(p));
+    }
+    j["uvMesh"] = json::array();
+    for (auto &p : w.uvMesh) j["uvMesh"].push_back(toJson(p));
+  }
   return j;
 }
 
@@ -382,6 +516,10 @@ static void fromJson(const json &j, Warp &w) {
   if (j.contains("mesh")) {
     w.resetMesh(j.value("meshCols", 2), j.value("meshRows", 2));
     for (size_t i = 0; i < w.mesh.size() && i < j["mesh"].size(); ++i) w.mesh[i] = vecFrom(j["mesh"][i]);
+    if (j.contains("uvMesh") && j["uvMesh"].size() == w.mesh.size()) {
+      w.ensureUvMesh();
+      for (size_t i = 0; i < w.uvMesh.size(); ++i) w.uvMesh[i] = vecFrom(j["uvMesh"][i]);
+    }
   } else {
     w.resetMesh(2, 2);
   }
@@ -392,7 +530,20 @@ static json masksToJson(const std::vector<Mask> &masks) {
   for (auto &m : masks) {
     json jm = {{"name", m.name}, {"enabled", m.enabled}, {"subtract", m.subtract},
                {"feather", m.feather}, {"points", json::array()}};
+    if (m.inverted) jm["inverted"] = true;
+    if (m.opacity != 1) jm["opacity"] = m.opacity;
+    if (m.scale != 1) jm["scale"] = m.scale;
     for (auto &pt : m.points) jm["points"].push_back(toJson(pt));
+    bool curves = false;
+    for (size_t i = 0; i < m.points.size(); ++i) curves |= m.isBezier(i);
+    if (curves) {
+      jm["tanIn"] = json::array();
+      jm["tanOut"] = json::array();
+      for (size_t i = 0; i < m.points.size(); ++i) {
+        jm["tanIn"].push_back(toJson(i < m.tanIn.size() ? m.tanIn[i] : Vec2{}));
+        jm["tanOut"].push_back(toJson(i < m.tanOut.size() ? m.tanOut[i] : Vec2{}));
+      }
+    }
     arr.push_back(jm);
   }
   return arr;
@@ -406,7 +557,15 @@ static std::vector<Mask> masksFromJson(const json &arr) {
     m.enabled = jm.value("enabled", true);
     m.subtract = jm.value("subtract", false);
     m.feather = jm.value("feather", 0.0f);
+    m.inverted = jm.value("inverted", false);
+    m.opacity = jm.value("opacity", 1.0f);
+    m.scale = jm.value("scale", 1.0f);
     for (auto &pt : jm.value("points", json::array())) m.points.push_back(vecFrom(pt));
+    if (jm.contains("tanIn") && jm.contains("tanOut")) {
+      for (auto &pt : jm["tanIn"]) m.tanIn.push_back(vecFrom(pt));
+      for (auto &pt : jm["tanOut"]) m.tanOut.push_back(vecFrom(pt));
+      m.ensureTangents();
+    }
     out.push_back(m);
   }
   return out;
@@ -415,6 +574,40 @@ static std::vector<Mask> masksFromJson(const json &arr) {
 template <typename E> static E enumFrom(const json &j, const char *key, E def, int count) {
   int v = j.value(key, int(def));
   return (v >= 0 && v < count) ? E(v) : def;
+}
+
+int autoBlendOverlaps(Project &p, int canvasId) {
+  std::vector<OutputConfig *> outs;
+  for (auto &o : p.outputs)
+    if (o.enabled && o.canvasId == canvasId && o.srcW > 0 && o.srcH > 0) outs.push_back(&o);
+  for (auto *o : outs) o->softEdge.left = o->softEdge.right = o->softEdge.top = o->softEdge.bottom = 0;
+  int seams = 0;
+  for (size_t i = 0; i < outs.size(); ++i)
+    for (size_t j = i + 1; j < outs.size(); ++j) {
+      OutputConfig &a = *outs[i], &b = *outs[j];
+      float x0 = std::max(a.srcX, b.srcX), x1 = std::min(a.srcX + a.srcW, b.srcX + b.srcW);
+      float y0 = std::max(a.srcY, b.srcY), y1 = std::min(a.srcY + a.srcH, b.srcY + b.srcH);
+      float iw = x1 - x0, ih = y1 - y0;
+      if (iw <= 0.5f || ih <= 0.5f) continue;
+      float minW = std::min(a.srcW, b.srcW), minH = std::min(a.srcH, b.srcH);
+      // Side by side: the overlap is a vertical band (tall and narrow).
+      bool horizontal = ih > 0.5f * minH && iw < 0.9f * minW;
+      bool vertical = iw > 0.5f * minW && ih < 0.9f * minH;
+      if (horizontal == vertical) continue; // corner of a grid, or one inside the other
+      if (horizontal) {
+        OutputConfig &l = a.srcX + a.srcW * 0.5f <= b.srcX + b.srcW * 0.5f ? a : b;
+        OutputConfig &r = &l == &a ? b : a;
+        l.softEdge.right = std::max(l.softEdge.right, iw / l.srcW);
+        r.softEdge.left = std::max(r.softEdge.left, iw / r.srcW);
+      } else {
+        OutputConfig &t = a.srcY + a.srcH * 0.5f <= b.srcY + b.srcH * 0.5f ? a : b;
+        OutputConfig &u = &t == &a ? b : a;
+        t.softEdge.bottom = std::max(t.softEdge.bottom, ih / t.srcH);
+        u.softEdge.top = std::max(u.softEdge.top, ih / u.srcH);
+      }
+      ++seams;
+    }
+  return seams;
 }
 
 std::string serializeProject(const Project &p, const std::string &baseDir) {
@@ -445,11 +638,17 @@ std::string serializeProject(const Project &p, const std::string &baseDir) {
                {"size", {m.cols, m.rows}}, {"format", int(m.format)}, {"wide", m.wide},
                {"zigzag", m.zigzag}, {"vertical", m.vertical}, {"flipX", m.flipX}, {"flipY", m.flipY},
                {"gamma", m.gamma}, {"brightness", m.brightness}, {"device", m.deviceId},
-               {"universe", m.universe}, {"channel", m.channel}, {"area", json::array()}};
+               {"universe", m.universe}, {"channel", m.channel}, {"area", json::array()},
+               {"canvas", m.canvasId}};
     for (auto &c : m.area.corners) jm["area"].push_back(toJson(c));
     j["dmx"]["leds"].push_back(jm);
   }
   j["nextId"] = p.nextId;
+  j["canvases"] = json::array();
+  for (auto &c : p.canvases)
+    j["canvases"].push_back({{"id", c.id}, {"name", c.name}, {"size", {c.width, c.height}},
+                             {"background", toJson(c.background)}});
+  j["canvasName"] = p.canvasName;
   j["surfaces"] = json::array();
   for (auto &sf : p.surfaces)
     j["surfaces"].push_back({{"id", sf.id}, {"name", sf.name}, {"color", toJson(sf.color)}, {"warp", toJson(sf.warp)}});
@@ -477,6 +676,8 @@ std::string serializeProject(const Project &p, const std::string &baseDir) {
       jm["options"] = m.liveOptions;
     } else if (m.type == MediaType::Spout) {
       jm["path"] = m.path;
+    } else if (m.type == MediaType::Canvas) {
+      jm["canvas"] = m.canvasRef;
     } else {
       jm["path"] = makeRelative(m.path, baseDir);
     }
@@ -486,6 +687,7 @@ std::string serializeProject(const Project &p, const std::string &baseDir) {
   for (auto &l : p.layers) {
     json jl = {{"id", l.id}, {"name", l.name}, {"visible", l.visible}, {"opacity", l.opacity},
                {"blend", int(l.blend)}, {"volume", l.volume}, {"mute", l.mute}};
+    if (l.canvasId != 0) jl["canvas"] = l.canvasId;
     jl["fx"] = {{"brightness", l.fx.brightness}, {"contrast", l.fx.contrast},
                 {"saturation", l.fx.saturation}, {"hue", l.fx.hue},
                 {"invert", l.fx.invert}, {"tint", toJson(l.fx.tint)}};
@@ -528,7 +730,8 @@ std::string serializeProject(const Project &p, const std::string &baseDir) {
          {"color", {{"brightness", o.color.brightness}, {"contrast", o.color.contrast},
                     {"gamma", o.color.gamma}, {"gain", toJson(o.color.gain)}}},
          {"blackLevel", toJson(o.blackLevel)},
-         {"masks", masksToJson(o.masks)}, {"delay", o.delayFrames}});
+         {"masks", masksToJson(o.masks)}, {"delay", o.delayFrames}, {"canvas", o.canvasId},
+         {"spout", o.spoutName}, {"windowless", o.windowless}});
   }
 
   for (auto &m : p.mappings)
@@ -617,11 +820,21 @@ bool deserializeProject(const std::string &text, const std::string &baseDir, Pro
         m.deviceId = x.value("device", -1);
         m.universe = x.value("universe", 0);
         m.channel = x.value("channel", 1);
+        m.canvasId = x.value("canvas", 0);
         if (x.contains("area"))
           for (size_t i = 0; i < 4 && i < x["area"].size(); ++i) m.area.corners[i] = vecFrom(x["area"][i]);
         p.ledMappings.push_back(m);
       }
     }
+    for (auto &x : j.value("canvases", json::array())) {
+      CanvasConfig c;
+      c.id = x.value("id", 0);
+      c.name = x.value("name", "Canvas");
+      if (x.contains("size")) { c.width = std::clamp(int(x["size"][0]), 16, 16384); c.height = std::clamp(int(x["size"][1]), 16, 16384); }
+      if (x.contains("background")) fromJson(x["background"], c.background);
+      if (c.id > 0) p.canvases.push_back(c);
+    }
+    p.canvasName = j.value("canvasName", "Canvas 1");
     for (auto &x : j.value("surfaces", json::array())) {
       Surface sf;
       sf.id = x.value("id", 0);
@@ -660,7 +873,7 @@ bool deserializeProject(const std::string &text, const std::string &baseDir, Pro
       MediaItem m;
       m.id = jm.value("id", 0);
       m.name = jm.value("name", "");
-      m.type = enumFrom(jm, "type", MediaType::Video, 5);
+      m.type = enumFrom(jm, "type", MediaType::Video, 6);
       if (m.type == MediaType::Generator) {
         m.generator = enumFrom(jm, "generator", GeneratorKind::TestCard, int(GeneratorKind::COUNT));
         if (jm.contains("color1")) fromJson(jm["color1"], m.color1);
@@ -674,6 +887,8 @@ bool deserializeProject(const std::string &text, const std::string &baseDir, Pro
         m.liveOptions = jm.value("options", "");
       } else if (m.type == MediaType::Spout) {
         m.path = jm.value("path", "");
+      } else if (m.type == MediaType::Canvas) {
+        m.canvasRef = jm.value("canvas", 0);
       } else {
         m.path = makeAbsolute(jm.value("path", ""), baseDir);
       }
@@ -689,6 +904,7 @@ bool deserializeProject(const std::string &text, const std::string &baseDir, Pro
       l.blend = enumFrom(jl, "blend", BlendMode::Normal, 4);
       l.volume = jl.value("volume", 1.0f);
       l.mute = jl.value("mute", false);
+      l.canvasId = jl.value("canvas", 0);
       if (jl.contains("fx")) {
         auto &f = jl["fx"];
         l.fx.brightness = f.value("brightness", 0.0f);
@@ -794,6 +1010,9 @@ bool deserializeProject(const std::string &text, const std::string &baseDir, Pro
       if (jo.contains("blackLevel")) fromJson(jo["blackLevel"], o.blackLevel);
       o.masks = masksFromJson(jo.value("masks", json::array()));
       o.delayFrames = std::clamp(jo.value("delay", 0), 0, 8);
+      o.canvasId = jo.value("canvas", 0);
+      o.spoutName = jo.value("spout", "");
+      o.windowless = jo.value("windowless", false);
       p.outputs.push_back(o);
     }
 
@@ -822,6 +1041,11 @@ bool deserializeProject(const std::string &text, const std::string &baseDir, Pro
     for (auto &d : p.dmxDevices) maxId = std::max(maxId, d.id);
     for (auto &m : p.ledMappings) maxId = std::max(maxId, m.id);
     for (auto &sf : p.surfaces) maxId = std::max(maxId, sf.id);
+    for (auto &c : p.canvases) maxId = std::max(maxId, c.id);
+    // References to canvases that do not exist fall back to the main one.
+    for (auto &l : p.layers) if (!p.hasCanvas(l.canvasId)) l.canvasId = 0;
+    for (auto &o : p.outputs) if (!p.hasCanvas(o.canvasId)) o.canvasId = 0;
+    for (auto &m : p.ledMappings) if (!p.hasCanvas(m.canvasId)) m.canvasId = 0;
     p.nextId = std::max(j.value("nextId", 1), maxId + 1);
 
     p.resolveSurfaces();

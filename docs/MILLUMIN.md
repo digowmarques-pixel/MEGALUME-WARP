@@ -22,7 +22,7 @@ Legenda: ✅ o Lumen tem · 🟡 o Lumen tem parte · ⬜ ainda não tem.
 | Media Editor: corte (crop), in/out, efeitos por mídia | 🟡 (recorte UV por fatia) |
 | Efeitos em pilha: RGBA, HSLA, níveis, LUT, limiar, espelho, borda, chroma key, soft crop, blur, ISF | 🟡 (brilho, contraste, saturação, matiz, inverter, tinta) |
 | Mattes: alpha, alpha invertido, luma, luma invertido | ⬜ |
-| Máscaras: mostrar/esconder em pilha, invertida, opacidade, feather, escala, bezier, SVG | 🟡 (revelar/esconder, feather) |
+| Máscaras: mostrar/esconder em pilha, invertida, opacidade, feather, escala, bezier, SVG | ✅ v0.7 |
 | Mídias: texto dinâmico, navegador, captura de tela, slideshow, PDF, color card com 10 cores | 🟡 (geradores, câmera, rede, Spout) |
 | Áudio: volume por mídia, roteamento por layer e matriz de canais | 🟡 (volume, mudo, placa de som) |
 
@@ -36,8 +36,11 @@ Legenda: ✅ o Lumen tem · 🟡 o Lumen tem parte · ⬜ ainda não tem.
 | Modo "só alpha" (para keyer) | ⬜ |
 | **Surfaces**: mapping compartilhado entre layers | ✅ v0.6 (triângulo, cantos soldados e SVG ⬜) |
 | Mostrar controles na saída (⌘⇧D) | ✅ v0.6 (Ctrl+Shift+D) |
-| Warp com pontos de entrada (lado da mídia) e pontos livres por duplo clique | ⬜ |
-| Video routing: vários canvases → 1 saída, 1 canvas → várias saídas com blend livre | ⬜ |
+| Warp com pontos de entrada (lado da mídia) e pontos por duplo clique | ✅ v0.7 |
+| `division` muda a grade mantendo o warp | ✅ v0.7 |
+| Vários canvases, canvas como mídia (vários → 1 saída) | ✅ v0.7 |
+| 1 canvas → várias saídas com blend livre (fora de grade) | ✅ v0.7 (blend automático) |
+| Saída sem tela (NDI / Syphon) | ✅ v0.7 (Spout sem janela) |
 | Structure: anamorfose 3D (OBJ, câmera do público, 6 pontos e auto-place) | ⬜ |
 | Syphon / NDI / Blackmagic / AJA / RTMP | 🟡 (Spout no lugar de Syphon) |
 | Compensação de nível de preto | ✅ (o Millumin não tem) |

@@ -24,14 +24,14 @@ Vec2 layerPivot(const Layer &layer);
 class Compositor {
 public:
   bool init();
-  // `draws` are ordered back to front.
-  void render(const Project &p, const std::vector<LayerDraw> &draws, DynamicMesh &mesh,
+  // `draws` are ordered back to front, all layers of canvas `canvasId`.
+  void render(const Project &p, int canvasId, const std::vector<LayerDraw> &draws, DynamicMesh &mesh,
               float masterOpacity);
   Framebuffer &canvas() { return canvas_; }
   void releaseLayer(int layerId) { maskFbs_.erase(layerId); }
 
 private:
-  void renderMask(const Project &p, const Layer &l, DynamicMesh &mesh);
+  void renderMask(const Layer &l, int w, int h, DynamicMesh &mesh);
 
   Shader layerShader_;
   Framebuffer canvas_;

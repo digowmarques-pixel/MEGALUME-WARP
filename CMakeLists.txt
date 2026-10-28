@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(Lumen VERSION 0.6.0 LANGUAGES C CXX)
+project(Lumen VERSION 0.7.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -102,6 +102,7 @@ add_executable(lumen
   src/core/dmx.cpp
   src/core/blend.cpp
   src/core/project.cpp
+  src/core/svg.cpp
   src/engine/engine.cpp
   src/engine/leds.cpp
   src/engine/compositor.cpp
@@ -159,6 +160,7 @@ if(LUMEN_BUILD_TESTS)
     src/core/dmx.cpp
     src/core/blend.cpp
     src/core/project.cpp
+    src/core/svg.cpp
     src/control/osc.cpp
     src/platform/platform.cpp)
   target_include_directories(lumen_tests PRIVATE src third_party)

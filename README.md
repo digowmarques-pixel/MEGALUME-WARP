@@ -3,7 +3,7 @@
 Media server para **videomapping** e **instalações interativas**, inspirado no
 Millumin, feito para **Windows** (também compila no Linux).
 
-## O que já funciona (v0.6)
+## O que já funciona (v0.7)
 
 | Área | Recursos |
 |---|---|
@@ -20,6 +20,8 @@ Millumin, feito para **Windows** (também compila no Linux).
 | **Saída de controle** | **OSC de saída**: status do cue para TouchOSC/Companion e **ações OSC por coluna** (disparar luz, som, outros computadores). **Spout de saída**: o canvas inteiro vai para OBS, TouchDesigner, Resolume... |
 | **Show automático** | Fim da mídia por célula (loop, congelar, parar, **próxima coluna**), **auto-GO** com contagem regressiva, **estados por coluna** (parâmetros animados na transição), **agenda** por horário, projeto que abre as saídas e dispara uma coluna ao abrir |
 | **Surfaces** | Mapping compartilhado por várias layers: ajuste uma vez quando o cenário muda |
+| **Máscaras e warp avançados** | Máscaras com curvas bezier, pilha mostrar/esconder, invertida, opacidade e SVG; malha de entrada (pontos sobre os detalhes da imagem) e duplo clique para adicionar pontos |
+| **Video routing** | Vários canvases, saída escolhe o canvas, canvas como mídia de outro, blend automático para projetores fora de grade, Spout por saída (com ou sem janela) |
 | **Compatível com Millumin** | API OSC do Millumin (`/millumin/action/launchColumn`, `/layer:Nome/opacity`...), feedback `launchedColumn`; teclado e **DMX de entrada** como interação; transformações chave / alternar / acumular. Veja [docs/MILLUMIN.md](docs/MILLUMIN.md) |
 | **Projeto** | Arquivo `.lumen` (JSON legível), caminhos relativos, desfazer/refazer, arrastar arquivos do Explorer |
 

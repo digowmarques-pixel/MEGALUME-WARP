@@ -44,6 +44,32 @@ O mesmo também está em *Propriedades → Saídas → Assistente de blend*:
 7. **Máscaras da saída**: recortam a imagem de um projetor (vigas, cortinas, bordas
    irregulares, cúpulas). Com a saída em vista no workspace e a ferramenta Máscara (K).
 
+## Projetores fora de grade (blend livre)
+
+Quando os projetores têm tamanhos diferentes ou estão em posições livres (um mais alto, outro
+inclinado, cenário com vários planos):
+
+1. Em cada saída, ajuste a **região do canvas** (aba *Slice* da janela Saídas, ou
+   *Propriedades → Saídas → Região do canvas*) para a parte que aquele projetor cobre,
+   sobrepondo os vizinhos.
+2. Clique em **Blend automático** (ou *Blend automático pelas sobreposições*): o Lumen mede a
+   sobreposição de cada par de saídas e calcula as bordas suaves de cada lado.
+3. Continue com grade, branco e preto como acima.
+
+## Vários canvases e roteamento
+
+*Propriedades → Projeto → Outros canvases*: cada canvas tem tamanho, fundo e layers próprios.
+
+- **Cada saída escolhe o canvas** que mostra. Ex.: um canvas 5760×1080 para três projetores
+  em blend e um canvas 3840×2160 para o processador de LED, no mesmo show.
+- **Um canvas dentro de outro**: *Biblioteca → + Ao vivo → Canvas*. Numa layer de outro canvas,
+  a posição, escala, rotação e o mapping da layer posicionam o canvas inteiro. Assim vários
+  canvases são montados num único sinal 4K para um processador de LED.
+- **Spout por saída**: a imagem final da saída (warp, blend, cor) vai para outro programa.
+  Com **Sem janela (só Spout)** a saída não abre janela: serve para mandar ao processador de
+  LED, para gravação, ou para NDI (com o *Spout to NDI*).
+- O LED mapping escolhe de qual canvas lê os pixels.
+
 ## Como o blend é calculado
 
 - A borda usa uma curva complementar: c(t) + c(1 − t) = 1. Em qualquer ponto da

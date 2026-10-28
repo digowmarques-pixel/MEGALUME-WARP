@@ -60,6 +60,110 @@ void handle(ImDrawList *dl, ImVec2 p, ImU32 col, bool selected, bool round = fal
 
 } // namespace
 
+bool Workspace::editMask(Mask &m, int &point, const std::function<ImVec2(Vec2)> &toScreen, Vec2 mouse,
+                         float ppu, ImDrawList *dl, ImU32 col, int base) {
+  ImGuiIO &io = ImGui::GetIO();
+  bool hovered = ImGui::IsItemHovered();
+  bool clicked = hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !io.KeyAlt;
+  bool rclicked = hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Right);
+  // Alt+click (without dragging, Alt+drag pans) turns a point into a curve and back.
+  bool altClick = hovered && io.KeyAlt && ImGui::IsMouseReleased(ImGuiMouseButton_Left) &&
+                  io.MouseDragMaxDistanceSqr[0] < 9;
+  bool changed = false;
+  m.ensureTangents();
+  size_t n = m.points.size();
+  if (point >= int(n)) point = -1;
+
+  // Handles of the selected curve point.
+  int nearHandle = -1; // 0 in, 1 out
+  if (point >= 0 && m.isBezier(size_t(point))) {
+    Vec2 pt = m.points[size_t(point)];
+    ImVec2 a = toScreen(pt + m.tanIn[size_t(point)]), b = toScreen(pt + m.tanOut[size_t(point)]), c = toScreen(pt);
+    dl->AddLine(a, c, IM_COL32(255, 255, 255, 160));
+    dl->AddLine(c, b, IM_COL32(255, 255, 255, 160));
+    dl->AddCircleFilled(a, 4, IM_COL32(255, 255, 255, 230));
+    dl->AddCircleFilled(b, 4, IM_COL32(255, 255, 255, 230));
+    if (dist(io.MousePos, a) < kPick) nearHandle = 0;
+    if (dist(io.MousePos, b) < kPick) nearHandle = 1;
+  }
+  for (size_t i = 0; i < n; ++i) handle(dl, toScreen(m.points[i]), col, point == int(i), !m.isBezier(i));
+
+  int nearIdx = -1;
+  float bestD = kPick;
+  for (size_t i = 0; i < n; ++i) {
+    float d = dist(io.MousePos, toScreen(m.points[i]));
+    if (d < bestD) { bestD = d; nearIdx = int(i); }
+  }
+  if (altClick && nearIdx >= 0) {
+    size_t i = size_t(nearIdx);
+    if (m.isBezier(i)) {
+      m.tanIn[i] = m.tanOut[i] = {};
+    } else if (n >= 2) {
+      Vec2 d = (m.points[(i + 1) % n] - m.points[(i + n - 1) % n]) * (1.0f / 6.0f);
+      m.tanIn[i] = d * -1.0f;
+      m.tanOut[i] = d;
+    }
+    point = nearIdx;
+    changed = true;
+  }
+  if (rclicked && nearIdx >= 0) {
+    m.points.erase(m.points.begin() + nearIdx);
+    m.tanIn.erase(m.tanIn.begin() + nearIdx);
+    m.tanOut.erase(m.tanOut.begin() + nearIdx);
+    point = -1;
+    changed = true;
+  } else if (clicked) {
+    if (nearHandle >= 0) {
+      dragging_ = true;
+      dragKind_ = base + 2 + nearHandle;
+    } else if (nearIdx >= 0) {
+      point = nearIdx;
+      dragging_ = true;
+      dragKind_ = base;
+    } else if (io.KeyShift && n >= 3 && pointInPolygon(mouse, maskOutline(m))) {
+      dragging_ = true;
+      dragKind_ = base + 1;
+    } else {
+      // Insert on the closest edge if the click is near one, else append.
+      int at = int(n);
+      if (n >= 3) {
+        float best = kPick / ppu;
+        for (size_t i = 0; i < n; ++i) {
+          float d = distToSegment(mouse, m.points[i], m.points[(i + 1) % n]);
+          if (d < best) { best = d; at = int(i) + 1; }
+        }
+      }
+      m.points.insert(m.points.begin() + at, mouse);
+      m.tanIn.insert(m.tanIn.begin() + at, Vec2{});
+      m.tanOut.insert(m.tanOut.begin() + at, Vec2{});
+      point = at;
+      dragging_ = true;
+      dragKind_ = base;
+      changed = true;
+    }
+  }
+  if (dragging_ && point >= 0 && point < int(m.points.size())) {
+    size_t i = size_t(point);
+    if (dragKind_ == base) {
+      m.points[i] = mouse;
+      changed = true;
+    } else if (dragKind_ == base + 2 || dragKind_ == base + 3) {
+      // Handles move symmetrically; Shift moves one alone (a sharp curve).
+      Vec2 d = mouse - m.points[i];
+      Vec2 &self = dragKind_ == base + 2 ? m.tanIn[i] : m.tanOut[i];
+      Vec2 &other = dragKind_ == base + 2 ? m.tanOut[i] : m.tanIn[i];
+      self = d;
+      if (!io.KeyShift) other = d * -1.0f;
+      changed = true;
+    }
+  }
+  if (dragging_ && dragKind_ == base + 1 && (io.MouseDelta.x != 0 || io.MouseDelta.y != 0)) {
+    for (auto &pt : m.points) pt += Vec2{io.MouseDelta.x / ppu, io.MouseDelta.y / ppu};
+    changed = true;
+  }
+  return changed;
+}
+
 void Workspace::fit(ImVec2 avail, float cw, float ch) {
   zoom_ = std::min(avail.x / cw, avail.y / ch) * 0.94f;
   pan_ = {(avail.x - cw * zoom_) * 0.5f, (avail.y - ch * zoom_) * 0.5f};
@@ -73,7 +177,8 @@ void Workspace::draw(App &app, ImVec2 size) {
 
   // ---- header: view selector
   ImGui::SetNextItemWidth(200);
-  std::string viewName = viewOut ? "Saída: " + viewOut->name : "Canvas";
+  if (!p.hasCanvas(viewCanvas)) viewCanvas = 0;
+  std::string viewName = viewOut ? "Saída: " + viewOut->name : p.canvasLabel(viewCanvas);
   bool refit = false;
   static int lastView = -2;
   if (lockView && lastView != viewOutputId) refit = true; // switched output in the embedded view
@@ -81,7 +186,13 @@ void Workspace::draw(App &app, ImVec2 size) {
   if (lockView) {
     ImGui::TextDisabled("%s", viewName.c_str());
   } else if (ImGui::BeginCombo("##view", viewName.c_str())) {
-    if (ImGui::Selectable("Canvas", !viewOut)) { viewOutputId = -1; refit = true; }
+    for (int id : p.canvasIds())
+      if (ImGui::Selectable((p.canvasLabel(id) + "##cv" + std::to_string(id)).c_str(), !viewOut && viewCanvas == id)) {
+        viewOutputId = -1;
+        viewCanvas = id;
+        refit = true;
+      }
+    ImGui::Separator();
     for (auto &o : p.outputs)
       if (ImGui::Selectable(("Saída: " + o.name).c_str(), viewOutputId == o.id)) {
         viewOutputId = o.id;
@@ -97,8 +208,8 @@ void Workspace::draw(App &app, ImVec2 size) {
   ImGui::SameLine();
   const char *hints[] = {"Clique para selecionar · arraste para mover a fatia (Shift: layer inteira)",
                          "Arraste os cantos para encaixar a imagem na superfície",
-                         "Arraste os pontos da malha para curvar a imagem",
-                         "Clique para adicionar pontos · arraste para mover · botão direito apaga",
+                         "Arraste os pontos da malha para curvar a imagem · duplo clique adiciona linha e coluna",
+                         "Clique adiciona ponto · arraste move · botão direito apaga · Alt+clique: curva · Shift+arraste: máscara inteira",
                          "LED: clique numa fita · arraste os cantos ou o meio para posicionar sobre a imagem"};
   ImGui::TextDisabled("%s", hints[int(tool)]);
   viewOut = viewOutputId >= 0 ? p.output(viewOutputId) : nullptr;
@@ -106,7 +217,10 @@ void Workspace::draw(App &app, ImVec2 size) {
   ImVec2 avail = ImGui::GetContentRegionAvail();
   if (avail.x < 50 || avail.y < 50) return;
 
-  float cw = float(p.canvasW), ch = float(p.canvasH);
+  static int lastCanvas = 0;
+  if (!viewOut && lastCanvas != viewCanvas) refit = true;
+  lastCanvas = viewCanvas;
+  float cw = float(p.canvasWidth(viewCanvas)), ch = float(p.canvasHeight(viewCanvas));
   if (viewOut) {
     auto mons = OutputManager::monitors();
     if (viewOut->monitor >= 0 && viewOut->monitor < int(mons.size())) {
@@ -152,7 +266,7 @@ void Workspace::draw(App &app, ImVec2 size) {
   ImVec2 contentMax{origin.x + cw * zoom_, origin.y + ch * zoom_};
 
   if (!viewOut) {
-    dl->AddImage(ImTextureID(intptr_t(e.canvas().texture().id())), origin, contentMax, {0, 1}, {1, 0});
+    dl->AddImage(ImTextureID(intptr_t(e.canvasTexture(viewCanvas).id())), origin, contentMax, {0, 1}, {1, 0});
     dl->AddRect(origin, contentMax, IM_COL32(90, 90, 95, 255));
     drawCanvasOverlay(app, dl, origin, zoom_);
   } else {
@@ -161,7 +275,7 @@ void Workspace::draw(App &app, ImVec2 size) {
     int index = 0;
     for (size_t i = 0; i < p.outputs.size(); ++i)
       if (p.outputs[i].id == viewOut->id) index = int(i);
-    app.outputs.renderPreview(p, *viewOut, index, e.canvas().texture(), preview_, e.mesh, e.time(), false);
+    app.outputs.renderPreview(p, *viewOut, index, e.canvasTexture(viewOut->canvasId), preview_, e.mesh, e.time(), false);
     dl->AddImage(ImTextureID(intptr_t(preview_.texture().id())), origin, contentMax, {0, 1}, {1, 0});
     dl->AddRect(origin, contentMax, IM_COL32(90, 90, 95, 255));
     drawOutputOverlay(app, dl, origin, {cw * zoom_, ch * zoom_});
@@ -176,13 +290,12 @@ void Workspace::drawCanvasOverlay(App &app, ImDrawList *dl, ImVec2 origin, float
   auto toCanvas = [&](ImVec2 s) { return Vec2{(s.x - origin.x) / scale, (s.y - origin.y) / scale}; };
   bool hovered = ImGui::IsItemHovered();
   bool clicked = hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !io.KeyAlt;
-  bool rclicked = hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Right);
   ImVec2 mouse = io.MousePos;
   Vec2 mc = toCanvas(mouse);
 
   // Output regions (useful for multi-projector layouts).
   for (auto &o : p.outputs) {
-    if (!o.enabled) continue;
+    if (!o.enabled || o.canvasId != viewCanvas) continue;
     ImVec2 a = toScreen({o.srcX, o.srcY}), b = toScreen({o.srcX + o.srcW, o.srcY + o.srcH});
     dl->AddRect(a, b, IM_COL32(90, 160, 255, 110), 0, 0, 1.0f);
     dl->AddText({a.x + 4, a.y + 2}, IM_COL32(90, 160, 255, 160), o.name.c_str());
@@ -190,8 +303,9 @@ void Workspace::drawCanvasOverlay(App &app, ImDrawList *dl, ImVec2 origin, float
 
   // Outlines of every slice; selected layer drawn on top.
   Layer *sel = p.layer(app.sel.layerId);
+  if (sel && sel->canvasId != viewCanvas) sel = nullptr; // selected layer lives on another canvas
   for (auto it = p.layers.rbegin(); it != p.layers.rend(); ++it) {
-    if (&*it == sel || !it->visible) continue;
+    if (&*it == sel || !it->visible || it->canvasId != viewCanvas) continue;
     for (auto &s : it->slices) {
       auto pts = warpOutline(transformedWarp(*it, s));
       std::vector<ImVec2> sp;
@@ -219,7 +333,7 @@ void Workspace::drawCanvasOverlay(App &app, ImDrawList *dl, ImVec2 origin, float
   // ---- selection by click (Select tool, or clicking outside the current layer)
   auto pickLayer = [&](Vec2 c, int &sliceOut) -> Layer * {
     for (auto &l : p.layers) { // front-most first
-      if (!l.visible) continue;
+      if (!l.visible || l.canvasId != viewCanvas) continue;
       for (size_t si = 0; si < l.slices.size(); ++si)
         if (pointInPolygon(c, warpOutline(transformedWarp(l, l.slices[si])))) {
           sliceOut = int(si);
@@ -248,7 +362,7 @@ void Workspace::drawCanvasOverlay(App &app, ImDrawList *dl, ImVec2 origin, float
       const Mask &m = sel->masks[mi];
       if (m.points.empty()) continue;
       std::vector<ImVec2> sp;
-      for (auto &v : m.points) sp.push_back(toScreen(v));
+      for (auto &v : maskOutline(m)) sp.push_back(toScreen(v));
       bool active = int(mi) == app.sel.mask && tool == Tool::Mask;
       ImU32 col = m.subtract ? IM_COL32(255, 90, 90, active ? 255 : 120) : IM_COL32(80, 220, 255, active ? 255 : 120);
       dl->AddPolyline(sp.data(), int(sp.size()), col, ImDrawFlags_Closed, active ? 2.0f : 1.0f);
@@ -347,9 +461,18 @@ void Workspace::drawCanvasOverlay(App &app, ImDrawList *dl, ImVec2 origin, float
         w.mesh[size_t(app.sel.meshPoint)] = w.unmapPerspective(untransform(*sel, mc));
         app.edited();
       }
+      // Double click: a new row and column of points through the click.
+      if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
+        Vec2 uv;
+        if (w.unmap(untransform(*sel, mc), uv) && w.insertLines(uv.x, uv.y)) {
+          dragging_ = false;
+          app.sel.meshPoint = -1;
+          app.edited();
+        }
+      }
       if (w.meshCols == 2 && w.meshRows == 2)
         dl->AddText({origin.x + 8, origin.y + 8}, IM_COL32(255, 255, 255, 200),
-                    "Aumente a malha em Propriedades > Fatias (ex.: 5 × 5)");
+                    "Duplo clique adiciona pontos, ou aumente a malha em Propriedades > Fatias");
       break;
     }
     case Tool::Mask: {
@@ -364,51 +487,7 @@ void Workspace::drawCanvasOverlay(App &app, ImDrawList *dl, ImVec2 origin, float
         }
       }
       Mask &m = sel->masks[size_t(app.sel.mask)];
-      for (size_t i = 0; i < m.points.size(); ++i)
-        handle(dl, toScreen(m.points[i]), IM_COL32(80, 220, 255, 255), app.sel.maskPoint == int(i), true);
-
-      int near = -1;
-      float bestD = kPick;
-      for (size_t i = 0; i < m.points.size(); ++i) {
-        float d = dist(mouse, toScreen(m.points[i]));
-        if (d < bestD) { bestD = d; near = int(i); }
-      }
-      if (rclicked && near >= 0) {
-        m.points.erase(m.points.begin() + near);
-        app.sel.maskPoint = -1;
-        app.edited();
-      } else if (clicked) {
-        if (near >= 0) {
-          app.sel.maskPoint = near;
-          dragging_ = true;
-          dragKind_ = 4;
-        } else if (io.KeyShift && pointInPolygon(mc, m.points)) {
-          dragging_ = true;
-          dragKind_ = 5;
-        } else {
-          // Insert on the closest edge if the click is near one, else append.
-          int insertAt = int(m.points.size());
-          if (m.points.size() >= 3) {
-            float best = kPick / scale;
-            for (size_t i = 0; i < m.points.size(); ++i) {
-              float d = distToSegment(mc, m.points[i], m.points[(i + 1) % m.points.size()]);
-              if (d < best) { best = d; insertAt = int(i) + 1; }
-            }
-          }
-          m.points.insert(m.points.begin() + insertAt, mc);
-          app.sel.maskPoint = insertAt;
-          dragging_ = true;
-          dragKind_ = 4;
-          app.edited();
-        }
-      }
-      if (dragging_ && dragKind_ == 4 && app.sel.maskPoint >= 0 && app.sel.maskPoint < int(m.points.size())) {
-        m.points[size_t(app.sel.maskPoint)] = mc;
-        app.edited();
-      } else if (dragging_ && dragKind_ == 5 && (io.MouseDelta.x != 0 || io.MouseDelta.y != 0)) {
-        for (auto &pt : m.points) pt += Vec2{io.MouseDelta.x / scale, io.MouseDelta.y / scale};
-        app.edited();
-      }
+      if (editMask(m, app.sel.maskPoint, toScreen, mc, scale, dl, IM_COL32(80, 220, 255, 255), 20)) app.edited();
       break;
     }
     }
@@ -438,6 +517,7 @@ bool Workspace::drawLedOverlay(App &app, ImDrawList *dl, ImVec2 origin, float sc
   bool ledTool = tool == Tool::Led;
 
   for (auto &m : p.ledMappings) {
+    if (m.canvasId != viewCanvas) continue;
     bool selected = ledTool && m.id == app.sel.ledId;
     ImU32 col = !m.enabled ? IM_COL32(120, 120, 120, 120)
                            : selected ? IM_COL32(60, 230, 255, 255) : IM_COL32(60, 230, 255, ledTool ? 170 : 90);
@@ -488,6 +568,7 @@ bool Workspace::drawLedOverlay(App &app, ImDrawList *dl, ImVec2 origin, float sc
       // Pick the top-most mapping under the cursor (last drawn wins).
       LedMapping *hit = nullptr;
       for (auto &m : p.ledMappings) {
+        if (m.canvasId != viewCanvas) continue;
         std::vector<Vec2> poly(m.area.corners.begin(), m.area.corners.end());
         if (pointInPolygon(mc, poly)) hit = &m;
       }
@@ -534,14 +615,13 @@ void Workspace::drawOutputOverlay(App &app, ImDrawList *dl, ImVec2 origin, ImVec
     const Mask &m = o->masks[mi];
     if (m.points.empty()) continue;
     std::vector<ImVec2> sp;
-    for (auto &v : m.points) sp.push_back(toScreen(v));
+    for (auto &v : maskOutline(m)) sp.push_back(toScreen(v));
     bool active = int(mi) == app.sel.outMask && tool == Tool::Mask;
     ImU32 col = m.subtract ? IM_COL32(255, 90, 90, active ? 255 : 130) : IM_COL32(80, 220, 255, active ? 255 : 130);
     dl->AddPolyline(sp.data(), int(sp.size()), col, ImDrawFlags_Closed, active ? 2.0f : 1.0f);
   }
 
   if (tool == Tool::Mask) {
-    bool rclicked = ImGui::IsItemHovered() && ImGui::IsMouseClicked(ImGuiMouseButton_Right);
     if (app.sel.outMask < 0 || app.sel.outMask >= int(o->masks.size())) {
       if (!clicked) return;
       Mask m;
@@ -552,44 +632,10 @@ void Workspace::drawOutputOverlay(App &app, ImDrawList *dl, ImVec2 origin, ImVec
       app.sel.outMask = int(o->masks.size()) - 1;
     }
     Mask &m = o->masks[size_t(app.sel.outMask)];
-    for (size_t i = 0; i < m.points.size(); ++i)
-      handle(dl, toScreen(m.points[i]), IM_COL32(255, 120, 120, 255), app.sel.outMaskPoint == int(i), true);
-    int nearIdx = -1;
-    float bestD = kPick;
-    for (size_t i = 0; i < m.points.size(); ++i) {
-      float d = dist(io.MousePos, toScreen(m.points[i]));
-      if (d < bestD) { bestD = d; nearIdx = int(i); }
-    }
-    if (rclicked && nearIdx >= 0) {
-      m.points.erase(m.points.begin() + nearIdx);
-      app.sel.outMaskPoint = -1;
+    if (editMask(m, app.sel.outMaskPoint, toScreen, mn, std::max(1.0f, size.x), dl, IM_COL32(255, 120, 120, 255), 30))
       app.edited();
-    } else if (clicked) {
-      if (nearIdx >= 0) {
-        app.sel.outMaskPoint = nearIdx;
-      } else {
-        // Insert on the nearest edge when close to one, otherwise append.
-        int at = int(m.points.size());
-        if (m.points.size() >= 3) {
-          float best = kPick / std::max(1.0f, size.x);
-          for (size_t i = 0; i < m.points.size(); ++i) {
-            float d = distToSegment(mn, m.points[i], m.points[(i + 1) % m.points.size()]);
-            if (d < best) { best = d; at = int(i) + 1; }
-          }
-        }
-        m.points.insert(m.points.begin() + at, mn);
-        app.sel.outMaskPoint = at;
-        app.edited();
-      }
-      dragging_ = true;
-      dragKind_ = 10;
-    }
-    if (dragging_ && dragKind_ == 10 && app.sel.outMaskPoint >= 0 && app.sel.outMaskPoint < int(m.points.size())) {
-      m.points[size_t(app.sel.outMaskPoint)] = mn;
-      app.edited();
-    }
     dl->AddText({origin.x + 8, origin.y + 8}, IM_COL32(255, 255, 255, 220),
-                "Máscara da saída: clique adiciona ponto, arraste move, botão direito apaga.");
+                "Máscara da saída: clique adiciona ponto, arraste move, botão direito apaga, Alt+clique faz curva.");
     return;
   }
 
@@ -611,6 +657,14 @@ void Workspace::drawOutputOverlay(App &app, ImDrawList *dl, ImVec2 origin, ImVec
     if (dragging_ && dragKind_ == 7 && app.sel.meshPoint >= 0 && app.sel.meshPoint < int(w.mesh.size())) {
       w.mesh[size_t(app.sel.meshPoint)] = w.unmapPerspective(mn);
       app.edited();
+    }
+    if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
+      Vec2 uv;
+      if (w.unmap(mn, uv) && w.insertLines(uv.x, uv.y)) {
+        dragging_ = false;
+        app.sel.meshPoint = -1;
+        app.edited();
+      }
     }
   } else {
     for (int c = 0; c < 4; ++c) handle(dl, toScreen(w.corners[size_t(c)]), IM_COL32(90, 160, 255, 255), app.sel.corner == c);

@@ -4,8 +4,10 @@
 #include "media/hap.h"
 #include "core/dmx.h"
 #include "core/project.h"
+#include "core/svg.h"
 #include "core/warp.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -405,7 +407,128 @@ static void testV06() {
   CHECK(s.columns[0].states.empty());
 }
 
+static void testV07() {
+  // Input mesh: inserting a row/column keeps the image where it was.
+  Warp w;
+  w.corners = {Vec2{100, 50}, Vec2{900, 120}, Vec2{1000, 700}, Vec2{50, 600}};
+  w.resetMesh(3, 3);
+  w.meshAt(1, 1) = {0.55f, 0.45f}; // a bulge
+  Warp before = w;
+  CHECK(w.insertLines(0.3f, 0.8f));
+  CHECK(w.meshCols == 4 && w.meshRows == 4 && !w.uvIsIdentity());
+  // New node (1, 2) sits at the old parameter (0.3, 0.8) and shows that content point.
+  CHECK(near(w.meshPointDest(1, 2), before.map(0.3f, 0.8f), 0.01f));
+  CHECK(near(w.uvAt(1, 2), {0.3f, 0.8f}));
+  // Old nodes did not move.
+  CHECK(near(w.meshPointDest(2, 1), before.meshPointDest(1, 1), 0.01f));
+  CHECK(!w.insertLines(1.0f / 3.0f, 0.68f)); // on existing lines: nothing to add
+  // Serialisation keeps the input side.
+  Project p = Project::makeDefault();
+  p.layers[0].slices[0].warp = w;
+  Project q;
+  CHECK(deserializeProject(serializeProject(p, ""), "", q));
+  CHECK(q.layers[0].slices[0].warp == w);
+  // Changing the division keeps the deformation.
+  Warp r = before;
+  r.resampleMesh(5, 5);
+  CHECK(r.meshCols == 5 && near(r.map(0.5f, 0.5f), before.map(0.5f, 0.5f), 0.5f));
+  CHECK(near(r.meshPointDest(2, 2), before.meshPointDest(1, 1), 0.01f));
+  // unmap is the inverse of map, mesh included.
+  Vec2 uv;
+  CHECK(before.unmap(before.map(0.37f, 0.61f), uv) && near(uv, {0.37f, 0.61f}, 1e-3f));
+
+  // Masks: bezier outline and scale.
+  Mask m;
+  m.points = {{0, 0}, {100, 0}, {100, 100}, {0, 100}};
+  CHECK(maskOutline(m).size() == 4);
+  m.ensureTangents();
+  m.tanOut[0] = {30, -30};
+  CHECK(m.isBezier(0) && maskOutline(m, 16).size() == 4 + 15);
+  m.scale = 0.5f;
+  CHECK(near(maskOutline(m)[0], {25, 25}));
+
+  // SVG import: viewBox scaling, transforms, curves, shapes.
+  std::string err;
+  auto a = masksFromSvg(R"svg(<svg viewBox="0 0 100 50"><g transform="translate(10 5)">
+      <path id="porta" d="M0 0 L20 0 L20 20 Z"/></g>
+      <rect x="50" y="10" width="10" height="20"/><circle cx="80" cy="25" r="10"/>
+      <polygon points="0,40 10,40 5,49"/><path d="m 0 0 h 10 v 10 h -10 z m 20 0 h 5 v 5 z"/></svg>)svg",
+                        1000, 500, &err);
+  CHECK(a.size() == 6);
+  if (a.size() == 6) {
+    CHECK(a[0].name == "porta" && a[0].points.size() == 3 && near(a[0].points[1], {300, 50}));
+    CHECK(a[1].points.size() == 4 && near(a[1].points[2], {600, 300}));
+    CHECK(a[2].points.size() == 4 && a[2].isBezier(0)); // circle: 4 curves
+    CHECK(near(a[2].points[0], {900, 250}));
+    CHECK(a[4].points.size() == 4 && a[5].points.size() == 3); // two subpaths
+  }
+  // Round trip through our own export.
+  Mask c;
+  c.points = {{10, 10}, {200, 20}, {150, 180}};
+  c.ensureTangents();
+  c.tanOut[1] = {20, 40};
+  c.tanIn[2] = {30, -10};
+  auto b = masksFromSvg(masksToSvg({c}, 1920, 1080), 1920, 1080);
+  CHECK(b.size() == 1 && b[0].points.size() == 3);
+  if (b.size() == 1 && b[0].points.size() == 3) {
+    CHECK(near(b[0].points[1], c.points[1]) && near(b[0].tanOut[1], c.tanOut[1]) && near(b[0].tanIn[2], c.tanIn[2]));
+  }
+  CHECK(masksFromSvg("<svg></svg>", 1, 1, &err).empty() && !err.empty());
+
+  // Free blend: the soft edges computed from overlaps match the grid assistant.
+  Project g = Project::makeDefault();
+  BlendLayoutParams bl;
+  bl.cols = 2; bl.rows = 2; bl.overlapX = 0.15f; bl.overlapY = 0.1f;
+  applyBlendLayout(g, bl, -1, false);
+  std::vector<SoftEdge> want;
+  for (auto &o : g.outputs) want.push_back(o.softEdge);
+  CHECK(autoBlendOverlaps(g, 0) == 4);
+  for (size_t i = 0; i < g.outputs.size(); ++i) {
+    CHECK(std::fabs(g.outputs[i].softEdge.left - want[i].left) < 1e-4f);
+    CHECK(std::fabs(g.outputs[i].softEdge.right - want[i].right) < 1e-4f);
+    CHECK(std::fabs(g.outputs[i].softEdge.top - want[i].top) < 1e-4f);
+    CHECK(std::fabs(g.outputs[i].softEdge.bottom - want[i].bottom) < 1e-4f);
+  }
+  // Two projectors of different sizes, offset vertically.
+  Project f = Project::makeDefault();
+  f.outputs[0].srcX = 0; f.outputs[0].srcY = 0; f.outputs[0].srcW = 1000; f.outputs[0].srcH = 600;
+  OutputConfig &o2 = f.addOutput();
+  o2.srcX = 900; o2.srcY = 100; o2.srcW = 800; o2.srcH = 600;
+  CHECK(autoBlendOverlaps(f, 0) == 1);
+  CHECK(std::fabs(f.outputs[0].softEdge.right - 0.1f) < 1e-4f && std::fabs(f.outputs[1].softEdge.left - 0.125f) < 1e-4f);
+  CHECK(f.outputs[0].softEdge.left == 0 && f.outputs[1].softEdge.top == 0);
+  // Outputs of another canvas are left alone.
+  o2.canvasId = 99;
+  CHECK(autoBlendOverlaps(f, 0) == 0 && f.outputs[1].softEdge.left > 0);
+
+  // Several canvases.
+  Project mc = Project::makeDefault();
+  CanvasConfig &led = mc.addCanvas(3840, 2160);
+  int ledId = led.id;
+  Layer &ll = mc.addLayer("LED", ledId);
+  CHECK(ll.canvasId == ledId && std::fabs(ll.slices[0].warp.corners[2].x - 3840) < 0.5f);
+  MediaItem &cm = mc.addCanvasMedia(0);
+  CHECK(cm.type == MediaType::Canvas && cm.canvasRef == 0);
+  mc.outputs[0].canvasId = ledId;
+  mc.outputs[0].spoutName = "LED processor";
+  mc.outputs[0].windowless = true;
+  Project mc2;
+  CHECK(deserializeProject(serializeProject(mc, ""), "", mc2));
+  CHECK(mc2.canvases.size() == 1 && mc2.canvasWidth(ledId) == 3840 && mc2.canvasHeight(ledId) == 2160);
+  CHECK(mc2.layers.front().canvasId == ledId && mc2.library.back().type == MediaType::Canvas);
+  CHECK(mc2.outputs[0].canvasId == ledId && mc2.outputs[0].spoutName == "LED processor" && mc2.outputs[0].windowless);
+  CHECK(mc2.canvasWidth(12345) == mc2.canvasW); // unknown: main canvas
+  // The blend assistant keeps outputs of other canvases.
+  applyBlendLayout(mc2, bl, -1, true);
+  CHECK(mc2.outputs.size() == 5 && mc2.outputs.back().canvasId == ledId);
+  CHECK(mc2.layers.front().slices[0].warp.corners[2].x == 3840); // other canvas not rescaled
+  mc2.removeCanvas(ledId);
+  CHECK(mc2.canvases.empty() && mc2.outputs.back().canvasId == 0 && mc2.library.back().canvasRef == 0);
+  CHECK(std::none_of(mc2.layers.begin(), mc2.layers.end(), [&](auto &l) { return l.canvasId == ledId; }));
+}
+
 int main() {
+  testV07();
   testV06();
   testBlendLayout();
   testDmx();

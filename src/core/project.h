@@ -17,7 +17,7 @@ struct Color {
 };
 
 // Values are stored in project files: only append.
-enum class MediaType { Video, Image, Generator, Live, Spout };
+enum class MediaType { Video, Image, Generator, Live, Spout, Canvas };
 enum class GeneratorKind { TestCard, Solid, Gradient, Grid, Plasma, Stripes, COUNT };
 const char *generatorName(GeneratorKind k);
 
@@ -37,6 +37,18 @@ struct MediaItem {
   std::string liveFormat;  // "dshow", "v4l2", "lavfi", "" (network URL)...
   std::string liveOptions; // "video_size=1280x720:framerate=30"
   // Spout receiver: `path` is the sender name ("" = active sender).
+  // Canvas (video routing): shows another canvas of the project.
+  int canvasRef = 0;
+};
+
+// Canvas 0 is the main canvas (Project::canvasW / canvasH / background); more
+// canvases can be added, each with its own layers ("video routing": a canvas
+// can be shown inside another one as a media, outputs pick their canvas).
+struct CanvasConfig {
+  int id = 0;
+  std::string name = "Canvas";
+  int width = 1920, height = 1080;
+  Color background{0, 0, 0, 1};
 };
 
 enum class BlendMode { Normal, Add, Multiply, Screen };
@@ -60,13 +72,27 @@ struct Surface {
   Warp warp; // canvas pixels
 };
 
+// Masks are applied in order, bottom of the list last (like Millumin): the
+// first mask decides the start (Show: nothing visible, Hide: all visible).
 struct Mask {
   std::string name = "Mask";
   std::vector<Vec2> points; // canvas pixels
-  bool subtract = false;    // false: reveal inside, true: hide inside
+  // Bezier handles, relative to their point (0,0 = sharp corner). Same size
+  // as `points` when present (may be empty: all sharp).
+  std::vector<Vec2> tanIn, tanOut;
+  bool subtract = false;    // false: Show pixels inside, true: Hide pixels inside
+  bool inverted = false;    // acts outside the shape instead of inside
+  float opacity = 1;        // 0 = no effect
   float feather = 0;        // pixels
+  float scale = 1;          // around the centre of the points
   bool enabled = true;
+  bool isBezier(size_t i) const;
+  void ensureTangents(); // tanIn / tanOut sized like points
 };
+
+// Polygon of a mask (bezier curves flattened, scale applied).
+std::vector<Vec2> maskOutline(const Mask &m, int stepsPerCurve = 16);
+Vec2 maskCenter(const Mask &m);
 
 struct LayerFx {
   float brightness = 0;  // -1..1
@@ -86,6 +112,7 @@ struct LayerTransform {
 struct Layer {
   int id = 0;
   std::string name = "Layer";
+  int canvasId = 0;
   bool visible = true;
   float opacity = 1;
   float volume = 1; // audio of the media playing in this layer
@@ -188,6 +215,11 @@ struct OutputConfig {
   Color blackLevel{0, 0, 0, 1};
   std::vector<Mask> masks;        // output space: points in 0..1, feather in output px
   int delayFrames = 0;            // compensates projectors with different latency
+  int canvasId = 0;               // canvas this output shows
+  // Spout sender of this output (warp, blend and colour applied), for LED
+  // processors, other machines or capture. "" = off.
+  std::string spoutName;
+  bool windowless = false;        // no window: Spout only
 };
 
 // An Art-Net node or sACN receiver (LED controller such as DMXking LeDMX4 Pro,
@@ -214,6 +246,7 @@ struct LedMapping {
   bool zigzag = false, vertical = false, flipX = false, flipY = false;
   float gamma = 2.2f;  // LED brightness curve (1 = linear)
   float brightness = 1;
+  int canvasId = 0;    // canvas the LEDs sample
   int deviceId = -1;
   int universe = 0;    // as the protocol numbers it: Art-Net starts at 0, sACN at 1
   int channel = 1;
@@ -290,8 +323,10 @@ struct DmxInputConfig {
 
 struct Project {
   std::string filePath; // not serialised
-  int canvasW = 1920, canvasH = 1080;
+  int canvasW = 1920, canvasH = 1080; // main canvas (id 0)
   Color background{0, 0, 0, 1};
+  std::string canvasName = "Canvas 1";
+  std::vector<CanvasConfig> canvases; // extra canvases (ids > 0)
   float defaultTransition = 1.0f;
   int oscPort = 8000;
   bool oscEnabled = true;
@@ -337,7 +372,7 @@ struct Project {
   OutputConfig *output(int id);
   const OutputConfig *output(int id) const { return const_cast<Project *>(this)->output(id); }
 
-  Layer &addLayer(const std::string &name = "");
+  Layer &addLayer(const std::string &name = "", int canvasId = 0);
   Column &addColumn();
   OutputConfig &addOutput();
   MediaItem &addMedia(const std::string &path);
@@ -345,6 +380,18 @@ struct Project {
   MediaItem &addLive(const std::string &name, const std::string &url, const std::string &format,
                      const std::string &options);
   MediaItem &addSpout(const std::string &senderName);
+  // Canvases: 0 = main. Unknown ids fall back to the main canvas.
+  CanvasConfig *extraCanvas(int id);
+  std::vector<int> canvasIds() const;
+  int canvasWidth(int id) const;
+  int canvasHeight(int id) const;
+  Color canvasBackground(int id) const;
+  std::string canvasLabel(int id) const;
+  bool hasCanvas(int id) const { return id == 0 || const_cast<Project *>(this)->extraCanvas(id); }
+  CanvasConfig &addCanvas(int w, int h);
+  // Layers of the canvas are removed; outputs, LEDs and media move to canvas 0.
+  void removeCanvas(int id);
+  MediaItem &addCanvasMedia(int canvasId);
   Surface *surface(int id);
   Surface &addSurface(const Warp &w);
   // Copies every surface's mapping into the slices bound to it (and unbinds
@@ -364,6 +411,11 @@ struct Project {
 // edges. firstMonitor >= 0 assigns monitors in order; -1 keeps windows.
 // scaleContent rescales slices, masks and LED areas to the new canvas size.
 void applyBlendLayout(Project &p, const BlendLayoutParams &params, int firstMonitor, bool scaleContent);
+
+// Free layouts (projectors placed anywhere on a canvas, not in a grid): sets
+// every output's soft edges from how its canvas region overlaps the others.
+// Returns the number of blended seams.
+int autoBlendOverlaps(Project &p, int canvasId);
 
 std::string serializeProject(const Project &p, const std::string &baseDir);
 bool deserializeProject(const std::string &json, const std::string &baseDir, Project &out,

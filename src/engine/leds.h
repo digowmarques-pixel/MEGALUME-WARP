@@ -2,6 +2,8 @@
 // the GPU, builds DMX universes and sends them over Art-Net / sACN.
 #pragma once
 
+#include <functional>
+
 #include "control/osc.h"
 #include "core/project.h"
 #include "render/gpu.h"
@@ -23,7 +25,8 @@ class LedEngine {
 public:
   bool init();
   // Samples the canvas and (at each device's rate) sends the universes.
-  void update(const Project &p, const Texture &canvas, DynamicMesh &mesh, double now);
+  void update(const Project &p, const std::function<const Texture &(int canvasId)> &canvas,
+              DynamicMesh &mesh, double now);
 
   // Last sampled colours of a mapping (cols*rows RGB, 0..1, row 0 = top).
   const std::vector<float> *colours(int mappingId) const;

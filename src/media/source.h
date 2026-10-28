@@ -8,6 +8,7 @@
 #include "media/upload.h"
 #include "render/gpu.h"
 
+#include <functional>
 #include <map>
 #include <memory>
 
@@ -20,9 +21,12 @@ class Generators {
 public:
   bool init();
   void render(const MediaItem &m, double time, Framebuffer &target, DynamicMesh &mesh);
+  // Copies a framebuffer texture (bottom-up) into `target` as an image (row 0 = top).
+  void copyFlipped(const Texture &src, Framebuffer &target, DynamicMesh &mesh);
 
 private:
   Shader shaders_[int(GeneratorKind::COUNT)];
+  Shader copy_;
 };
 
 // A camera / capture card / stream / Spout sender. Shared by every layer that
@@ -55,6 +59,8 @@ struct MediaContext {
   AudioEngine *audio;
   DecoderSettings decoder;
   uint64_t frame;
+  // Composed texture of a canvas (video routing); null if unknown.
+  std::function<const Texture *(int canvasId)> canvasTexture;
 };
 
 // Caches decoded stills (images), thumbnails and live inputs, keyed by media id.

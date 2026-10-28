@@ -469,7 +469,7 @@ int App::run(const Options &opts) {
           const OutputConfig &o = engine.project.outputs[i];
           Framebuffer fb;
           fb.resize(int(o.srcW), int(o.srcH));
-          outputs.renderPreview(engine.project, o, int(i), engine.canvas().texture(), fb, engine.mesh,
+          outputs.renderPreview(engine.project, o, int(i), engine.canvasTexture(o.canvasId), fb, engine.mesh,
                                 engine.time(), engine.blackout);
           fb.readPixels(px);
           writePpm(opts.screenshotOutputs + std::to_string(i + 1) + ".ppm", fb.width(), fb.height(), px, true);
@@ -479,7 +479,7 @@ int App::run(const Options &opts) {
         Framebuffer fb;
         const OutputConfig &o = engine.project.outputs.front();
         fb.resize(o.winW, o.winH);
-        outputs.renderPreview(engine.project, o, 0, engine.canvas().texture(), fb, engine.mesh,
+        outputs.renderPreview(engine.project, o, 0, engine.canvasTexture(o.canvasId), fb, engine.mesh,
                               engine.time(), engine.blackout);
         fb.readPixels(px);
         writePpm(opts.screenshotOutput, fb.width(), fb.height(), px, true);
@@ -496,7 +496,7 @@ int App::run(const Options &opts) {
         ctl.corner = sel.corner;
         ctl.meshPoint = sel.meshPoint;
       }
-      outputs.render(engine.project, engine.canvas().texture(), engine.time(), engine.blackout, &ctl);
+      outputs.render(engine.project, [this](int id) -> const Texture & { return engine.canvasTexture(id); }, engine.time(), engine.blackout, &ctl);
     } else if (outputs.openCount() > 0) {
       outputs.shutdown(); // closed by the user
     }

@@ -75,25 +75,25 @@ bool Compositor::init() {
          masks_.init();
 }
 
-void Compositor::renderMask(const Project &p, const Layer &l, DynamicMesh &mesh) {
+void Compositor::renderMask(const Layer &l, int w, int h, DynamicMesh &mesh) {
   auto &fb = maskFbs_[l.id];
   if (!fb) fb = std::make_unique<Framebuffer>();
-  masks_.render(l.masks, 1, 1, p.canvasW, p.canvasH, *fb, mesh);
+  masks_.render(l.masks, 1, 1, w, h, *fb, mesh);
 }
 
-void Compositor::render(const Project &p, const std::vector<LayerDraw> &draws,
+void Compositor::render(const Project &p, int canvasId, const std::vector<LayerDraw> &draws,
                         DynamicMesh &mesh, float master) {
-  int W = std::max(16, p.canvasW), H = std::max(16, p.canvasH);
+  int W = p.canvasWidth(canvasId), H = p.canvasHeight(canvasId);
 
   // Masks first: they need their own framebuffer bindings.
   for (auto &d : draws) {
-    if (MaskRenderer::anyActive(d.layer->masks)) renderMask(p, *d.layer, mesh);
+    if (MaskRenderer::anyActive(d.layer->masks)) renderMask(*d.layer, W, H, mesh);
     else maskFbs_.erase(d.layer->id);
   }
 
   canvas_.resize(W, H);
   canvas_.bind();
-  const Color &bg = p.background;
+  const Color bg = p.canvasBackground(canvasId);
   glClearColor(bg.r * bg.a, bg.g * bg.a, bg.b * bg.a, bg.a);
   glClear(GL_COLOR_BUFFER_BIT);
   glEnable(GL_BLEND);

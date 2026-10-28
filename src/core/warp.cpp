@@ -63,6 +63,7 @@ void Warp::setRect(Vec2 tl, Vec2 size) {
 void Warp::resetMesh(int cols, int rows) {
   meshCols = std::max(2, cols);
   meshRows = std::max(2, rows);
+  uvMesh.clear();
   mesh.resize(size_t(meshCols * meshRows));
   for (int r = 0; r < meshRows; ++r)
     for (int c = 0; c < meshCols; ++c)
@@ -78,6 +79,24 @@ bool Warp::meshIsIdentity() const {
   return true;
 }
 
+bool Warp::uvIsIdentity() const {
+  if (uvMesh.size() != size_t(meshCols * meshRows)) return true;
+  for (int r = 0; r < meshRows; ++r)
+    for (int c = 0; c < meshCols; ++c) {
+      Vec2 d = uvMesh[size_t(r * meshCols + c)] - Vec2{float(c) / float(meshCols - 1), float(r) / float(meshRows - 1)};
+      if (std::fabs(d.x) > 1e-6f || std::fabs(d.y) > 1e-6f) return false;
+    }
+  return true;
+}
+
+void Warp::ensureUvMesh() {
+  if (uvMesh.size() == size_t(meshCols * meshRows)) return;
+  uvMesh.resize(size_t(meshCols * meshRows));
+  for (int r = 0; r < meshRows; ++r)
+    for (int c = 0; c < meshCols; ++c)
+      uvAt(c, r) = {float(c) / float(meshCols - 1), float(r) / float(meshRows - 1)};
+}
+
 static float catmull(float p0, float p1, float p2, float p3, float t) {
   float t2 = t * t, t3 = t2 * t;
   return 0.5f * ((2 * p1) + (-p0 + p2) * t + (2 * p0 - 5 * p1 + 4 * p2 - p3) * t2 +
@@ -86,7 +105,17 @@ static float catmull(float p0, float p1, float p2, float p3, float t) {
 
 // Smooth interpolation through the control points (Catmull-Rom in both axes,
 // with clamped borders). Degenerates to bilinear for a 2x2 grid.
-Vec2 Warp::meshInterp(float u, float v) const {
+static Vec2 gridInterp(const std::vector<Vec2> &grid, int meshCols, int meshRows, float u, float v);
+
+Vec2 Warp::meshInterp(float u, float v) const { return gridInterp(mesh, meshCols, meshRows, u, v); }
+
+Vec2 Warp::uvMap(float u, float v) const {
+  if (uvMesh.size() != size_t(meshCols * meshRows)) return {u, v};
+  return gridInterp(uvMesh, meshCols, meshRows, u, v);
+}
+
+static Vec2 gridInterp(const std::vector<Vec2> &grid, int meshCols, int meshRows, float u, float v) {
+  auto meshAt = [&](int c, int r) -> const Vec2 & { return grid[size_t(r * meshCols + c)]; };
   float fx = std::clamp(u, 0.f, 1.f) * float(meshCols - 1);
   float fy = std::clamp(v, 0.f, 1.f) * float(meshRows - 1);
   int cx = std::min(int(fx), meshCols - 2), cy = std::min(int(fy), meshRows - 2);
@@ -174,6 +203,7 @@ void Warp::tessellate(int n, float u0, float v0, float u1, float v1,
   Mat3 h = Mat3::squareToQuad(corners);
   bool persp = perspectiveValid();
   bool identity = meshCols == 2 && meshRows == 2 && meshIsIdentity();
+  bool uvWarp = !uvIsIdentity();
   std::vector<Vec2> pos(size_t((n + 1) * (n + 1)));
   for (int j = 0; j <= n; ++j)
     for (int i = 0; i <= n; ++i) {
@@ -184,6 +214,11 @@ void Warp::tessellate(int n, float u0, float v0, float u1, float v1,
   auto push = [&](int i, int j) {
     const Vec2 &p = pos[size_t(j * (n + 1) + i)];
     float u = float(i) / float(n), v = float(j) / float(n);
+    if (uvWarp) {
+      Vec2 t = uvMap(u, v);
+      u = t.x;
+      v = t.y;
+    }
     out.insert(out.end(), {p.x, p.y, u0 + (u1 - u0) * u, v0 + (v1 - v0) * v});
   };
   for (int j = 0; j < n; ++j)
@@ -193,7 +228,83 @@ void Warp::tessellate(int n, float u0, float v0, float u1, float v1,
     }
 }
 
+void Warp::resampleMesh(int cols, int rows) {
+  cols = std::clamp(cols, 2, 33);
+  rows = std::clamp(rows, 2, 33);
+  if (cols == meshCols && rows == meshRows) return;
+  bool uv = !uvIsIdentity();
+  std::vector<Vec2> nm(size_t(cols * rows)), nuv(size_t(cols * rows));
+  for (int r = 0; r < rows; ++r)
+    for (int c = 0; c < cols; ++c) {
+      float u = float(c) / float(cols - 1), v = float(r) / float(rows - 1);
+      nm[size_t(r * cols + c)] = meshInterp(u, v);
+      nuv[size_t(r * cols + c)] = uvMap(u, v);
+    }
+  meshCols = cols;
+  meshRows = rows;
+  mesh = std::move(nm);
+  if (uv) uvMesh = std::move(nuv);
+  else uvMesh.clear();
+}
+
+bool Warp::insertLines(float u, float v) {
+  // New knots: the old (uniform) ones plus u / v. The new grid is uniform
+  // again, so the input side records which content point each node shows.
+  auto knots = [](int n, float x, bool &added) {
+    std::vector<float> k;
+    for (int i = 0; i < n; ++i) k.push_back(float(i) / float(n - 1));
+    added = false;
+    float minGap = 0.25f / float(n - 1);
+    bool close = std::any_of(k.begin(), k.end(), [&](float q) { return std::fabs(q - x) < minGap; });
+    if (!close && n < 33 && x > 0 && x < 1) {
+      k.insert(std::upper_bound(k.begin(), k.end(), x), x);
+      added = true;
+    }
+    return k;
+  };
+  bool addC, addR;
+  auto ku = knots(meshCols, std::clamp(u, 0.0f, 1.0f), addC);
+  auto kv = knots(meshRows, std::clamp(v, 0.0f, 1.0f), addR);
+  if (!addC && !addR) return false;
+  int cols = int(ku.size()), rows = int(kv.size());
+  std::vector<Vec2> nm(size_t(cols * rows)), nuv(size_t(cols * rows));
+  for (int r = 0; r < rows; ++r)
+    for (int c = 0; c < cols; ++c) {
+      nm[size_t(r * cols + c)] = meshInterp(ku[size_t(c)], kv[size_t(r)]);
+      nuv[size_t(r * cols + c)] = uvMap(ku[size_t(c)], kv[size_t(r)]);
+    }
+  meshCols = cols;
+  meshRows = rows;
+  mesh = std::move(nm);
+  uvMesh = std::move(nuv);
+  return true;
+}
+
+bool Warp::unmap(Vec2 p, Vec2 &uv) const {
+  // Coarse search, then Newton steps on map().
+  float best = 1e30f;
+  const int N = 24;
+  for (int j = 0; j <= N; ++j)
+    for (int i = 0; i <= N; ++i) {
+      Vec2 q{float(i) / N, float(j) / N};
+      float d = (map(q.x, q.y) - p).length();
+      if (d < best) { best = d; uv = q; }
+    }
+  for (int it = 0; it < 10; ++it) {
+    Vec2 f = map(uv.x, uv.y) - p;
+    const float e = 1e-3f;
+    Vec2 du = (map(uv.x + e, uv.y) - map(uv.x, uv.y)) * (1.0f / e);
+    Vec2 dv = (map(uv.x, uv.y + e) - map(uv.x, uv.y)) * (1.0f / e);
+    float det = du.x * dv.y - du.y * dv.x;
+    if (std::fabs(det) < 1e-12f) break;
+    uv = {std::clamp(uv.x - (f.x * dv.y - f.y * dv.x) / det, 0.0f, 1.0f),
+          std::clamp(uv.y - (du.x * f.y - du.y * f.x) / det, 0.0f, 1.0f)};
+  }
+  return (map(uv.x, uv.y) - p).length() < 1.0f + 1e-3f * (corners[2] - corners[0]).length();
+}
+
 bool Warp::operator==(const Warp &o) const {
+  if (uvMesh != o.uvMesh) return false;
   if (meshCols != o.meshCols || meshRows != o.meshRows || mesh.size() != o.mesh.size()) return false;
   for (size_t i = 0; i < 4; ++i)
     if (corners[i].x != o.corners[i].x || corners[i].y != o.corners[i].y) return false;

@@ -240,15 +240,16 @@ void Ui::outputsWindow(App &app) {
       ImGui::TextDisabled("A fatia (slice) é a parte do canvas usada por este projetor. Arraste o retângulo ou os cantos.");
       ImVec2 av = ImGui::GetContentRegionAvail();
       av.y -= ImGui::GetFrameHeightWithSpacing() * 1.5f;
-      float k = std::min(av.x / float(p.canvasW), av.y / float(p.canvasH));
+      float scw = float(p.canvasWidth(sel->canvasId)), sch = float(p.canvasHeight(sel->canvasId));
+      float k = std::min(av.x / scw, av.y / sch);
       ImVec2 o0 = ImGui::GetCursorScreenPos();
-      ImVec2 o1{o0.x + float(p.canvasW) * k, o0.y + float(p.canvasH) * k};
+      ImVec2 o1{o0.x + scw * k, o0.y + sch * k};
       ImDrawList *dl = ImGui::GetWindowDrawList();
-      dl->AddImage(tex(app.engine.canvas().texture()), o0, o1, {0, 1}, {1, 0});
+      dl->AddImage(tex(app.engine.canvasTexture(sel->canvasId)), o0, o1, {0, 1}, {1, 0});
       dl->AddRect(o0, o1, IM_COL32(90, 90, 95, 255));
-      // Other outputs, dimmed.
+      // Other outputs of the same canvas, dimmed.
       for (auto &o : p.outputs) {
-        if (o.id == sel->id) continue;
+        if (o.id == sel->id || o.canvasId != sel->canvasId) continue;
         dl->AddRect({o0.x + o.srcX * k, o0.y + o.srcY * k}, {o0.x + (o.srcX + o.srcW) * k, o0.y + (o.srcY + o.srcH) * k},
                     IM_COL32(90, 160, 255, 90));
       }
@@ -283,6 +284,13 @@ void Ui::outputsWindow(App &app) {
       }
       ImGui::SameLine();
       if (ImGui::Button("reset")) apply();
+      ImGui::SameLine();
+      if (ImGui::Button("blend automático")) {
+        int n = autoBlendOverlaps(p, sel->canvasId);
+        app.status(std::to_string(n) + " emenda(s) com soft edge calculado pelas sobreposições");
+        app.edited();
+      }
+      ImGui::SetItemTooltip("Projetores fora de grade: as bordas suaves saem das sobreposições das fatias");
       ImGui::SetItemTooltip("Volta a fatia de todas as saídas ao cálculo do layout");
     } else if (mappingTab_ == 1 || mappingTab_ == 2) {
       // Warp (corners / mesh) and masks, edited on the output preview.
@@ -298,10 +306,13 @@ void Ui::outputsWindow(App &app) {
         int grid[2] = {sel->warp.meshCols, sel->warp.meshRows};
         ImGui::SetNextItemWidth(140);
         if (ImGui::InputInt2("malha", grid)) {
-          sel->warp.resetMesh(std::clamp(grid[0], 2, 33), std::clamp(grid[1], 2, 33));
+          sel->warp.resampleMesh(grid[0], grid[1]); // keeps the current warp
           outputsWs_.tool = Tool::Mesh;
           app.edited();
         }
+        ImGui::SameLine();
+        if (ImGui::Button("entrada...")) openInputMesh(-1, 0, sel->id);
+        ImGui::SetItemTooltip("Malha de entrada: põe os pontos sobre detalhes do canvas");
         ImGui::SameLine();
         if (ImGui::Button("reset##warp")) {
           sel->warp.setRect({0, 0}, {1, 1});

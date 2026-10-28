@@ -1,4 +1,5 @@
-// Renders polygon masks (reveal / hide, feathered) into an R8 framebuffer.
+// Renders polygon masks into an R8 framebuffer. Masks apply in order (Show /
+// Hide, optional inverted, opacity and feather of their own, bezier curves).
 // Used for layer masks (canvas space) and output masks (projector space).
 #pragma once
 
@@ -19,8 +20,8 @@ public:
               DynamicMesh &mesh);
 
 private:
-  Shader fill_, blur_;
-  Framebuffer tmp_;
+  Shader fill_, blur_, apply_;
+  Framebuffer cover_, tmp_;
 };
 
 } // namespace lumen

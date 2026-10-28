@@ -21,6 +21,7 @@ void Engine::shutdown() {
   midi_.stop();
   dmxIn_.stop();
   states_.clear(); // playbacks remove their audio voices
+  extraCompositors_.clear();
   cache.clear();
   spoutOut_.release();
   audio.stop();
@@ -30,7 +31,17 @@ MediaContext Engine::context() {
   DecoderSettings s;
   s.hardware = project.hardwareDecode;
   s.nativeHap = FrameUploader::supportsS3tc();
-  return MediaContext{cache, generators, mesh, &audio, s, frame_};
+  MediaContext ctx{cache, generators, mesh, &audio, s, frame_, {}};
+  ctx.canvasTexture = [this](int id) -> const Texture * { return &canvasTexture(id); };
+  return ctx;
+}
+
+const Texture &Engine::canvasTexture(int id) {
+  if (id != 0) {
+    auto it = extraCompositors_.find(id);
+    if (it != extraCompositors_.end() && project.extraCanvas(id)) return it->second->canvas().texture();
+  }
+  return compositor_.canvas().texture();
 }
 
 void Engine::setProject(Project p, bool keepPlayback) {
@@ -46,6 +57,7 @@ void Engine::setProject(Project p, bool keepPlayback) {
   for (auto it = states_.begin(); it != states_.end();) {
     if (!project.layer(it->first)) {
       compositor_.releaseLayer(it->first);
+      for (auto &[id, c] : extraCompositors_) c->releaseLayer(it->first);
       it = states_.erase(it);
     } else {
       ++it;
@@ -386,21 +398,13 @@ void Engine::update(double dt) {
 }
 
 void Engine::render() {
-  std::vector<LayerDraw> draws;
-  for (auto it = project.layers.rbegin(); it != project.layers.rend(); ++it) {
-    const Layer &l = *it;
-    if (!l.visible) continue;
-    auto st = states_.find(l.id);
-    if (st == states_.end()) continue;
-    if (st->second.previous && st->second.previousTex)
-      draws.push_back({&l, st->second.previousTex, outgoingOpacity(st->second)});
-    if (st->second.current && st->second.currentTex)
-      draws.push_back({&l, st->second.currentTex, incomingOpacity(st->second)});
-  }
-  compositor_.render(project, draws, mesh, blackout ? 0.0f : masterOpacity);
-  // LEDs sample the final canvas, so master and blackout darken them too; the
-  // DMX master dims only the LEDs.
-  leds.update(project, canvas().texture(), mesh, time_);
+  // Compositors of canvases that were removed.
+  for (auto it = extraCompositors_.begin(); it != extraCompositors_.end();)
+    it = project.extraCanvas(it->first) ? std::next(it) : extraCompositors_.erase(it);
+  for (int canvasId : project.canvasIds()) renderCanvas(canvasId);
+  // LEDs sample the final canvases, so master and blackout darken them too;
+  // the DMX master dims only the LEDs.
+  leds.update(project, [this](int id) -> const Texture & { return canvasTexture(id); }, mesh, time_);
 
   if (project.spoutSend && spoutAvailable()) {
     bool ok = spoutOut_.send(canvas().texture().id(), canvas().width(), canvas().height(), project.spoutName);
@@ -409,6 +413,30 @@ void Engine::render() {
     if (!spoutStatus_.empty()) spoutOut_.release();
     spoutStatus_.clear();
   }
+}
+
+void Engine::renderCanvas(int canvasId) {
+  Compositor *comp = &compositor_;
+  if (canvasId != 0) {
+    auto &c = extraCompositors_[canvasId];
+    if (!c) {
+      c = std::make_unique<Compositor>();
+      if (!c->init()) std::fprintf(stderr, "[engine] compositor init failed\n");
+    }
+    comp = c.get();
+  }
+  std::vector<LayerDraw> draws;
+  for (auto it = project.layers.rbegin(); it != project.layers.rend(); ++it) {
+    const Layer &l = *it;
+    if (!l.visible || l.canvasId != canvasId) continue;
+    auto st = states_.find(l.id);
+    if (st == states_.end()) continue;
+    if (st->second.previous && st->second.previousTex)
+      draws.push_back({&l, st->second.previousTex, outgoingOpacity(st->second)});
+    if (st->second.current && st->second.currentTex)
+      draws.push_back({&l, st->second.currentTex, incomingOpacity(st->second)});
+  }
+  comp->render(project, canvasId, draws, mesh, blackout ? 0.0f : masterOpacity);
 }
 
 void Engine::restartOsc() {
