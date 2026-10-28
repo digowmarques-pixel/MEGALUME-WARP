@@ -347,23 +347,39 @@ OscSender::~OscSender() {
   if (socket_ >= 0) LUMEN_CLOSESOCK(Sock(socket_));
 }
 
-bool OscSender::send(const std::string &host, int port, const OscMessage &m) {
+bool OscSender::ensureSocket() {
   ensureNetwork();
-  if (socket_ < 0) {
-    auto s = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
-    if (s == LUMEN_BADSOCK) return false;
-    socket_ = intptr_t(s);
-  }
-  addrinfo hints{}, *res = nullptr;
-  hints.ai_family = AF_INET;
-  hints.ai_socktype = SOCK_DGRAM;
-  if (getaddrinfo(host.c_str(), std::to_string(port).c_str(), &hints, &res) != 0 || !res)
-    return false;
+  if (socket_ >= 0) return true;
+  auto s = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+  if (s == LUMEN_BADSOCK) return false;
+  int yes = 1;
+  setsockopt(s, SOL_SOCKET, SO_BROADCAST, reinterpret_cast<const char *>(&yes), sizeof(yes));
+  socket_ = intptr_t(s);
+  return true;
+}
+
+bool OscSender::send(const std::string &host, int port, const OscMessage &m) {
   auto data = encodeOsc(m);
-  int r = int(sendto(Sock(socket_), reinterpret_cast<const char *>(data.data()),
-                     int(data.size()), 0, res->ai_addr, socklen_t(res->ai_addrlen)));
-  freeaddrinfo(res);
-  return r == int(data.size());
+  return sendRaw(host, port, data.data(), data.size());
+}
+
+bool OscSender::sendRaw(const std::string &host, int port, const uint8_t *data, size_t size) {
+  if (!ensureSocket()) return false;
+  sockaddr_in addr{};
+  addr.sin_family = AF_INET;
+  addr.sin_port = htons(uint16_t(port));
+  if (inet_pton(AF_INET, host.c_str(), &addr.sin_addr) != 1) {
+    // Host name: resolve (cached by the OS resolver).
+    addrinfo hints{}, *res = nullptr;
+    hints.ai_family = AF_INET;
+    hints.ai_socktype = SOCK_DGRAM;
+    if (getaddrinfo(host.c_str(), nullptr, &hints, &res) != 0 || !res) return false;
+    addr.sin_addr = reinterpret_cast<sockaddr_in *>(res->ai_addr)->sin_addr;
+    freeaddrinfo(res);
+  }
+  int r = int(sendto(Sock(socket_), reinterpret_cast<const char *>(data), int(size), 0,
+                     reinterpret_cast<sockaddr *>(&addr), sizeof(addr)));
+  return r == int(size);
 }
 
 } // namespace lumen

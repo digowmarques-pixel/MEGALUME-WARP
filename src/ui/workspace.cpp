@@ -93,7 +93,8 @@ void Workspace::draw(App &app, ImVec2 size) {
   const char *hints[] = {"Clique para selecionar · arraste para mover a fatia (Shift: layer inteira)",
                          "Arraste os cantos para encaixar a imagem na superfície",
                          "Arraste os pontos da malha para curvar a imagem",
-                         "Clique para adicionar pontos · arraste para mover · botão direito apaga"};
+                         "Clique para adicionar pontos · arraste para mover · botão direito apaga",
+                         "LED: clique numa fita · arraste os cantos ou o meio para posicionar sobre a imagem"};
   ImGui::TextDisabled("%s", hints[int(tool)]);
   viewOut = viewOutputId >= 0 ? p.output(viewOutputId) : nullptr;
 
@@ -197,6 +198,8 @@ void Workspace::drawCanvasOverlay(App &app, ImDrawList *dl, ImVec2 origin, float
   // ---- end of drag
   if (dragging_ && !ImGui::IsMouseDown(ImGuiMouseButton_Left)) dragging_ = false;
 
+  if (drawLedOverlay(app, dl, origin, scale)) return;
+
   // ---- selection by click (Select tool, or clicking outside the current layer)
   auto pickLayer = [&](Vec2 c, int &sliceOut) -> Layer * {
     for (auto &l : p.layers) { // front-most first
@@ -236,6 +239,7 @@ void Workspace::drawCanvasOverlay(App &app, ImDrawList *dl, ImVec2 origin, float
     }
 
     switch (tool) {
+    case Tool::Led: break; // handled by drawLedOverlay
     case Tool::Select: {
       if (clicked) {
         int si = 0;
@@ -410,6 +414,90 @@ void Workspace::drawCanvasOverlay(App &app, ImDrawList *dl, ImVec2 origin, float
   }
 }
 
+bool Workspace::drawLedOverlay(App &app, ImDrawList *dl, ImVec2 origin, float scale) {
+  Project &p = app.engine.project;
+  ImGuiIO &io = ImGui::GetIO();
+  auto toScreen = [&](Vec2 v) { return ImVec2{origin.x + v.x * scale, origin.y + v.y * scale}; };
+  Vec2 mc{(io.MousePos.x - origin.x) / scale, (io.MousePos.y - origin.y) / scale};
+  bool ledTool = tool == Tool::Led;
+
+  for (auto &m : p.ledMappings) {
+    bool selected = ledTool && m.id == app.sel.ledId;
+    ImU32 col = !m.enabled ? IM_COL32(120, 120, 120, 120)
+                           : selected ? IM_COL32(60, 230, 255, 255) : IM_COL32(60, 230, 255, ledTool ? 170 : 90);
+    ImVec2 q[4];
+    for (int i = 0; i < 4; ++i) q[i] = toScreen(m.area.corners[size_t(i)]);
+    dl->AddPolyline(q, 4, col, ImDrawFlags_Closed, selected ? 2.0f : 1.0f);
+    // One dot per LED, coloured with what is being sent.
+    int cols = std::max(1, m.cols), rows = std::max(1, m.rows);
+    const std::vector<float> *rgb = app.engine.leds.colours(m.id);
+    if (cols * rows <= 4096) {
+      Mat3 h = Mat3::squareToQuad(m.area.corners);
+      float r = std::clamp(std::min(scale * 6.0f, 4.0f), 1.5f, 4.0f);
+      for (int y = 0; y < rows; ++y)
+        for (int x = 0; x < cols; ++x) {
+          ImVec2 c = toScreen(h.apply({(float(x) + 0.5f) / float(cols), (float(y) + 0.5f) / float(rows)}));
+          size_t i = size_t(y * cols + x) * 3;
+          ImU32 fill = rgb && i + 2 < rgb->size()
+                           ? IM_COL32(int((*rgb)[i] * 255), int((*rgb)[i + 1] * 255), int((*rgb)[i + 2] * 255), 255)
+                           : IM_COL32(40, 40, 40, 255);
+          dl->AddCircleFilled(c, r, fill);
+          if (selected) dl->AddCircle(c, r, IM_COL32(0, 0, 0, 160));
+        }
+    }
+    if (ledTool || selected)
+      dl->AddText({q[0].x, q[0].y - 16}, col, m.name.c_str());
+  }
+  if (!ledTool) return false;
+
+  bool hovered = ImGui::IsItemHovered();
+  bool clicked = hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !io.KeyAlt;
+  LedMapping *sel = p.ledMapping(app.sel.ledId);
+  if (sel && !sel->locked)
+    for (int c = 0; c < 4; ++c) handle(dl, toScreen(sel->area.corners[size_t(c)]), IM_COL32(60, 230, 255, 255), app.sel.corner == c);
+
+  if (clicked) {
+    int best = -1;
+    float bestD = kPick;
+    if (sel && !sel->locked)
+      for (int c = 0; c < 4; ++c) {
+        float d = dist(io.MousePos, toScreen(sel->area.corners[size_t(c)]));
+        if (d < bestD) { bestD = d; best = c; }
+      }
+    if (best >= 0) {
+      app.sel.corner = best;
+      dragging_ = true;
+      dragKind_ = 8;
+    } else {
+      // Pick the top-most mapping under the cursor (last drawn wins).
+      LedMapping *hit = nullptr;
+      for (auto &m : p.ledMappings) {
+        std::vector<Vec2> poly(m.area.corners.begin(), m.area.corners.end());
+        if (pointInPolygon(mc, poly)) hit = &m;
+      }
+      if (hit) {
+        app.sel.ledId = hit->id;
+        app.sel.inspector = Inspector::Led;
+        if (!hit->locked) { dragging_ = true; dragKind_ = 9; }
+      }
+    }
+  }
+  sel = p.ledMapping(app.sel.ledId);
+  if (sel && !sel->locked && dragging_) {
+    if (dragKind_ == 8 && app.sel.corner >= 0) {
+      sel->area.corners[size_t(app.sel.corner)] = mc;
+      app.edited();
+    } else if (dragKind_ == 9 && (io.MouseDelta.x != 0 || io.MouseDelta.y != 0)) {
+      sel->area.translate({io.MouseDelta.x / scale, io.MouseDelta.y / scale});
+      app.edited();
+    }
+  }
+  if (p.ledMappings.empty())
+    dl->AddText({origin.x + 8, origin.y + 8}, IM_COL32(255, 255, 255, 220),
+                "Crie uma fita em Propriedades > LED");
+  return true;
+}
+
 void Workspace::drawOutputOverlay(App &app, ImDrawList *dl, ImVec2 origin, ImVec2 size) {
   OutputConfig *o = app.engine.project.output(viewOutputId);
   if (!o) return;
@@ -471,6 +559,7 @@ void Workspace::handleShortcuts(App &app) {
   if (ImGui::IsKeyPressed(ImGuiKey_M, false)) tool = Tool::Perspective;
   if (ImGui::IsKeyPressed(ImGuiKey_G, false)) tool = Tool::Mesh;
   if (ImGui::IsKeyPressed(ImGuiKey_K, false)) tool = Tool::Mask;
+  if (ImGui::IsKeyPressed(ImGuiKey_L, false)) tool = Tool::Led;
   if (ImGui::IsKeyPressed(ImGuiKey_F, false)) fitRequested = true;
 
   Project &p = app.engine.project;
@@ -478,7 +567,7 @@ void Workspace::handleShortcuts(App &app) {
   Layer *l = p.layer(app.sel.layerId);
 
   if (ImGui::IsKeyPressed(ImGuiKey_Tab)) {
-    if (tool == Tool::Perspective) app.sel.corner = (std::max(app.sel.corner, -1) + 1) % 4;
+    if (tool == Tool::Perspective || tool == Tool::Led) app.sel.corner = (std::max(app.sel.corner, -1) + 1) % 4;
     if (tool == Tool::Mesh) {
       int n = 0;
       if (o) n = int(o->warp.mesh.size());
@@ -501,6 +590,15 @@ void Workspace::handleShortcuts(App &app) {
   bool del = ImGui::IsKeyPressed(ImGuiKey_Delete) || ImGui::IsKeyPressed(ImGuiKey_Backspace);
   if (d.x == 0 && d.y == 0 && !del) return;
 
+  if (tool == Tool::Led) {
+    LedMapping *m = p.ledMapping(app.sel.ledId);
+    if (!m || m->locked || (d.x == 0 && d.y == 0)) return;
+    if (app.sel.corner >= 0) m->area.corners[size_t(app.sel.corner)] += d;
+    else m->area.translate(d);
+    app.edited();
+    return;
+  }
+
   if (o) {
     Vec2 nd{d.x * 0.001f, d.y * 0.001f};
     if (tool == Tool::Perspective && app.sel.corner >= 0) o->warp.corners[size_t(app.sel.corner)] += nd;
@@ -513,6 +611,7 @@ void Workspace::handleShortcuts(App &app) {
   if (!l) return;
   Slice &s = l->slices[size_t(std::clamp(app.sel.slice, 0, int(l->slices.size()) - 1))];
   switch (tool) {
+  case Tool::Led: break;
   case Tool::Select: s.warp.translate(d); break;
   case Tool::Perspective:
     if (app.sel.corner < 0) return;

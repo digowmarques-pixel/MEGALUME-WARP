@@ -25,7 +25,7 @@ struct Options {
   int width = 1600, height = 900;
 };
 
-enum class Inspector { Layer, Cell, Media, Output, Interaction, Project };
+enum class Inspector { Layer, Cell, Media, Output, Led, Interaction, Project };
 
 struct Selection {
   int layerId = -1;
@@ -37,6 +37,7 @@ struct Selection {
   int cellColumn = -1, cellLayer = -1;
   int mediaId = -1;
   int outputId = -1;
+  int ledId = -1, dmxDeviceId = -1;
   Inspector inspector = Inspector::Layer;
 };
 

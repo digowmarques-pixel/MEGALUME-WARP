@@ -7,6 +7,7 @@
 #include "control/osc.h"
 #include "core/project.h"
 #include "engine/compositor.h"
+#include "engine/leds.h"
 #include "io/spout.h"
 #include "media/audio.h"
 #include "media/source.h"
@@ -81,6 +82,9 @@ public:
   // Sends to every enabled OSC output target.
   void sendOsc(const OscMessage &m, bool feedbackOnly = false);
   int oscSent() const { return oscSent_; }
+
+  // LED pixel mapping (Art-Net / sACN).
+  LedEngine leds;
 
   // Spout output of the canvas (Windows).
   std::string spoutStatus() const { return spoutStatus_; }

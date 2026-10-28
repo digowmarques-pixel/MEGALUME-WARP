@@ -75,6 +75,24 @@ bool Engine::handleOsc(const OscMessage &m) {
     return false;
   }
 
+  if (p[1] == "dmx" && p.size() == 3 && p[2] == "master" && hasArg) {
+    project.dmxMaster = std::clamp(a0, 0.0f, 1.0f);
+    return true;
+  }
+
+  if (p[1] == "led" && p.size() == 4) {
+    // /lumen/led/<n|name>/enabled|brightness
+    LedMapping *lm = nullptr;
+    int n;
+    if (parseInt(p[2], n) && n >= 1 && n <= int(project.ledMappings.size())) lm = &project.ledMappings[size_t(n - 1)];
+    for (auto &x : project.ledMappings)
+      if (!lm && x.name == p[2]) lm = &x;
+    if (!lm) return false;
+    if (p[3] == "enabled") { lm->enabled = !hasArg || a0 > 0.5f; return true; }
+    if (p[3] == "brightness" && hasArg) { lm->brightness = std::clamp(a0, 0.0f, 1.0f); return true; }
+    return false;
+  }
+
   if (p[1] == "column") {
     // /lumen/column/launch <n>   or   /lumen/column/<n>/launch
     int n = 0;
@@ -173,6 +191,7 @@ void Engine::updateMappings(double dt) {
     }
     if (im.target == MappingTarget::MasterOpacity) masterOpacity = std::clamp(st.value, 0.0f, 1.0f);
     else if (im.target == MappingTarget::MasterVolume) project.masterVolume = std::clamp(st.value, 0.0f, 2.0f);
+    else if (im.target == MappingTarget::DmxMaster) project.dmxMaster = std::clamp(st.value, 0.0f, 1.0f);
     else if (Layer *l = project.layer(im.layerId)) setParam(*l, im.target, st.value);
     // Once settled, stop writing so the parameter can still be edited by hand.
     if (std::fabs(st.value - st.target) < 1e-4f) st.active = false;

@@ -99,7 +99,9 @@ void Ui::setup() {
   for (const char *f : fonts) {
     std::error_code ec;
     if (std::filesystem::exists(f, ec)) {
-      if (io.Fonts->AddFontFromFileTTF(f, 16.0f, nullptr, io.Fonts->GetGlyphRangesDefault())) {
+      // Latin-1 plus punctuation (– — … ·) and arrows (→) used in the interface.
+      static const ImWchar ranges[] = {0x0020, 0x00FF, 0x2000, 0x206F, 0x2190, 0x21FF, 0x2212, 0x2212, 0};
+      if (io.Fonts->AddFontFromFileTTF(f, 16.0f, nullptr, ranges)) {
         loaded = true;
         break;
       }
@@ -306,8 +308,8 @@ void Ui::toolbar(App &app) {
     app.edited();
 
   ImGui::SameLine(0, 24);
-  const char *tools[] = {"Selecionar (V)", "Perspectiva (M)", "Malha (G)", "Máscara (K)"};
-  for (int i = 0; i < 4; ++i) {
+  const char *tools[] = {"Selecionar (V)", "Perspectiva (M)", "Malha (G)", "Máscara (K)", "LED (L)"};
+  for (int i = 0; i < 5; ++i) {
     bool active = int(workspace.tool) == i;
     if (active) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.98f, 0.62f, 0.18f, 0.7f));
     if (ImGui::Button(tools[i], {0, 30})) workspace.tool = Tool(i);
@@ -649,7 +651,7 @@ void Ui::dashboard(App &app) {
 void Ui::inspector(App &app) {
   struct Tab { const char *name; Inspector id; };
   const Tab tabs[] = {{"Layer", Inspector::Layer},   {"Célula", Inspector::Cell},
-                      {"Mídia", Inspector::Media},   {"Saídas", Inspector::Output},
+                      {"Mídia", Inspector::Media},   {"Saídas", Inspector::Output}, {"LED", Inspector::Led},
                       {"Interação", Inspector::Interaction}, {"Projeto", Inspector::Project}};
   static Inspector shown = Inspector::Layer;
   bool forced = shown != app.sel.inspector;
@@ -666,6 +668,7 @@ void Ui::inspector(App &app) {
         case Inspector::Output: outputInspector(app); break;
         case Inspector::Interaction: interactionInspector(app); break;
         case Inspector::Project: projectInspector(app); break;
+        case Inspector::Led: ledInspector(app); break;
         }
         ImGui::EndChild();
         ImGui::EndTabItem();
@@ -1247,6 +1250,191 @@ void Ui::interactionInspector(App &app) {
   if (ImGui::GetScrollY() >= ImGui::GetScrollMaxY() - 4) ImGui::SetScrollHereY(1.0f);
   ImGui::EndChild();
   ImGui::TextDisabled("Linhas com \"?\" não correspondem a comandos /lumen/...");
+}
+
+void Ui::ledInspector(App &app) {
+  Engine &e = app.engine;
+  Project &p = e.project;
+
+  ImGui::SeparatorText("Controladores (Art-Net / sACN)");
+  for (auto &d : p.dmxDevices) {
+    ImGui::PushID(d.id);
+    if (ImGui::Checkbox("##en", &d.enabled)) app.edited();
+    ImGui::SameLine();
+    char label[200];
+    std::snprintf(label, sizeof(label), "%s  (%s %s)", d.name.c_str(),
+                  d.protocol == DmxProtocol::ArtNet ? "Art-Net" : "sACN",
+                  d.host.empty() ? (d.protocol == DmxProtocol::ArtNet ? "broadcast" : "multicast") : d.host.c_str());
+    if (ImGui::Selectable(label, app.sel.dmxDeviceId == d.id)) app.sel.dmxDeviceId = d.id;
+    ImGui::PopID();
+  }
+  if (ImGui::Button("+ Art-Net")) {
+    app.sel.dmxDeviceId = p.addDmxDevice(DmxProtocol::ArtNet).id;
+    app.edited();
+  }
+  ImGui::SameLine();
+  if (ImGui::Button("+ sACN")) {
+    app.sel.dmxDeviceId = p.addDmxDevice(DmxProtocol::SACN).id;
+    app.edited();
+  }
+  if (DmxDevice *d = p.dmxDevice(app.sel.dmxDeviceId)) {
+    ImGui::SameLine();
+    if (ImGui::Button("Remover controlador")) {
+      int id = d->id;
+      p.dmxDevices.erase(std::remove_if(p.dmxDevices.begin(), p.dmxDevices.end(), [&](auto &x) { return x.id == id; }),
+                         p.dmxDevices.end());
+      app.sel.dmxDeviceId = -1;
+      app.edited();
+    } else {
+      ImGui::PushID(d->id);
+      if (inputText("Nome##dev", d->name)) app.edited();
+      int proto = int(d->protocol);
+      if (ImGui::Combo("Protocolo", &proto, "Art-Net\0sACN (E1.31)\0")) { d->protocol = DmxProtocol(proto); app.edited(); }
+      if (inputText("IP do controlador", d->host)) app.edited();
+      helpMarker("Vazio = broadcast (Art-Net) ou multicast (sACN). Prefira o IP do controlador "
+                 "(unicast): menos tráfego na rede. Ex.: 2.0.0.10 ou 192.168.1.50");
+      if (ImGui::SliderInt("Taxa (pacotes/s)", &d->rate, 1, 60)) app.edited();
+      ImGui::PopID();
+    }
+  }
+
+  ImGui::SeparatorText("Fitas / matrizes de LED");
+  int removeId = -1;
+  for (auto &m : p.ledMappings) {
+    ImGui::PushID(m.id);
+    if (ImGui::Checkbox("##en", &m.enabled)) app.edited();
+    ImGui::SetItemTooltip("Desligada não envia nada");
+    ImGui::SameLine();
+    if (ImGui::Checkbox("##lock", &m.locked)) app.edited();
+    ImGui::SetItemTooltip("Travada: continua enviando, mas não dá para mover no workspace");
+    ImGui::SameLine();
+    char label[200];
+    std::snprintf(label, sizeof(label), "%s  (%d×%d %s)", m.name.c_str(), m.cols, m.rows, ledFormatName(m.format));
+    if (ImGui::Selectable(label, app.sel.ledId == m.id)) {
+      app.sel.ledId = m.id;
+      workspace.tool = Tool::Led;
+    }
+    if (ImGui::BeginPopupContextItem()) {
+      if (ImGui::MenuItem("Remover")) removeId = m.id;
+      ImGui::EndPopup();
+    }
+    ImGui::PopID();
+  }
+  if (removeId >= 0) {
+    p.ledMappings.erase(std::remove_if(p.ledMappings.begin(), p.ledMappings.end(), [&](auto &x) { return x.id == removeId; }),
+                        p.ledMappings.end());
+    app.edited();
+  }
+  if (ImGui::Button("+ Fita de LED")) {
+    if (p.dmxDevices.empty()) p.addDmxDevice(DmxProtocol::ArtNet);
+    app.sel.ledId = p.addLedMapping().id;
+    workspace.tool = Tool::Led;
+    app.edited();
+  }
+  ImGui::SameLine();
+  ImGui::TextDisabled("Ferramenta LED (L) para posicionar");
+
+  if (LedMapping *m = p.ledMapping(app.sel.ledId)) {
+    ImGui::PushID(m->id);
+    ImGui::SeparatorText(m->name.c_str());
+    if (inputText("Nome", m->name)) app.edited();
+    DmxDevice *dev = p.dmxDevice(m->deviceId);
+    if (ImGui::BeginCombo("Controlador", dev ? dev->name.c_str() : "(nenhum)")) {
+      for (auto &d : p.dmxDevices)
+        if (ImGui::Selectable(d.name.c_str(), d.id == m->deviceId)) { m->deviceId = d.id; app.edited(); }
+      ImGui::EndCombo();
+    }
+    int size[2] = {m->cols, m->rows};
+    if (ImGui::InputInt2("LEDs (col × lin)", size)) {
+      m->cols = std::clamp(size[0], 1, 4096);
+      m->rows = std::clamp(size[1], 1, 4096);
+      app.edited();
+    }
+    helpMarker("Quantidade de LEDs. Fita de 60 LEDs: 60 × 1. Matriz 16×16: 16 × 16.");
+    int fmt = int(m->format);
+    if (ImGui::Combo("Formato", &fmt, "RGB\0BGR\0GRB (WS2812)\0RGBW\0Mono\0")) { m->format = LedFormat(fmt); app.edited(); }
+    helpMarker("Se o vermelho sair azul, use BGR. Fitas WS2812/SK6812 costumam ser GRB.");
+    ImGui::SameLine();
+    if (ImGui::Checkbox("16 bits", &m->wide)) app.edited();
+    if (ImGui::Checkbox("Zigzag", &m->zigzag)) app.edited();
+    ImGui::SetItemTooltip("As linhas vão e voltam (matriz feita com uma fita dobrada)");
+    ImGui::SameLine();
+    if (ImGui::Checkbox("Vertical", &m->vertical)) app.edited();
+    ImGui::SetItemTooltip("A fiação segue as colunas em vez das linhas");
+    ImGui::SameLine();
+    if (ImGui::Checkbox("Inverter X", &m->flipX)) app.edited();
+    ImGui::SameLine();
+    if (ImGui::Checkbox("Inverter Y", &m->flipY)) app.edited();
+
+    int uni = m->universe, ch = m->channel;
+    if (ImGui::InputInt("Universo", &uni)) { m->universe = std::clamp(uni, 0, 32767); app.edited(); }
+    helpMarker("Art-Net: o primeiro universo é 0. sACN: o primeiro é 1. Erro clássico quando a fita não acende.");
+    if (ImGui::InputInt("Canal inicial", &ch)) { m->channel = std::clamp(ch, 1, 512); app.edited(); }
+    if (ImGui::SliderFloat("Curva (gamma)", &m->gamma, 0.5f, 4.0f, "%.2f")) app.edited();
+    helpMarker("LEDs não são lineares: 2.2 deixa os tons médios mais naturais. 1 = sem correção.");
+    if (ImGui::SliderFloat("Brilho", &m->brightness, 0, 1)) app.edited();
+
+    // Where the strip lands in DMX.
+    auto slots = computeLedLayout(m->layout());
+    int cpp = ledChannelsPerPixel(m->format, m->wide);
+    if (!slots.empty())
+      ImGui::TextWrapped("%zu LEDs · %d canais por LED · universo %d canal %d → universo %d canal %d",
+                         slots.size(), cpp, slots.front().universe, slots.front().channel + 1,
+                         slots.back().universe, slots.back().channel + cpp);
+    if (dev && dev->protocol == DmxProtocol::SACN && m->universe == 0)
+      ImGui::TextColored({1, 0.6f, 0.3f, 1}, "sACN não tem universo 0: use 1.");
+
+    if (ImGui::Button("Ocupar o canvas")) {
+      m->area.setRect({0, 0}, {float(p.canvasW), float(p.canvasH)});
+      app.edited();
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Faixa horizontal")) {
+      m->area.setRect({float(p.canvasW) * 0.05f, float(p.canvasH) * 0.47f}, {float(p.canvasW) * 0.9f, float(p.canvasH) * 0.06f});
+      app.edited();
+    }
+    ImGui::PopID();
+  }
+
+  ImGui::SeparatorText("Geral");
+  if (ImGui::SliderFloat("DMX master", &p.dmxMaster, 0, 1)) app.edited();
+  ImGui::SetItemTooltip("Intensidade de todos os LEDs (0 = blackout das luzes)");
+  for (auto &c : e.leds.conflicts()) ImGui::TextColored({1, 0.5f, 0.4f, 1}, "Conflito: %s", c.c_str());
+  ImGui::TextDisabled("%d pacotes enviados", e.leds.packetsSent());
+
+  ImGui::SeparatorText("Monitor DMX");
+  const auto &unis = e.leds.universes();
+  if (unis.empty()) {
+    ImGui::TextDisabled("Nada sendo enviado");
+    return;
+  }
+  static UniverseKey shownKey{-1, -1};
+  if (!unis.count(shownKey)) shownKey = unis.begin()->first;
+  auto keyName = [&](const UniverseKey &k) {
+    const DmxDevice *d = p.dmxDevice(k.deviceId);
+    return (d ? d->name : std::string("?")) + " · universo " + std::to_string(k.universe);
+  };
+  if (ImGui::BeginCombo("Universo##mon", keyName(shownKey).c_str())) {
+    for (auto &[k, data] : unis)
+      if (ImGui::Selectable(keyName(k).c_str(), !(k < shownKey) && !(shownKey < k))) shownKey = k;
+    ImGui::EndCombo();
+  }
+  const DmxUniverse &data = unis.at(shownKey);
+  ImDrawList *dl = ImGui::GetWindowDrawList();
+  ImVec2 o = ImGui::GetCursorScreenPos();
+  float cw = std::max(6.0f, (ImGui::GetContentRegionAvail().x - 4) / 32.0f), chh = cw;
+  for (int i = 0; i < 512; ++i) {
+    ImVec2 a{o.x + float(i % 32) * cw, o.y + float(i / 32) * chh};
+    int v = data[size_t(i)];
+    dl->AddRectFilled(a, {a.x + cw - 1, a.y + chh - 1}, IM_COL32(v, v, v, 255));
+  }
+  ImGui::Dummy({cw * 32, chh * 16});
+  if (ImGui::IsItemHovered()) {
+    ImVec2 mp = ImGui::GetIO().MousePos;
+    int idx = int((mp.x - o.x) / cw) + int((mp.y - o.y) / chh) * 32;
+    if (idx >= 0 && idx < 512) ImGui::SetTooltip("Canal %d = %d", idx + 1, data[size_t(idx)]);
+  }
+  ImGui::TextDisabled("Cada quadrado é um canal (1–512); passe o mouse para ver o valor.");
 }
 
 void Ui::projectInspector(App &app) {

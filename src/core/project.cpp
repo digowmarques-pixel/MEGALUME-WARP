@@ -20,7 +20,7 @@ static const char *kTargetNames[] = {"Opacity",    "Position X", "Position Y",  
                                      "Rotation",   "Brightness", "Contrast",     "Saturation",
                                      "Hue",        "Speed",      "Launch column", "Go (next)",
                                      "Stop all",   "Volume",     "Master opacity", "Master volume",
-                                     "Blackout"};
+                                     "Blackout",   "DMX master"};
 
 const char *generatorName(GeneratorKind k) { return kGeneratorNames[int(k)]; }
 const char *blendName(BlendMode b) { return kBlendNames[int(b)]; }
@@ -140,6 +140,53 @@ MediaItem &Project::addSpout(const std::string &sender) {
   m.path = sender;
   library.push_back(m);
   return library.back();
+}
+
+DmxDevice *Project::dmxDevice(int id) {
+  for (auto &d : dmxDevices)
+    if (d.id == id) return &d;
+  return nullptr;
+}
+
+LedMapping *Project::ledMapping(int id) {
+  for (auto &m : ledMappings)
+    if (m.id == id) return &m;
+  return nullptr;
+}
+
+DmxDevice &Project::addDmxDevice(DmxProtocol protocol) {
+  DmxDevice d;
+  d.id = newId();
+  d.protocol = protocol;
+  d.name = protocol == DmxProtocol::ArtNet ? "Art-Net " : "sACN ";
+  d.name += std::to_string(dmxDevices.size() + 1);
+  dmxDevices.push_back(d);
+  return dmxDevices.back();
+}
+
+LedMapping &Project::addLedMapping() {
+  LedMapping m;
+  m.id = newId();
+  m.name = "Fita LED " + std::to_string(ledMappings.size() + 1);
+  // A thin strip across the lower part of the canvas.
+  m.area.setRect({float(canvasW) * 0.1f, float(canvasH) * 0.85f}, {float(canvasW) * 0.8f, float(canvasH) * 0.04f});
+  if (!dmxDevices.empty()) {
+    m.deviceId = dmxDevices.front().id;
+    if (dmxDevices.front().protocol == DmxProtocol::SACN) m.universe = 1;
+  }
+  // Continue where the previous mapping on this device ended.
+  for (auto &o : ledMappings)
+    if (o.deviceId == m.deviceId) {
+      auto slots = computeLedLayout(o.layout());
+      if (!slots.empty()) {
+        int cpp = ledChannelsPerPixel(o.format, o.wide);
+        m.universe = slots.back().universe;
+        m.channel = slots.back().channel + cpp + 1;
+        if (m.channel + 2 > 512) { ++m.universe; m.channel = 1; }
+      }
+    }
+  ledMappings.push_back(m);
+  return ledMappings.back();
 }
 
 void Project::removeLayer(int id) {
@@ -267,6 +314,19 @@ std::string serializeProject(const Project &p, const std::string &baseDir) {
   j["audio"] = {{"device", p.audioDevice}, {"master", p.masterVolume}};
   j["video"] = {{"hardwareDecode", p.hardwareDecode}};
   j["spout"] = {{"send", p.spoutSend}, {"name", p.spoutName}};
+  j["dmx"] = {{"master", p.dmxMaster}, {"devices", json::array()}, {"leds", json::array()}};
+  for (auto &d : p.dmxDevices)
+    j["dmx"]["devices"].push_back({{"id", d.id}, {"name", d.name}, {"enabled", d.enabled},
+                                   {"protocol", int(d.protocol)}, {"host", d.host}, {"rate", d.rate}});
+  for (auto &m : p.ledMappings) {
+    json jm = {{"id", m.id}, {"name", m.name}, {"enabled", m.enabled}, {"locked", m.locked},
+               {"size", {m.cols, m.rows}}, {"format", int(m.format)}, {"wide", m.wide},
+               {"zigzag", m.zigzag}, {"vertical", m.vertical}, {"flipX", m.flipX}, {"flipY", m.flipY},
+               {"gamma", m.gamma}, {"brightness", m.brightness}, {"device", m.deviceId},
+               {"universe", m.universe}, {"channel", m.channel}, {"area", json::array()}};
+    for (auto &c : m.area.corners) jm["area"].push_back(toJson(c));
+    j["dmx"]["leds"].push_back(jm);
+  }
   j["nextId"] = p.nextId;
 
   for (auto &m : p.library) {
@@ -376,6 +436,42 @@ bool deserializeProject(const std::string &text, const std::string &baseDir, Pro
       p.masterVolume = j["audio"].value("master", 1.0f);
     }
     if (j.contains("video")) p.hardwareDecode = j["video"].value("hardwareDecode", true);
+    if (j.contains("dmx")) {
+      auto &jd = j["dmx"];
+      p.dmxMaster = jd.value("master", 1.0f);
+      for (auto &x : jd.value("devices", json::array())) {
+        DmxDevice d;
+        d.id = x.value("id", 0);
+        d.name = x.value("name", "Controlador");
+        d.enabled = x.value("enabled", true);
+        d.protocol = enumFrom(x, "protocol", DmxProtocol::ArtNet, 2);
+        d.host = x.value("host", "");
+        d.rate = x.value("rate", 40);
+        p.dmxDevices.push_back(d);
+      }
+      for (auto &x : jd.value("leds", json::array())) {
+        LedMapping m;
+        m.id = x.value("id", 0);
+        m.name = x.value("name", "Fita LED");
+        m.enabled = x.value("enabled", true);
+        m.locked = x.value("locked", false);
+        if (x.contains("size")) { m.cols = x["size"][0]; m.rows = x["size"][1]; }
+        m.format = enumFrom(x, "format", LedFormat::RGB, 5);
+        m.wide = x.value("wide", false);
+        m.zigzag = x.value("zigzag", false);
+        m.vertical = x.value("vertical", false);
+        m.flipX = x.value("flipX", false);
+        m.flipY = x.value("flipY", false);
+        m.gamma = x.value("gamma", 2.2f);
+        m.brightness = x.value("brightness", 1.0f);
+        m.deviceId = x.value("device", -1);
+        m.universe = x.value("universe", 0);
+        m.channel = x.value("channel", 1);
+        if (x.contains("area"))
+          for (size_t i = 0; i < 4 && i < x["area"].size(); ++i) m.area.corners[i] = vecFrom(x["area"][i]);
+        p.ledMappings.push_back(m);
+      }
+    }
     if (j.contains("spout")) {
       p.spoutSend = j["spout"].value("send", false);
       p.spoutName = j["spout"].value("name", "Lumen");
@@ -522,6 +618,8 @@ bool deserializeProject(const std::string &text, const std::string &baseDir, Pro
     for (auto &l : p.layers) maxId = std::max(maxId, l.id);
     for (auto &c : p.columns) maxId = std::max(maxId, c.id);
     for (auto &o : p.outputs) maxId = std::max(maxId, o.id);
+    for (auto &d : p.dmxDevices) maxId = std::max(maxId, d.id);
+    for (auto &m : p.ledMappings) maxId = std::max(maxId, m.id);
     p.nextId = std::max(j.value("nextId", 1), maxId + 1);
 
     out = std::move(p);

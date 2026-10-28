@@ -21,6 +21,9 @@ Ordem pensada para **videomapping** e **instalações interativas**.
 - **Spout de saída** do canvas
 - Build para Windows a partir do Linux (MinGW) e verificação no CI
 
+## ✅ v0.3
+- **LED mapping** por Art-Net e sACN, com monitor DMX e DMX master
+
 ## ⚠️ Pendente de teste em Windows real
 Tudo foi compilado para Windows, mas **ainda não rodou numa máquina Windows**:
 Spout, WASAPI, DirectShow, D3D11VA e WinMM precisam de um teste de verdade.
@@ -31,7 +34,8 @@ Spout, WASAPI, DirectShow, D3D11VA e WinMM precisam de um teste de verdade.
 2. **NDI** (vídeo pela rede): receber e enviar
 3. **Timeline** com keyframes (opacidade, posição, efeitos) e cues com tempo
 4. **Efeitos em shader** carregados de arquivo (GLSL estilo ISF/Shadertoy) com parâmetros
-5. **DMX / Art-Net / sACN** de entrada (mesas de luz) e de saída (pixel mapping de LED)
+5. **DMX de entrada** (ser controlado por mesa de luz via Art-Net/sACN), USB DMX (Enttec),
+   plano de luz com fixtures (moving heads, PAR) e estados por coluna
 6. Áudio: roteamento multicanal por layer, ASIO, áudio das câmeras/streams,
    time-stretch para velocidade ≠ 1
 7. Upload assíncrono de textura (PBO) e decodificação D3D11 sem cópia para 8K

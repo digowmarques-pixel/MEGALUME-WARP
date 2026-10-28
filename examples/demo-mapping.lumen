@@ -640,5 +640,98 @@
       "smoothing": 0
     }
   ],
-  "nextId": 100
+  "nextId": 100,
+  "dmx": {
+    "master": 1,
+    "devices": [
+      {
+        "id": 40,
+        "name": "Controlador Art-Net",
+        "enabled": false,
+        "protocol": 0,
+        "host": "",
+        "rate": 40
+      }
+    ],
+    "leds": [
+      {
+        "id": 41,
+        "name": "Fita na aresta do cubo",
+        "enabled": true,
+        "locked": false,
+        "size": [
+          60,
+          1
+        ],
+        "format": 2,
+        "wide": false,
+        "zigzag": false,
+        "vertical": false,
+        "flipX": false,
+        "flipY": false,
+        "gamma": 2.2,
+        "brightness": 1,
+        "device": 40,
+        "universe": 0,
+        "channel": 1,
+        "area": [
+          [
+            560,
+            372
+          ],
+          [
+            960,
+            552
+          ],
+          [
+            960,
+            572
+          ],
+          [
+            560,
+            392
+          ]
+        ]
+      },
+      {
+        "id": 42,
+        "name": "Matriz 16x8",
+        "enabled": true,
+        "locked": false,
+        "size": [
+          16,
+          8
+        ],
+        "format": 0,
+        "wide": false,
+        "zigzag": true,
+        "vertical": false,
+        "flipX": false,
+        "flipY": false,
+        "gamma": 2.2,
+        "brightness": 1,
+        "device": 40,
+        "universe": 1,
+        "channel": 1,
+        "area": [
+          [
+            1010,
+            640
+          ],
+          [
+            1310,
+            500
+          ],
+          [
+            1310,
+            700
+          ],
+          [
+            1010,
+            840
+          ]
+        ]
+      }
+    ]
+  }
 }

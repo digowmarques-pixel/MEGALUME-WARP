@@ -53,8 +53,11 @@ class OscSender {
 public:
   ~OscSender();
   bool send(const std::string &host, int port, const OscMessage &m);
+  // Any UDP payload (also used for Art-Net / sACN). Broadcast addresses allowed.
+  bool sendRaw(const std::string &host, int port, const uint8_t *data, size_t size);
 
 private:
+  bool ensureSocket();
   intptr_t socket_ = -1;
 };
 

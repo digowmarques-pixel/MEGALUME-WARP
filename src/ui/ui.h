@@ -13,7 +13,7 @@ namespace lumen {
 
 class App;
 
-enum class Tool { Select, Perspective, Mesh, Mask };
+enum class Tool { Select, Perspective, Mesh, Mask, Led };
 
 class Workspace {
 public:
@@ -26,6 +26,8 @@ public:
 private:
   void drawCanvasOverlay(App &app, ImDrawList *dl, ImVec2 origin, float scale);
   void drawOutputOverlay(App &app, ImDrawList *dl, ImVec2 origin, ImVec2 size);
+  // Draws LED mappings; with the LED tool also edits them. Returns true if it handled the input.
+  bool drawLedOverlay(App &app, ImDrawList *dl, ImVec2 origin, float scale);
   void fit(ImVec2 avail, float contentW, float contentH);
 
   float zoom_ = 1;
@@ -56,6 +58,7 @@ private:
   void mediaInspector(App &app);
   void outputInspector(App &app);
   void interactionInspector(App &app);
+  void ledInspector(App &app);
   void projectInspector(App &app);
 
   bool showDemo_ = false;

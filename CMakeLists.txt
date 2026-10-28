@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(Lumen VERSION 0.2.1 LANGUAGES C CXX)
+project(Lumen VERSION 0.3.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -98,8 +98,10 @@ add_executable(lumen
   src/io/spout.cpp
   src/control/midi.cpp
   src/core/warp.cpp
+  src/core/dmx.cpp
   src/core/project.cpp
   src/engine/engine.cpp
+  src/engine/leds.cpp
   src/engine/compositor.cpp
   src/engine/outputs.cpp
   src/control/osc.cpp
@@ -148,6 +150,7 @@ if(LUMEN_BUILD_TESTS)
     src/media/hap.cpp
     src/control/midi.cpp
     src/core/warp.cpp
+    src/core/dmx.cpp
     src/core/project.cpp
     src/control/osc.cpp
     src/platform/platform.cpp)

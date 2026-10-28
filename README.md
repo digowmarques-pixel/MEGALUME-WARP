@@ -16,6 +16,7 @@ Millumin, feito para **Windows** (também compila no Linux).
 | **Composição** | Blend normal / adição / multiplicar / tela, opacidade, brilho, contraste, saturação, matiz, inverter, tinta, transformação (posição, escala, rotação) por layer |
 | **Saídas** | Várias saídas, cada uma num monitor (sem bordas) ou em janela; recorte de região do canvas, warp por saída (keystone e malha), **soft edge** para blend entre projetores, test card por saída |
 | **Interação** | Servidor **OSC** (UDP) com comandos `/lumen/...`, **MIDI** (controladores USB, com reconexão automática), **mapeamentos** sensor/MIDI → parâmetro com faixa, suavização e botão **Aprender**, monitor de mensagens |
+| **LED mapping** | Pixel mapping de fitas e matrizes de LED por **Art-Net** e **sACN**: RGB/BGR/GRB/RGBW/mono, 8/16 bits, zigzag, inversão, curva de brilho, vários universos automáticos, monitor DMX e DMX master. Veja [docs/LED.md](docs/LED.md) |
 | **Saída de controle** | **OSC de saída**: status do cue para TouchOSC/Companion e **ações OSC por coluna** (disparar luz, som, outros computadores). **Spout de saída**: o canvas inteiro vai para OBS, TouchDesigner, Resolume... |
 | **Projeto** | Arquivo `.lumen` (JSON legível), caminhos relativos, desfazer/refazer, arrastar arquivos do Explorer |
 
@@ -118,7 +119,7 @@ cmake -S . -B build && cmake --build build -j
 | Espaço / Shift+Espaço | GO (próxima coluna) / coluna anterior |
 | Esc | Para tudo com fade |
 | B | Blackout |
-| V / M / G / K | Ferramentas: selecionar, perspectiva, malha, máscara |
+| V / M / G / K / L | Ferramentas: selecionar, perspectiva, malha, máscara, LED |
 | Tab | Próximo canto / ponto |
 | Setas (Shift = ×10) | Ajuste fino do ponto selecionado |
 | F | Enquadrar a vista |

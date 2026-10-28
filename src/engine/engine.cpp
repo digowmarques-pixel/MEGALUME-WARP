@@ -8,7 +8,7 @@
 namespace lumen {
 
 bool Engine::init() {
-  bool ok = generators.init() && compositor_.init();
+  bool ok = generators.init() && compositor_.init() && leds.init();
   if (!ok) std::fprintf(stderr, "[engine] shader initialisation failed\n");
   return ok;
 }
@@ -267,6 +267,9 @@ void Engine::render() {
       draws.push_back({&l, st->second.currentTex, st->second.fade});
   }
   compositor_.render(project, draws, mesh, blackout ? 0.0f : masterOpacity);
+  // LEDs sample the final canvas, so master and blackout darken them too; the
+  // DMX master dims only the LEDs.
+  leds.update(project, canvas().texture(), mesh, time_);
 
   if (project.spoutSend && spoutAvailable()) {
     bool ok = spoutOut_.send(canvas().texture().id(), canvas().width(), canvas().height(), project.spoutName);

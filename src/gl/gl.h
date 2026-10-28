@@ -81,7 +81,8 @@
   X(PFNGLDELETESYNCPROC, glDeleteSync)                                           \
   X(PFNGLFLUSHPROC, glFlush)                                                     \
   X(PFNGLCOMPRESSEDTEXIMAGE2DPROC, glCompressedTexImage2D)                       \
-  X(PFNGLGETSTRINGIPROC, glGetStringi)
+  X(PFNGLGETSTRINGIPROC, glGetStringi)                                           \
+  X(PFNGLUNIFORMMATRIX3FVPROC, glUniformMatrix3fv)
 
 #define LUMEN_GL_DECLARE(type, name) extern type lumen_##name;
 LUMEN_GL_FUNCS(LUMEN_GL_DECLARE)
@@ -161,6 +162,7 @@ LUMEN_GL_FUNCS(LUMEN_GL_DECLARE)
 #define glFlush lumen_glFlush
 #define glCompressedTexImage2D lumen_glCompressedTexImage2D
 #define glGetStringi lumen_glGetStringi
+#define glUniformMatrix3fv lumen_glUniformMatrix3fv
 
 #ifndef GL_COMPRESSED_RGB_S3TC_DXT1_EXT
 #define GL_COMPRESSED_RGB_S3TC_DXT1_EXT 0x83F0

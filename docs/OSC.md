@@ -20,6 +20,9 @@ Layers são endereçadas pela **posição a partir do topo (1, 2, 3...)** ou pel
 | `/lumen/blackout` | `0/1` | Liga/desliga o blackout |
 | `/lumen/master` | `0..1` | Opacidade master |
 | `/lumen/volume` | `0..2` | Volume master do áudio |
+| `/lumen/dmx/master` | `0..1` | Intensidade de todos os LEDs |
+| `/lumen/led/<n>/enabled` | `0/1` | Liga/desliga uma fita de LED (`<n>` = posição ou nome) |
+| `/lumen/led/<n>/brightness` | `0..1` | Brilho de uma fita de LED |
 | `/lumen/column/launch` | `n` | Dispara a coluna `n` |
 | `/lumen/column/<n>/launch` | `[1]` | Dispara a coluna `n` (bom para botões) |
 | `/lumen/layer/<l>/opacity` | `0..1` | Opacidade |

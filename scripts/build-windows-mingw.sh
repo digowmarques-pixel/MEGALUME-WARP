@@ -22,10 +22,13 @@ SOURCES="$(cd "$ROOT" && ls src/*.cpp src/*/*.cpp) third_party/imgui/imgui.cpp t
   third_party/rtmidi/RtMidi.cpp $(cd "$ROOT" && ls third_party/spout/*.cpp) $EXTRA_SOURCES"
 OBJS=""
 pids=()
+# Newest header: any change to a header rebuilds everything (simple and safe).
+NEWEST_HEADER="$(find "$ROOT/src" "$ROOT/third_party" -name '*.h' -newer "$OUT/.stamp" 2>/dev/null | head -1)"
+[ -f "$OUT/.stamp" ] || NEWEST_HEADER=yes
 for s in $SOURCES; do
   o="$OUT/obj/$(echo "$s" | tr '/' '_').o"
   OBJS="$OBJS $o"
-  if [ ! -f "$o" ] || [ "$ROOT/$s" -nt "$o" ] || [ -n "$FORCE" ]; then
+  if [ ! -f "$o" ] || [ "$ROOT/$s" -nt "$o" ] || [ -n "$FORCE" ] || [ -n "$NEWEST_HEADER" ]; then
     extra=""; case "$s" in third_party/spout/*) extra="-msse4.1 -w";; third_party/*) extra="-w";; esac
     $CXX $CXXFLAGS $extra -c "$ROOT/$s" -o "$o" &
     pids+=($!)
@@ -33,6 +36,7 @@ for s in $SOURCES; do
   fi
 done
 for p in "${pids[@]}"; do wait "$p"; done
+touch "$OUT/.stamp"
 LINK_LIBS=""
 $CXX -o "$OUT/Lumen/lumen.exe" $OBJS -mwindows -static-libgcc -static-libstdc++ -Wl,-Bstatic -lwinpthread -Wl,-Bdynamic \
   -L"$GLFW/lib-mingw-w64" -lglfw3 -L"$FF/lib" -lavformat -lavdevice -lavcodec -lswscale -lswresample -lavutil $EXTRA_LIBS \

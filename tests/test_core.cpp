@@ -2,6 +2,7 @@
 #include "control/midi.h"
 #include "control/osc.h"
 #include "media/hap.h"
+#include "core/dmx.h"
 #include "core/project.h"
 #include "core/warp.h"
 
@@ -191,7 +192,86 @@ static void testSnappyHap() {
   CHECK(!decodeHapFrame(frame.data(), 6, hf));
 }
 
+static void testDmx() {
+  // Straight strip of 171 RGB pixels from channel 1: pixel 171 goes to the next universe.
+  LedLayoutParams p;
+  p.cols = 171;
+  p.rows = 1;
+  p.universe = 0;
+  auto slots = computeLedLayout(p);
+  CHECK(slots.size() == 171);
+  CHECK(slots[0].universe == 0 && slots[0].channel == 0 && slots[0].col == 0);
+  CHECK(slots[169].universe == 0 && slots[169].channel == 507);
+  CHECK(slots[170].universe == 1 && slots[170].channel == 0);
+
+  // 3x2 zigzag matrix: second row runs backwards.
+  p.cols = 3; p.rows = 2; p.zigzag = true;
+  slots = computeLedLayout(p);
+  CHECK(slots[3].col == 2 && slots[3].row == 1 && slots[5].col == 0 && slots[5].row == 1);
+  // Flip X reverses the first row.
+  p.zigzag = false; p.flipX = true;
+  slots = computeLedLayout(p);
+  CHECK(slots[0].col == 2 && slots[2].col == 0);
+  // Vertical wiring walks down the first column first.
+  p.flipX = false; p.vertical = true;
+  slots = computeLedLayout(p);
+  CHECK(slots[0].col == 0 && slots[0].row == 0 && slots[1].col == 0 && slots[1].row == 1 && slots[2].col == 1);
+  // Start channel 510: an RGB pixel does not fit (510,511,512) -> fits exactly; 511 does not.
+  LedLayoutParams q;
+  q.cols = 2; q.channel = 510;
+  slots = computeLedLayout(q);
+  CHECK(slots[0].universe == 0 && slots[0].channel == 509 && slots[1].universe == 1 && slots[1].channel == 0);
+  // 16-bit RGBW uses 8 channels per pixel.
+  CHECK(ledChannelsPerPixel(LedFormat::RGBW, true) == 8 && ledChannelsPerPixel(LedFormat::Mono, false) == 1);
+
+  DmxUniverse u{};
+  writeLedPixel(u, 0, LedFormat::BGR, false, 1.0f, 0.5f, 0.0f);
+  CHECK(u[0] == 0 && u[1] == 128 && u[2] == 255);
+  writeLedPixel(u, 3, LedFormat::GRB, false, 1.0f, 0.0f, 0.0f);
+  CHECK(u[3] == 0 && u[4] == 255 && u[5] == 0);
+  writeLedPixel(u, 6, LedFormat::RGBW, false, 1.0f, 1.0f, 0.5f);
+  CHECK(u[6] == 128 && u[7] == 128 && u[8] == 0 && u[9] == 128);
+  writeLedPixel(u, 10, LedFormat::RGB, true, 1.0f, 0.0f, 0.0f);
+  CHECK(u[10] == 255 && u[11] == 255 && u[12] == 0);
+
+  // Art-Net ArtDmx header.
+  u.fill(0);
+  u[0] = 7;
+  auto art = encodeArtDmx(0x123, 5, u);
+  CHECK(art.size() == 18 + 512);
+  CHECK(std::memcmp(art.data(), "Art-Net\0", 8) == 0);
+  CHECK(art[8] == 0x00 && art[9] == 0x50 && art[11] == 14 && art[12] == 5);
+  CHECK(art[14] == 0x23 && art[15] == 0x01 && art[16] == 0x02 && art[17] == 0x00 && art[18] == 7);
+
+  // sACN E1.31 data packet.
+  std::array<uint8_t, 16> cid{};
+  cid[0] = 0xAB;
+  auto sacn = encodeSacn(1, 9, u, cid, "Lumen");
+  CHECK(sacn.size() == 638);
+  CHECK(sacn[1] == 0x10 && std::memcmp(&sacn[4], "ASC-E1.17", 9) == 0);
+  CHECK(((sacn[16] & 0x0F) << 8 | sacn[17]) == 622 && (sacn[16] & 0xF0) == 0x70);
+  CHECK(((sacn[38] & 0x0F) << 8 | sacn[39]) == 600 && sacn[43] == 0x02 && sacn[22] == 0xAB);
+  CHECK(sacn[108] == 100 && sacn[111] == 9 && sacn[113] == 0 && sacn[114] == 1);
+  CHECK(((sacn[115] & 0x0F) << 8 | sacn[116]) == 523 && sacn[117] == 0x02 && sacn[118] == 0xA1);
+  CHECK(sacn[123] == 0x02 && sacn[124] == 0x01 && sacn[125] == 0 && sacn[126] == 7);
+  CHECK(sacnMulticastAddress(1) == "239.255.0.1" && sacnMulticastAddress(258) == "239.255.1.2");
+
+  // Project round trip.
+  Project pr = Project::makeDefault();
+  pr.addDmxDevice(DmxProtocol::SACN).host = "10.0.0.5";
+  LedMapping &a = pr.addLedMapping();
+  a.cols = 170; a.format = LedFormat::GRB; a.zigzag = true;
+  LedMapping &b = pr.addLedMapping(); // continues after the first: next universe
+  CHECK(b.universe == 2 && b.channel == 1);
+  Project back;
+  CHECK(deserializeProject(serializeProject(pr, ""), "", back));
+  CHECK(back.dmxDevices.size() == 1 && back.dmxDevices[0].protocol == DmxProtocol::SACN && back.dmxDevices[0].host == "10.0.0.5");
+  CHECK(back.ledMappings.size() == 2 && back.ledMappings[0].cols == 170 && back.ledMappings[0].format == LedFormat::GRB);
+  CHECK(back.ledMappings[0].zigzag && back.ledMappings[1].universe == 2);
+}
+
 int main() {
+  testDmx();
   testWarp();
   testOsc();
   testProject();

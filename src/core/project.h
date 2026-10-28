@@ -2,6 +2,7 @@
 // Runtime state (decoders, textures, playback clocks) lives in the engine.
 #pragma once
 
+#include "core/dmx.h"
 #include "core/warp.h"
 
 #include <map>
@@ -126,10 +127,42 @@ struct OutputConfig {
   bool testCard = false;
 };
 
+// An Art-Net node or sACN receiver (LED controller such as DMXking LeDMX4 Pro,
+// Enttec ODE...).
+struct DmxDevice {
+  int id = 0;
+  std::string name = "Controlador";
+  bool enabled = true;
+  DmxProtocol protocol = DmxProtocol::ArtNet;
+  std::string host; // "" = broadcast (Art-Net) / multicast (sACN); or the node IP
+  int rate = 40;    // packets per second per universe
+};
+
+// A "DMX layer": reads the composed canvas inside `area` and sends it to LEDs.
+struct LedMapping {
+  int id = 0;
+  std::string name = "Fita LED";
+  bool enabled = true; // eye: hidden mappings send nothing
+  bool locked = false; // lock: keeps sending, not editable in the workspace
+  Warp area;           // canvas px (corners only)
+  int cols = 60, rows = 1;
+  LedFormat format = LedFormat::RGB;
+  bool wide = false;   // 16-bit
+  bool zigzag = false, vertical = false, flipX = false, flipY = false;
+  float gamma = 2.2f;  // LED brightness curve (1 = linear)
+  float brightness = 1;
+  int deviceId = -1;
+  int universe = 0;    // as the protocol numbers it: Art-Net starts at 0, sACN at 1
+  int channel = 1;
+  LedLayoutParams layout() const {
+    return {cols, rows, format, wide, zigzag, vertical, flipX, flipY, universe, channel};
+  }
+};
+
 // Values are stored in project files: only append.
 enum class MappingTarget {
   Opacity, PositionX, PositionY, Scale, Rotation, Brightness, Contrast, Saturation, Hue,
-  Speed, LaunchColumn, Go, StopAll, Volume, MasterOpacity, MasterVolume, Blackout, COUNT
+  Speed, LaunchColumn, Go, StopAll, Volume, MasterOpacity, MasterVolume, Blackout, DmxMaster, COUNT
 };
 const char *mappingTargetName(MappingTarget t);
 // Continuous parameter of a layer (needs a layer, uses the output range).
@@ -168,6 +201,7 @@ struct Project {
   bool hardwareDecode = true;
   bool spoutSend = false;       // publish the canvas as a Spout sender (Windows)
   std::string spoutName = "Lumen";
+  float dmxMaster = 1; // intensity of every LED mapping (blackout of the lights)
   int nextId = 1;
 
   std::vector<MediaItem> library;
@@ -175,8 +209,16 @@ struct Project {
   std::vector<Column> columns;
   std::vector<OutputConfig> outputs;
   std::vector<InputMapping> mappings;
+  std::vector<DmxDevice> dmxDevices;
+  std::vector<LedMapping> ledMappings;
 
   int newId() { return nextId++; }
+  DmxDevice *dmxDevice(int id);
+  LedMapping *ledMapping(int id);
+  const DmxDevice *dmxDevice(int id) const { return const_cast<Project *>(this)->dmxDevice(id); }
+  const LedMapping *ledMapping(int id) const { return const_cast<Project *>(this)->ledMapping(id); }
+  DmxDevice &addDmxDevice(DmxProtocol protocol);
+  LedMapping &addLedMapping();
   MediaItem *media(int id);
   Layer *layer(int id);
   int layerIndex(int id) const;
