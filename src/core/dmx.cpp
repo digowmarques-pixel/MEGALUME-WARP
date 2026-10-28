@@ -121,4 +121,27 @@ std::string sacnMulticastAddress(int universe) {
   return "239.255." + std::to_string((universe >> 8) & 0xFF) + "." + std::to_string(universe & 0xFF);
 }
 
+bool decodeArtDmx(const uint8_t *p, size_t size, int &universe, DmxUniverse &data, int &count) {
+  static const char id[8] = {'A', 'r', 't', '-', 'N', 'e', 't', 0};
+  if (size < 18 || std::memcmp(p, id, 8) != 0) return false;
+  if ((p[8] | (p[9] << 8)) != 0x5000) return false; // OpDmx (little endian)
+  universe = p[14] | ((p[15] & 0x7F) << 8);
+  int len = (p[16] << 8) | p[17];
+  count = std::clamp(std::min(len, int(size) - 18), 0, 512);
+  std::memcpy(data.data(), p + 18, size_t(count));
+  return true;
+}
+
+bool decodeSacn(const uint8_t *p, size_t size, int &universe, DmxUniverse &data, int &count) {
+  static const char acn[12] = {'A', 'S', 'C', '-', 'E', '1', '.', '1', '7', 0, 0, 0};
+  if (size < 126 || std::memcmp(p + 4, acn, 12) != 0) return false;
+  if (p[21] != 0x04 || p[43] != 0x02 || p[117] != 0x02) return false; // data packet
+  if (p[125] != 0) return false;                                       // DMX start code only
+  universe = (p[113] << 8) | p[114];
+  int props = (p[123] << 8) | p[124]; // start code + channels
+  count = std::clamp(std::min(props - 1, int(size) - 126), 0, 512);
+  std::memcpy(data.data(), p + 126, size_t(count));
+  return true;
+}
+
 } // namespace lumen

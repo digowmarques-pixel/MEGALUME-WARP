@@ -56,6 +56,8 @@ struct Warp {
   bool perspectiveValid() const;
 
   Vec2 center() const;
+  bool operator==(const Warp &o) const;
+  bool operator!=(const Warp &o) const { return !(*this == o); }
   // Bounding-box helpers used by the transform tools.
   void translate(Vec2 d);
   void scaleAround(Vec2 pivot, float sx, float sy);

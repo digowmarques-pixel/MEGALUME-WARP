@@ -26,6 +26,54 @@ const char *generatorName(GeneratorKind k) { return kGeneratorNames[int(k)]; }
 const char *blendName(BlendMode b) { return kBlendNames[int(b)]; }
 const char *mappingTargetName(MappingTarget t) { return kTargetNames[int(t)]; }
 
+const char *endModeName(EndMode m) {
+  static const char *n[] = {"Loop", "Freeze", "Stop", "Next column"};
+  return n[int(m)];
+}
+const char *transformerName(Transformer t) {
+  static const char *n[] = {"Linear", "Switch", "Toggle", "Accumulator"};
+  return n[int(t)];
+}
+const char *scheduleActionName(ScheduleAction a) {
+  static const char *n[] = {"Launch column", "Go (next)", "Stop all", "Blackout on", "Blackout off"};
+  return n[int(a)];
+}
+
+Surface *Project::surface(int id) {
+  for (auto &s : surfaces)
+    if (s.id == id) return &s;
+  return nullptr;
+}
+
+Surface &Project::addSurface(const Warp &w) {
+  Surface s;
+  s.id = newId();
+  s.name = "Surface " + std::to_string(surfaces.size() + 1);
+  static const Color palette[] = {{0.98f, 0.62f, 0.18f, 1}, {0.3f, 0.75f, 1, 1}, {0.5f, 0.9f, 0.4f, 1},
+                                  {0.95f, 0.4f, 0.7f, 1},  {0.9f, 0.9f, 0.3f, 1}, {0.6f, 0.5f, 1, 1}};
+  s.color = palette[surfaces.size() % 6];
+  s.warp = w;
+  surfaces.push_back(s);
+  return surfaces.back();
+}
+
+void Project::pushSurfaceEdits() {
+  for (auto &l : layers)
+    for (auto &sl : l.slices)
+      if (sl.surfaceId >= 0)
+        if (Surface *s = surface(sl.surfaceId); s && s->warp != sl.warp) s->warp = sl.warp;
+  resolveSurfaces();
+}
+
+void Project::resolveSurfaces() {
+  for (auto &l : layers)
+    for (auto &sl : l.slices) {
+      if (sl.surfaceId < 0) continue;
+      if (const Surface *s = surface(sl.surfaceId)) sl.warp = s->warp;
+      else sl.surfaceId = -1; // surface deleted: the slice keeps its last mapping
+    }
+}
+
 MediaItem *Project::media(int id) {
   for (auto &m : library)
     if (m.id == id) return &m;
@@ -195,6 +243,9 @@ void Project::removeLayer(int id) {
   for (auto &c : columns) c.cells.erase(id);
   for (auto &m : mappings)
     if (m.layerId == id) m.layerId = -1;
+  for (auto &c : columns)
+    c.states.erase(std::remove_if(c.states.begin(), c.states.end(), [&](auto &s) { return s.layerId == id; }),
+                   c.states.end());
 }
 
 void Project::removeMedia(int id) {
@@ -228,6 +279,8 @@ void applyBlendLayout(Project &p, const BlendLayoutParams &params, int firstMoni
     }
     for (auto &m : p.ledMappings)
       for (auto &c : m.area.corners) scale(c);
+    for (auto &sf : p.surfaces)
+      for (auto &c : sf.warp.corners) scale(c);
   }
   p.canvasW = lay.canvasW;
   p.canvasH = lay.canvasH;
@@ -397,6 +450,17 @@ std::string serializeProject(const Project &p, const std::string &baseDir) {
     j["dmx"]["leds"].push_back(jm);
   }
   j["nextId"] = p.nextId;
+  j["surfaces"] = json::array();
+  for (auto &sf : p.surfaces)
+    j["surfaces"].push_back({{"id", sf.id}, {"name", sf.name}, {"color", toJson(sf.color)}, {"warp", toJson(sf.warp)}});
+  j["schedule"] = json::array();
+  for (auto &e : p.schedule)
+    j["schedule"].push_back({{"enabled", e.enabled}, {"time", {e.hour, e.minute}}, {"days", e.days},
+                             {"action", int(e.action)}, {"column", e.column}});
+  j["dmxInput"] = {{"enabled", p.dmxInput.enabled}, {"protocol", int(p.dmxInput.protocol)},
+                   {"universe", p.dmxInput.universe}, {"count", p.dmxInput.count}};
+  j["keyboardInput"] = p.keyboardInput;
+  j["startup"] = {{"outputs", p.startOutputs}, {"column", p.startColumn}};
 
   for (auto &m : p.library) {
     json jm = {{"id", m.id}, {"name", m.name}, {"type", int(m.type)}};
@@ -428,7 +492,7 @@ std::string serializeProject(const Project &p, const std::string &baseDir) {
     jl["transform"] = {{"position", toJson(l.transform.position)},
                        {"scale", l.transform.scale}, {"rotation", l.transform.rotation}};
     for (auto &s : l.slices)
-      jl["slices"].push_back({{"name", s.name}, {"enabled", s.enabled},
+      jl["slices"].push_back({{"name", s.name}, {"enabled", s.enabled}, {"surface", s.surfaceId},
                               {"crop", {s.u0, s.v0, s.u1, s.v1}}, {"warp", toJson(s.warp)}});
     jl["masks"] = masksToJson(l.masks);
     j["layers"].push_back(jl);
@@ -439,10 +503,15 @@ std::string serializeProject(const Project &p, const std::string &baseDir) {
                {"transitionType", int(c.transitionType)}};
     if (!c.notes.empty()) jc["notes"] = c.notes;
     if (!c.oscActions.empty()) jc["oscActions"] = c.oscActions;
+    if (c.autoGo >= 0)
+      jc["autoGo"] = {{"wait", c.autoGo}, {"afterTransition", c.autoGoAfterTransition}, {"target", c.autoGoTarget}};
+    if (c.color[0] > 0 || c.color[1] > 0 || c.color[2] > 0) jc["color"] = {c.color[0], c.color[1], c.color[2]};
+    for (auto &st : c.states)
+      jc["states"].push_back({{"layer", st.layerId}, {"param", st.param}, {"value", st.value}});
     for (auto &[lid, cell] : c.cells)
       if (cell.mediaId >= 0)
         jc["cells"].push_back({{"layer", lid}, {"media", cell.mediaId}, {"loop", cell.loop},
-                               {"speed", cell.speed}});
+                               {"end", int(cell.endMode)}, {"speed", cell.speed}});
     j["columns"].push_back(jc);
   }
 
@@ -459,14 +528,15 @@ std::string serializeProject(const Project &p, const std::string &baseDir) {
          {"color", {{"brightness", o.color.brightness}, {"contrast", o.color.contrast},
                     {"gamma", o.color.gamma}, {"gain", toJson(o.color.gain)}}},
          {"blackLevel", toJson(o.blackLevel)},
-         {"masks", masksToJson(o.masks)}});
+         {"masks", masksToJson(o.masks)}, {"delay", o.delayFrames}});
   }
 
   for (auto &m : p.mappings)
     j["mappings"].push_back({{"enabled", m.enabled}, {"address", m.address}, {"arg", m.argIndex},
                              {"in", {m.inMin, m.inMax}}, {"target", int(m.target)},
                              {"layer", m.layerId}, {"out", {m.outMin, m.outMax}},
-                             {"smoothing", m.smoothing}});
+                             {"smoothing", m.smoothing}, {"transformer", int(m.transformer)},
+                             {"step", m.step}, {"columns", {m.firstColumn, m.lastColumn}}});
   return j.dump(2);
 }
 
@@ -552,6 +622,35 @@ bool deserializeProject(const std::string &text, const std::string &baseDir, Pro
         p.ledMappings.push_back(m);
       }
     }
+    for (auto &x : j.value("surfaces", json::array())) {
+      Surface sf;
+      sf.id = x.value("id", 0);
+      sf.name = x.value("name", "Surface");
+      if (x.contains("color")) fromJson(x["color"], sf.color);
+      if (x.contains("warp")) fromJson(x["warp"], sf.warp);
+      p.surfaces.push_back(sf);
+    }
+    for (auto &x : j.value("schedule", json::array())) {
+      ScheduleEntry e;
+      e.enabled = x.value("enabled", true);
+      if (x.contains("time")) { e.hour = std::clamp(int(x["time"][0]), 0, 23); e.minute = std::clamp(int(x["time"][1]), 0, 59); }
+      e.days = x.value("days", 0x7F);
+      e.action = enumFrom(x, "action", ScheduleAction::LaunchColumn, int(ScheduleAction::COUNT));
+      e.column = x.value("column", 1);
+      p.schedule.push_back(e);
+    }
+    if (j.contains("dmxInput")) {
+      auto &x = j["dmxInput"];
+      p.dmxInput.enabled = x.value("enabled", false);
+      p.dmxInput.protocol = enumFrom(x, "protocol", DmxProtocol::ArtNet, 2);
+      p.dmxInput.universe = x.value("universe", 0);
+      p.dmxInput.count = std::clamp(x.value("count", 1), 1, 64);
+    }
+    p.keyboardInput = j.value("keyboardInput", true);
+    if (j.contains("startup")) {
+      p.startOutputs = j["startup"].value("outputs", false);
+      p.startColumn = j["startup"].value("column", 0);
+    }
     if (j.contains("spout")) {
       p.spoutSend = j["spout"].value("send", false);
       p.spoutName = j["spout"].value("name", "Lumen");
@@ -609,6 +708,7 @@ bool deserializeProject(const std::string &text, const std::string &baseDir, Pro
         Slice s;
         s.name = js.value("name", "Slice");
         s.enabled = js.value("enabled", true);
+        s.surfaceId = js.value("surface", -1);
         if (js.contains("crop")) {
           auto &c = js["crop"];
           s.u0 = c[0]; s.v0 = c[1]; s.u1 = c[2]; s.v1 = c[3];
@@ -634,10 +734,23 @@ bool deserializeProject(const std::string &text, const std::string &baseDir, Pro
       c.transitionType = enumFrom(jc, "transitionType", TransitionType::Crossfade, int(TransitionType::COUNT));
       for (auto &a : jc.value("oscActions", json::array()))
         if (a.is_string()) c.oscActions.push_back(a.get<std::string>());
+      if (jc.contains("autoGo")) {
+        auto &a = jc["autoGo"];
+        c.autoGo = a.value("wait", -1.0f);
+        c.autoGoAfterTransition = a.value("afterTransition", false);
+        c.autoGoTarget = a.value("target", 0);
+      }
+      if (jc.contains("color"))
+        for (int k = 0; k < 3; ++k) c.color[k] = jc["color"][size_t(k)];
+      for (auto &x : jc.value("states", json::array()))
+        c.states.push_back({x.value("layer", -1), x.value("param", 0), x.value("value", 0.0f)});
       for (auto &cell : jc.value("cells", json::array())) {
         Cell ce;
         ce.mediaId = cell.value("media", -1);
         ce.loop = cell.value("loop", true);
+        // Files before 0.6 only had "loop": a clip that did not loop held its last frame.
+        ce.setEndMode(cell.contains("end") ? enumFrom(cell, "end", EndMode::Loop, int(EndMode::COUNT))
+                                           : (ce.loop ? EndMode::Loop : EndMode::Freeze));
         ce.speed = cell.value("speed", 1.0f);
         c.cells[cell.value("layer", -1)] = ce;
       }
@@ -680,6 +793,7 @@ bool deserializeProject(const std::string &text, const std::string &baseDir, Pro
       }
       if (jo.contains("blackLevel")) fromJson(jo["blackLevel"], o.blackLevel);
       o.masks = masksFromJson(jo.value("masks", json::array()));
+      o.delayFrames = std::clamp(jo.value("delay", 0), 0, 8);
       p.outputs.push_back(o);
     }
 
@@ -693,6 +807,9 @@ bool deserializeProject(const std::string &text, const std::string &baseDir, Pro
       m.layerId = jm.value("layer", -1);
       if (jm.contains("out")) { m.outMin = jm["out"][0]; m.outMax = jm["out"][1]; }
       m.smoothing = jm.value("smoothing", 0.0f);
+      m.transformer = enumFrom(jm, "transformer", Transformer::Linear, int(Transformer::COUNT));
+      m.step = jm.value("step", 0.1f);
+      if (jm.contains("columns")) { m.firstColumn = jm["columns"][0]; m.lastColumn = jm["columns"][1]; }
       p.mappings.push_back(m);
     }
 
@@ -704,8 +821,10 @@ bool deserializeProject(const std::string &text, const std::string &baseDir, Pro
     for (auto &o : p.outputs) maxId = std::max(maxId, o.id);
     for (auto &d : p.dmxDevices) maxId = std::max(maxId, d.id);
     for (auto &m : p.ledMappings) maxId = std::max(maxId, m.id);
+    for (auto &sf : p.surfaces) maxId = std::max(maxId, sf.id);
     p.nextId = std::max(j.value("nextId", 1), maxId + 1);
 
+    p.resolveSurfaces();
     out = std::move(p);
     return true;
   } catch (const std::exception &e) {

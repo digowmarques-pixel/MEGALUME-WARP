@@ -52,4 +52,9 @@ std::vector<uint8_t> encodeSacn(int universe, uint8_t sequence, const DmxUnivers
 // Multicast group of an sACN universe: 239.255.hi.lo
 std::string sacnMulticastAddress(int universe);
 
+// Received DMX: decodes an ArtDmx or an E1.31 data packet. `count` is the
+// number of channels present (the rest of `data` is left untouched).
+bool decodeArtDmx(const uint8_t *p, size_t size, int &universe, DmxUniverse &data, int &count);
+bool decodeSacn(const uint8_t *p, size_t size, int &universe, DmxUniverse &data, int &count);
+
 } // namespace lumen

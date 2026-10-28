@@ -3,7 +3,7 @@
 Media server para **videomapping** e **instalações interativas**, inspirado no
 Millumin, feito para **Windows** (também compila no Linux).
 
-## O que já funciona (v0.2)
+## O que já funciona (v0.6)
 
 | Área | Recursos |
 |---|---|
@@ -18,6 +18,9 @@ Millumin, feito para **Windows** (também compila no Linux).
 | **Interação** | Servidor **OSC** (UDP) com comandos `/lumen/...`, **MIDI** (controladores USB, com reconexão automática), **mapeamentos** sensor/MIDI → parâmetro com faixa, suavização e botão **Aprender**, monitor de mensagens |
 | **LED mapping** | Pixel mapping de fitas e matrizes de LED por **Art-Net** e **sACN**: RGB/BGR/GRB/RGBW/mono, 8/16 bits, zigzag, inversão, curva de brilho, vários universos automáticos, monitor DMX e DMX master. Veja [docs/LED.md](docs/LED.md) |
 | **Saída de controle** | **OSC de saída**: status do cue para TouchOSC/Companion e **ações OSC por coluna** (disparar luz, som, outros computadores). **Spout de saída**: o canvas inteiro vai para OBS, TouchDesigner, Resolume... |
+| **Show automático** | Fim da mídia por célula (loop, congelar, parar, **próxima coluna**), **auto-GO** com contagem regressiva, **estados por coluna** (parâmetros animados na transição), **agenda** por horário, projeto que abre as saídas e dispara uma coluna ao abrir |
+| **Surfaces** | Mapping compartilhado por várias layers: ajuste uma vez quando o cenário muda |
+| **Compatível com Millumin** | API OSC do Millumin (`/millumin/action/launchColumn`, `/layer:Nome/opacity`...), feedback `launchedColumn`; teclado e **DMX de entrada** como interação; transformações chave / alternar / acumular. Veja [docs/MILLUMIN.md](docs/MILLUMIN.md) |
 | **Projeto** | Arquivo `.lumen` (JSON legível), caminhos relativos, desfazer/refazer, arrastar arquivos do Explorer |
 
 ## Baixar pronto (sem compilar)
@@ -130,6 +133,8 @@ cmake -S . -B build && cmake --build build -j
 | Ctrl+Z / Ctrl+Y | Desfazer / refazer |
 | Ctrl+S / Ctrl+Shift+S / Ctrl+O / Ctrl+N / Ctrl+I | Salvar / salvar como / abrir / novo / importar |
 | Ctrl+P | Abrir / fechar as janelas dos projetores |
+| Ctrl+Shift+P | Janela Saídas (layout dos projetores) |
+| Ctrl+Shift+D | Mostrar os cantos e a malha da saída no próprio projetor |
 
 ## Controle por OSC
 

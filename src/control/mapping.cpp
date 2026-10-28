@@ -2,6 +2,7 @@
 #include "engine/engine.h"
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstdlib>
 #include <sstream>
@@ -58,10 +59,172 @@ void Engine::setParam(Layer &l, MappingTarget t, float v) {
   }
 }
 
+float Engine::getParam(const Layer &l, MappingTarget t) const {
+  switch (t) {
+  case MappingTarget::Opacity: return l.opacity;
+  case MappingTarget::PositionX: return l.transform.position.x;
+  case MappingTarget::PositionY: return l.transform.position.y;
+  case MappingTarget::Scale: return l.transform.scale;
+  case MappingTarget::Rotation: return l.transform.rotation;
+  case MappingTarget::Brightness: return l.fx.brightness;
+  case MappingTarget::Contrast: return l.fx.contrast;
+  case MappingTarget::Saturation: return l.fx.saturation;
+  case MappingTarget::Hue: return l.fx.hue;
+  case MappingTarget::Volume: return l.volume;
+  case MappingTarget::Speed: {
+    auto it = states_.find(l.id);
+    return it != states_.end() && it->second.current ? it->second.current->speed : 1.0f;
+  }
+  default: return 0;
+  }
+}
+
+static std::string lower(std::string s) {
+  for (auto &c : s) c = char(std::tolower(static_cast<unsigned char>(c)));
+  return s;
+}
+
+// Column given as a 1-based number or by name.
+static int columnArg(const Project &p, const OscMessage &m) {
+  if (m.args.empty()) return -1;
+  if (auto *s = std::get_if<std::string>(&m.args[0])) {
+    for (size_t i = 0; i < p.columns.size(); ++i)
+      if (lower(p.columns[i].name) == lower(*s)) return int(i);
+    int n;
+    return parseInt(*s, n) ? n - 1 : -1;
+  }
+  return int(m.number(0)) - 1;
+}
+
+// Layer properties with Millumin's names (also used by /lumen/layer/<n>/...).
+// A trailing "+" or "-" adds to / subtracts from the current value.
+bool Engine::setLayerProperty(Layer &l, const std::vector<std::string> &propIn, const OscMessage &m) {
+  std::vector<std::string> prop;
+  for (auto &x : propIn) prop.push_back(lower(x));
+  int rel = 0;
+  if (!prop.empty() && (prop.back() == "+" || prop.back() == "-")) {
+    rel = prop.back() == "+" ? 1 : -1;
+    prop.pop_back();
+  }
+  if (prop.empty()) return false;
+  if (prop[0] == "position" && prop.size() > 1) prop.erase(prop.begin()); // position/x -> x
+  if (prop[0] == "media" && prop.size() > 1) prop.erase(prop.begin());    // media/speed -> speed
+  bool hasArg = !m.args.empty();
+  float a0 = m.number(0), a1 = m.number(1);
+  auto value = [&](MappingTarget t, float v) { return rel ? getParam(l, t) + float(rel) * v : v; };
+
+  static const std::pair<const char *, MappingTarget> params[] = {
+      {"opacity", MappingTarget::Opacity},       {"x", MappingTarget::PositionX},
+      {"y", MappingTarget::PositionY},           {"scale", MappingTarget::Scale},
+      {"rotation", MappingTarget::Rotation},     {"brightness", MappingTarget::Brightness},
+      {"contrast", MappingTarget::Contrast},     {"saturation", MappingTarget::Saturation},
+      {"hue", MappingTarget::Hue},               {"speed", MappingTarget::Speed},
+      {"volume", MappingTarget::Volume},         {"audio-volume", MappingTarget::Volume}};
+  const std::string &p0 = prop[0];
+  if (prop.size() == 1)
+    for (auto &[name, target] : params)
+      if (p0 == name && hasArg) { setParam(l, target, value(target, a0)); return true; }
+  if ((p0 == "xy" || p0 == "position") && m.args.size() >= 2) {
+    l.transform.position = {value(MappingTarget::PositionX, a0), value(MappingTarget::PositionY, a1)};
+    return true;
+  }
+  if (p0 == "mapping" && prop.size() >= 2 && !l.slices.empty()) {
+    // /mapping/topLeft [x y] (canvas px), or /mapping/topLeft/x [x]
+    static const char *corners[] = {"topleft", "topright", "bottomright", "bottomleft"};
+    for (int c = 0; c < 4; ++c) {
+      if (prop[1] != corners[c]) continue;
+      Slice &sl = l.slices.front();
+      Vec2 &v = sl.surfaceId >= 0 && project.surface(sl.surfaceId) ? project.surface(sl.surfaceId)->warp.corners[size_t(c)]
+                                                                   : sl.warp.corners[size_t(c)];
+      float d = float(rel);
+      if (prop.size() == 3 && prop[2] == "x" && hasArg) v.x = rel ? v.x + d * a0 : a0;
+      else if (prop.size() == 3 && prop[2] == "y" && hasArg) v.y = rel ? v.y + d * a0 : a0;
+      else if (m.args.size() >= 2) v = rel ? Vec2{v.x + d * a0, v.y + d * a1} : Vec2{a0, a1};
+      else return false;
+      project.resolveSurfaces();
+      return true;
+    }
+    return false;
+  }
+  if (p0 == "visible") { l.visible = !hasArg || a0 > 0.5f; return true; }
+  if (p0 == "mute") { l.mute = !hasArg || a0 > 0.5f; return true; }
+  if (p0 == "tint" && m.args.size() >= 3) { l.fx.tint = {a0, a1, m.number(2), 1}; return true; }
+  if (p0 == "launch" && hasArg) { launchCell(int(a0) - 1, l.id); return true; }
+  if (p0 == "startmedia") {
+    if (!hasArg) {
+      auto it = states_.find(l.id);
+      if (it != states_.end() && it->second.current) it->second.current->restart();
+    } else {
+      int c = columnArg(project, m);
+      if (c >= 0) launchCell(c, l.id);
+    }
+    return true;
+  }
+  if (p0 == "stop" || p0 == "stopmedia") { stopLayer(l.id, p0 == "stop" && hasArg ? a0 : -1); return true; }
+  if (p0 == "restart") {
+    auto it = states_.find(l.id);
+    if (it != states_.end() && it->second.current) it->second.current->restart();
+    return true;
+  }
+  return false;
+}
+
+// Millumin's OSC API (V5), so its TouchOSC / Companion / Open Stage Control
+// templates and backup-machine setups work unchanged.
+bool Engine::handleMillumin(const std::vector<std::string> &p, const OscMessage &m) {
+  if (p.empty()) return false;
+  std::string head = lower(p[0]);
+  bool hasArg = !m.args.empty();
+  float a0 = m.number(0);
+  if (head == "action" && p.size() == 2) {
+    std::string a = lower(p[1]);
+    if (a == "launchcolumn") { launchColumn(columnArg(project, m)); return true; }
+    if (a == "launchorstopcolumn") {
+      int c = columnArg(project, m);
+      if (c == activeColumn_) stopAll();
+      else launchColumn(c);
+      return true;
+    }
+    if (a == "stopcolumn") { stopAll(); return true; }
+    if (a == "launchnextcolumn") { go(); return true; }
+    if (a == "launchpreviouscolumn") { back(); return true; }
+    if (a == "displaytestcard" || a == "hidetestcard") {
+      for (auto &o : project.outputs) o.pattern = a == "displaytestcard" ? TestPattern::Card : TestPattern::None;
+      return true;
+    }
+    if (a == "enterfullscreen") { requestOutputs = 1; return true; }
+    if (a == "exitfullscreen") { requestOutputs = 0; return true; }
+    if (a == "selectlayer" && hasArg) {
+      Layer *l = nullptr;
+      if (auto *s = std::get_if<std::string>(&m.args[0])) l = findLayer(*s);
+      else l = findLayer(std::to_string(int(a0)));
+      if (l) selectedLayerId = l->id;
+      return l != nullptr;
+    }
+    return false;
+  }
+  if (p.size() == 1 && hasArg) {
+    if (head == "mastervideo") { masterOpacity = std::clamp(a0, 0.0f, 1.0f); return true; }
+    if (head == "masteraudio") { project.masterVolume = std::clamp(a0, 0.0f, 2.0f); return true; }
+    if (head == "masterdmx") { project.dmxMaster = std::clamp(a0, 0.0f, 1.0f); return true; }
+  }
+  if (p.size() < 2) return false;
+  // Element: /layer:Name/..., /index:2/..., /selectedLayer/..., /Name/...
+  Layer *l = nullptr;
+  if (head == "selectedlayer") l = project.layer(selectedLayerId);
+  else if (head.rfind("layer:", 0) == 0) l = findLayer(p[0].substr(6));
+  else if (head.rfind("index:", 0) == 0) l = findLayer(p[0].substr(6));
+  else l = findLayer(p[0]);
+  if (!l) return false;
+  return setLayerProperty(*l, std::vector<std::string>(p.begin() + 1, p.end()), m);
+}
+
 bool Engine::handleOsc(const OscMessage &m) {
   auto p = splitPath(m.address);
-  if (p.empty() || p[0] != "lumen") return false;
-  float a0 = m.number(0), a1 = m.number(1);
+  if (p.empty()) return false;
+  if (lower(p[0]) == "millumin") return handleMillumin(std::vector<std::string>(p.begin() + 1, p.end()), m);
+  if (p[0] != "lumen") return handleMillumin(p, m);
+  float a0 = m.number(0);
   bool hasArg = !m.args.empty();
 
   if (p.size() == 2) {
@@ -107,33 +270,7 @@ bool Engine::handleOsc(const OscMessage &m) {
   if (p[1] == "layer" && p.size() >= 4) {
     Layer *l = findLayer(p[2]);
     if (!l) return false;
-    const std::string &prop = p[3];
-    static const std::pair<const char *, MappingTarget> params[] = {
-        {"opacity", MappingTarget::Opacity},       {"x", MappingTarget::PositionX},
-        {"y", MappingTarget::PositionY},           {"scale", MappingTarget::Scale},
-        {"rotation", MappingTarget::Rotation},     {"brightness", MappingTarget::Brightness},
-        {"contrast", MappingTarget::Contrast},     {"saturation", MappingTarget::Saturation},
-        {"hue", MappingTarget::Hue},               {"speed", MappingTarget::Speed},
-        {"volume", MappingTarget::Volume}};
-    for (auto &[name, target] : params)
-      if (prop == name && hasArg) { setParam(*l, target, a0); return true; }
-    if (prop == "position" && m.args.size() >= 2) {
-      l->transform.position = {a0, a1};
-      return true;
-    }
-    if (prop == "visible") { l->visible = !hasArg || a0 > 0.5f; return true; }
-    if (prop == "mute") { l->mute = !hasArg || a0 > 0.5f; return true; }
-    if (prop == "launch" && hasArg) { launchCell(int(a0) - 1, l->id); return true; }
-    if (prop == "stop") { stopLayer(l->id, m.args.size() > 0 ? a0 : -1); return true; }
-    if (prop == "restart") {
-      auto it = states_.find(l->id);
-      if (it != states_.end() && it->second.current) it->second.current->restart();
-      return true;
-    }
-    if (prop == "tint" && m.args.size() >= 3) {
-      l->fx.tint = {a0, a1, m.number(2), 1};
-      return true;
-    }
+    return setLayerProperty(*l, std::vector<std::string>(p.begin() + 3, p.end()), m);
   }
   return false;
 }
@@ -155,23 +292,44 @@ void Engine::applyMappings(const OscMessage &m) {
     InputMapping &im = project.mappings[i];
     if (!im.enabled || !oscMatch(im.address.c_str(), m.address.c_str())) continue;
     if (size_t(im.argIndex) >= m.args.size()) continue;
+    if (im.firstColumn > 0 || im.lastColumn > 0) { // active only for some cues
+      int c = activeColumn_ + 1;
+      if (c < std::max(1, im.firstColumn) || (im.lastColumn > 0 && c > im.lastColumn)) continue;
+    }
     float span = im.inMax - im.inMin;
     float t = span != 0 ? (m.number(size_t(im.argIndex)) - im.inMin) / span : 0.0f;
     t = std::clamp(t, 0.0f, 1.0f);
     MappingState &st = mappingStates_[i];
+    bool high = t >= 0.5f;
+    bool rising = high && !st.triggered;
+    st.triggered = high;
 
     if (mappingTargetIsTrigger(im.target)) {
-      bool high = t >= 0.5f;
-      if (high && !st.triggered) { // rising edge
+      if (rising) {
         if (im.target == MappingTarget::Go) go();
         else if (im.target == MappingTarget::StopAll) stopAll();
         else if (im.target == MappingTarget::LaunchColumn) launchColumn(int(im.outMin) - 1);
         else if (im.target == MappingTarget::Blackout) blackout = !blackout;
       }
-      st.triggered = high;
       continue;
     }
-    st.target = im.outMin + t * (im.outMax - im.outMin);
+    switch (im.transformer) {
+    case Transformer::Switch: st.target = high ? im.outMax : im.outMin; break;
+    case Transformer::Toggle:
+      if (!rising) continue;
+      st.toggled = !st.toggled;
+      st.target = st.toggled ? im.outMax : im.outMin;
+      break;
+    case Transformer::Accumulator:
+      if (!rising) continue;
+      if (!st.accumInit) { st.accum = im.outMin; st.accumInit = true; }
+      st.accum += im.step;
+      if ((im.step >= 0 && st.accum > im.outMax + 1e-5f) || (im.step < 0 && st.accum < im.outMax - 1e-5f))
+        st.accum = im.outMin; // wraps around (e.g. next page ... back to the first)
+      st.target = st.accum;
+      break;
+    default: st.target = im.outMin + t * (im.outMax - im.outMin); break;
+    }
     if (!st.hasValue || im.smoothing <= 0) st.value = st.target;
     st.hasValue = true;
     st.active = true;

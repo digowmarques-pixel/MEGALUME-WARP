@@ -52,5 +52,6 @@ cp "$FF"/bin/*.dll "$OUT/Lumen/"
 for d in /usr/x86_64-w64-mingw32/lib /usr/lib/gcc/x86_64-w64-mingw32/*-posix; do
   [ -f "$d/libwinpthread-1.dll" ] && cp "$d/libwinpthread-1.dll" "$OUT/Lumen/" && break
 done
-rm -rf "$OUT/Lumen/examples" && cp -r "$ROOT/examples" "$OUT/Lumen/examples"
+rm -rf "$OUT/Lumen/examples" "$OUT/Lumen/docs" && cp -r "$ROOT/examples" "$ROOT/docs" "$OUT/Lumen/"
+cp "$ROOT/README.md" "$OUT/Lumen/"
 echo "built $OUT/Lumen/lumen.exe"

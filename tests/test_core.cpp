@@ -318,7 +318,95 @@ static void testBlendLayout() {
   CHECK(std::fabs(pr.layers[0].slices[0].warp.corners[1].x - float(pr.canvasW)) < 0.5f); // full-canvas slice rescaled
 }
 
+static void testV06() {
+  // DMX input: what we send we can read back.
+  DmxUniverse u{};
+  u[0] = 255; u[9] = 128; u[511] = 7;
+  int uni = -1, count = 0;
+  DmxUniverse got{};
+  auto art = encodeArtDmx(3, 1, u);
+  CHECK(decodeArtDmx(art.data(), art.size(), uni, got, count));
+  CHECK(uni == 3 && count == 512 && got[0] == 255 && got[9] == 128 && got[511] == 7);
+  std::array<uint8_t, 16> cid{};
+  auto sacn = encodeSacn(5, 1, u, cid, "test");
+  got = {};
+  CHECK(decodeSacn(sacn.data(), sacn.size(), uni, got, count));
+  CHECK(uni == 5 && count == 512 && got[9] == 128);
+  CHECK(!decodeArtDmx(sacn.data(), sacn.size(), uni, got, count));
+  CHECK(!decodeSacn(art.data(), art.size(), uni, got, count));
+
+  // Plain-text OSC.
+  OscMessage m;
+  CHECK(parseOscText("/millumin/action/launchColumn \"Intro\" 2 0.5", m));
+  CHECK(m.address == "/millumin/action/launchColumn" && m.args.size() == 3);
+  CHECK(std::get<std::string>(m.args[0]) == "Intro" && std::get<int32_t>(m.args[1]) == 2);
+  CHECK(!parseOscText("no slash", m));
+
+  // New project fields survive a save / load.
+  Project p = Project::makeDefault();
+  p.columns[0].cells[p.layers[0].id] = Cell{};
+  p.columns[0].cells[p.layers[0].id].mediaId = 1;
+  p.columns[0].cells[p.layers[0].id].setEndMode(EndMode::NextColumn);
+  p.columns[1].autoGo = 12.5f;
+  p.columns[1].autoGoTarget = 3;
+  p.columns[1].autoGoAfterTransition = true;
+  p.columns[1].states.push_back({p.layers[0].id, int(MappingTarget::Scale), 0.5f});
+  p.columns[2].color[0] = 0.5f;
+  Warp sw;
+  sw.setRect({10, 20}, {300, 200});
+  int sid = p.addSurface(sw).id;
+  p.layers[0].slices[0].surfaceId = sid;
+  p.schedule.push_back({true, 21, 30, 0x3E, ScheduleAction::BlackoutOn, 1});
+  p.dmxInput = {true, DmxProtocol::SACN, 1, 4};
+  p.startOutputs = true;
+  p.startColumn = 2;
+  p.outputs[0].delayFrames = 2;
+  InputMapping im;
+  im.transformer = Transformer::Accumulator;
+  im.step = 0.25f;
+  im.firstColumn = 2; im.lastColumn = 4;
+  p.mappings.push_back(im);
+  Project q;
+  std::string err;
+  CHECK(deserializeProject(serializeProject(p, ""), "", q, &err));
+  const Cell &c = q.columns[0].cells[q.layers[0].id];
+  CHECK(c.endMode == EndMode::NextColumn && !c.loop);
+  CHECK(q.columns[1].autoGo == 12.5f && q.columns[1].autoGoTarget == 3 && q.columns[1].autoGoAfterTransition);
+  CHECK(q.columns[1].states.size() == 1 && q.columns[1].states[0].value == 0.5f);
+  CHECK(q.columns[2].color[0] == 0.5f);
+  CHECK(q.surfaces.size() == 1 && q.layers[0].slices[0].surfaceId == sid);
+  CHECK(near(q.layers[0].slices[0].warp.corners[2], {310, 220})); // resolved from the surface
+  CHECK(q.schedule.size() == 1 && q.schedule[0].hour == 21 && q.schedule[0].minute == 30 && q.schedule[0].days == 0x3E);
+  CHECK(q.dmxInput.enabled && q.dmxInput.protocol == DmxProtocol::SACN && q.dmxInput.count == 4);
+  CHECK(q.startOutputs && q.startColumn == 2 && q.outputs[0].delayFrames == 2);
+  CHECK(q.mappings[0].transformer == Transformer::Accumulator && q.mappings[0].step == 0.25f && q.mappings[0].lastColumn == 4);
+
+  // Old files: "loop": false meant "hold the last frame".
+  CHECK(deserializeProject(R"({"layers":[{"id":1}],"columns":[{"id":2,"cells":[{"layer":1,"media":3,"loop":false}]}]})", "", q, &err));
+  CHECK(q.columns[0].cells[1].endMode == EndMode::Freeze);
+
+  // Surfaces: editing one bound slice moves the surface and the other layers.
+  Project s = Project::makeDefault();
+  s.addLayer("B");
+  int id = s.addSurface(s.layers[0].slices[0].warp).id;
+  s.layers[0].slices[0].surfaceId = id;
+  s.layers[1].slices[0].surfaceId = id;
+  s.resolveSurfaces();
+  s.layers[1].slices[0].warp.corners[0] = {111, 222};
+  s.pushSurfaceEdits();
+  CHECK(near(s.surface(id)->warp.corners[0], {111, 222}));
+  CHECK(near(s.layers[0].slices[0].warp.corners[0], {111, 222}));
+  s.surfaces.clear();
+  s.resolveSurfaces();
+  CHECK(s.layers[0].slices[0].surfaceId == -1 && near(s.layers[0].slices[0].warp.corners[0], {111, 222}));
+  // Removing a layer removes its states.
+  s.columns[0].states.push_back({s.layers[1].id, 0, 1});
+  s.removeLayer(s.layers[1].id);
+  CHECK(s.columns[0].states.empty());
+}
+
 int main() {
+  testV06();
   testBlendLayout();
   testDmx();
   testWarp();

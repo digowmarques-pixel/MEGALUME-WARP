@@ -23,6 +23,7 @@ struct Options {
   int launchColumn = -1;        // 1-based column to launch at start
   bool noOutputs = false;       // never open output windows
   bool openOutputs = false;     // open output windows at start (installations)
+  bool outputControls = false;  // calibration overlay on the first output
   int width = 1600, height = 900;
   std::string blend;             // "3x1:0.15:1920x1080" applies the blend assistant at start
   int pattern = -1;              // test pattern for every output (TestPattern value)
@@ -99,9 +100,13 @@ public:
   bool requestQuit = false;
   // Output windows open only when the user asks (toolbar / Ctrl+P / --outputs).
   bool outputsOpen = false;
+  // Draws the selected output's warp handles on the projector itself.
+  bool showOutputControls = false;
 
 private:
   void commitIfNeeded();
+  void pollKeyboard(bool mainWindowKeys);
+  std::vector<bool> keyDown_;
   void updateTitle();
   bool writePpm(const std::string &path, int w, int h, const std::vector<unsigned char> &rgba,
                 bool flipY);

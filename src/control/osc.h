@@ -26,6 +26,8 @@ struct OscMessage {
 // Parses a datagram (message or bundle). Returns false on malformed data.
 bool parseOsc(const uint8_t *data, size_t size, std::vector<OscMessage> &out);
 std::vector<uint8_t> encodeOsc(const OscMessage &m);
+// Text form: `/address 1 2.5 "some text" word` (ints, floats, strings).
+bool parseOscText(const std::string &line, OscMessage &m);
 // OSC address pattern match supporting '*', '?', '[abc]', '{foo,bar}'.
 bool oscMatch(const char *pattern, const char *address);
 

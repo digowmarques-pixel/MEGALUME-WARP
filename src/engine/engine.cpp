@@ -1,8 +1,11 @@
 #include "engine/engine.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <ctime>
+#include <set>
 #include <sstream>
 
 namespace lumen {
@@ -16,6 +19,7 @@ bool Engine::init() {
 void Engine::shutdown() {
   osc_.stop();
   midi_.stop();
+  dmxIn_.stop();
   states_.clear(); // playbacks remove their audio voices
   cache.clear();
   spoutOut_.release();
@@ -52,6 +56,23 @@ void Engine::setProject(Project p, bool keepPlayback) {
   if (portChanged || !keepPlayback) restartOsc();
   if (midiChanged || !keepPlayback) restartMidi();
   if (audioDeviceInUse_ != project.audioDevice) restartAudio();
+  restartDmxInput();
+  tweens_.erase(std::remove_if(tweens_.begin(), tweens_.end(),
+                               [&](const ParamTween &t) { return !project.layer(t.layerId); }),
+                tweens_.end());
+  project.resolveSurfaces();
+}
+
+void Engine::restartDmxInput() {
+  const DmxInputConfig &c = project.dmxInput;
+  bool same = c.enabled == dmxInConfig_.enabled && c.protocol == dmxInConfig_.protocol &&
+              c.universe == dmxInConfig_.universe && c.count == dmxInConfig_.count;
+  if (same && (dmxIn_.running() || !c.enabled || !dmxInError_.empty())) return;
+  dmxInConfig_ = c;
+  dmxIn_.stop();
+  dmxInError_.clear();
+  if (c.enabled && !dmxIn_.start(c.protocol, c.universe, c.count, &dmxInError_))
+    std::fprintf(stderr, "[dmx in] %s\n", dmxInError_.c_str());
 }
 
 const LayerState *Engine::layerState(int layerId) const {
@@ -87,6 +108,8 @@ void Engine::startTransition(int layerId, const Cell *cell, float duration, int 
     st.current->loop = cell->loop;
     st.current->speed = cell->speed;
     st.columnId = columnId;
+    st.endMode = cell->endMode;
+    st.endHandled = false; // the new cue's end mode applies (even if it already ended)
     return;
   }
   if (!media && !st.current) return;
@@ -103,37 +126,8 @@ void Engine::startTransition(int layerId, const Cell *cell, float duration, int 
   st.type = type;
   st.fadingOut = !media;
   st.columnId = media ? columnId : -1;
-}
-
-// Splits `/addr 1 2.5 "some text" word` into an OSC message.
-static bool parseOscLine(const std::string &line, OscMessage &m) {
-  std::vector<std::string> tokens;
-  std::string cur;
-  bool quoted = false, any = false;
-  for (char c : line) {
-    if (c == '"') { quoted = !quoted; any = true; continue; }
-    if (!quoted && (c == ' ' || c == '\t')) {
-      if (!cur.empty() || any) tokens.push_back(cur);
-      cur.clear();
-      any = false;
-      continue;
-    }
-    cur += c;
-  }
-  if (!cur.empty() || any) tokens.push_back(cur);
-  if (tokens.empty() || tokens[0].empty() || tokens[0][0] != '/') return false;
-  m.address = tokens[0];
-  m.args.clear();
-  for (size_t i = 1; i < tokens.size(); ++i) {
-    const std::string &t = tokens[i];
-    char *end = nullptr;
-    long iv = std::strtol(t.c_str(), &end, 10);
-    if (!t.empty() && *end == 0) { m.args.emplace_back(int32_t(iv)); continue; }
-    float fv = std::strtof(t.c_str(), &end);
-    if (!t.empty() && *end == 0) { m.args.emplace_back(fv); continue; }
-    m.args.emplace_back(t);
-  }
-  return true;
+  st.endMode = cell ? cell->endMode : EndMode::Loop;
+  st.endHandled = false;
 }
 
 void Engine::sendOsc(const OscMessage &m, bool feedbackOnly) {
@@ -147,9 +141,11 @@ void Engine::runColumnActions(const Column &c, int index) {
   if (project.oscTargets.empty()) return;
   OscMessage status{"/lumen/status/column", {int32_t(index + 1), c.name}, ""};
   sendOsc(status, true);
+  // Same feedback as Millumin, for Companion / TouchOSC / Chataigne templates.
+  sendOsc(OscMessage{"/millumin/board/launchedColumn", {int32_t(index + 1), c.name}, ""}, true);
   for (auto &line : c.oscActions) {
     OscMessage m;
-    if (parseOscLine(line, m)) sendOsc(m);
+    if (parseOscText(line, m)) sendOsc(m);
   }
 }
 
@@ -163,7 +159,102 @@ void Engine::launchColumn(int index) {
     startTransition(l.id, cell, fade, col.id, col.transitionType);
   }
   activeColumn_ = index;
+  columnLaunchedAt_ = time_;
+  autoGoFired_ = false;
+  applyColumnStates(index, col.transitionType == TransitionType::Cut ? 0.0f : fade);
   runColumnActions(col, index);
+}
+
+void Engine::applyColumnStates(int index, float duration) {
+  // Every parameter tracked by any column; a column without a value for it
+  // inherits the closest previous column that has one.
+  std::set<std::pair<int, int>> tracked;
+  for (auto &c : project.columns)
+    for (auto &st : c.states) tracked.insert({st.layerId, st.param});
+  for (auto &[layerId, param] : tracked) {
+    const Layer *l = project.layer(layerId);
+    if (!l) continue;
+    const ColumnState *found = nullptr;
+    for (int i = index; i >= 0 && !found; --i)
+      for (auto &st : project.columns[size_t(i)].states)
+        if (st.layerId == layerId && st.param == param) { found = &st; break; }
+    if (!found) continue;
+    auto t = MappingTarget(param);
+    tweens_.erase(std::remove_if(tweens_.begin(), tweens_.end(),
+                                 [&](const ParamTween &x) { return x.layerId == layerId && x.param == t; }),
+                  tweens_.end());
+    tweens_.push_back({layerId, t, getParam(*l, t), found->value, 0, duration});
+  }
+}
+
+void Engine::updateTweens(double dt) {
+  for (auto it = tweens_.begin(); it != tweens_.end();) {
+    Layer *l = project.layer(it->layerId);
+    if (!l) { it = tweens_.erase(it); continue; }
+    it->elapsed += float(dt);
+    float k = it->duration > 0 ? std::min(1.0f, it->elapsed / it->duration) : 1.0f;
+    k = k * k * (3 - 2 * k); // ease in-out, like the opacity crossfade feels
+    setParam(*l, it->param, it->from + (it->to - it->from) * k);
+    if (it->elapsed >= it->duration) it = tweens_.erase(it);
+    else ++it;
+  }
+}
+
+void Engine::storeState(int index, int layerId, MappingTarget param) {
+  if (index < 0 || index >= int(project.columns.size())) return;
+  const Layer *l = project.layer(layerId);
+  if (!l) return;
+  auto &states = project.columns[size_t(index)].states;
+  for (auto &st : states)
+    if (st.layerId == layerId && st.param == int(param)) { st.value = getParam(*l, param); return; }
+  states.push_back({layerId, int(param), getParam(*l, param)});
+}
+
+float Engine::autoGoRemaining() const {
+  if (activeColumn_ < 0 || activeColumn_ >= int(project.columns.size()) || autoGoFired_) return -1;
+  const Column &c = project.columns[size_t(activeColumn_)];
+  if (c.autoGo < 0) return -1;
+  float wait = c.autoGo + (c.autoGoAfterTransition && c.transitionType != TransitionType::Cut
+                               ? columnTransition(activeColumn_) : 0.0f);
+  return std::max(0.0f, wait - float(time_ - columnLaunchedAt_));
+}
+
+void Engine::updateAutoGo() {
+  float left = autoGoRemaining();
+  if (left < 0 || left > 0) return;
+  autoGoFired_ = true;
+  const Column &c = project.columns[size_t(activeColumn_)];
+  if (c.autoGoTarget > 0) launchColumn(c.autoGoTarget - 1);
+  else if (activeColumn_ + 1 < int(project.columns.size())) launchColumn(activeColumn_ + 1);
+  else launchColumn(0); // end of the show: an installation loops back to the start
+}
+
+void Engine::updateSchedule() {
+  if (project.schedule.empty()) return;
+  std::time_t now = std::time(nullptr);
+  std::tm lt{};
+#ifdef _WIN32
+  localtime_s(&lt, &now);
+#else
+  localtime_r(&now, &lt);
+#endif
+  int minuteOfWeek = (lt.tm_wday * 24 + lt.tm_hour) * 60 + lt.tm_min;
+  if (minuteOfWeek == lastScheduleMinute_) return;
+  bool first = lastScheduleMinute_ < 0;
+  lastScheduleMinute_ = minuteOfWeek;
+  if (first) return; // do not fire an entry of the minute the program started in
+  for (auto &e : project.schedule) {
+    if (!e.enabled || !(e.days & (1 << lt.tm_wday)) || e.hour != lt.tm_hour || e.minute != lt.tm_min) continue;
+    switch (e.action) {
+    case ScheduleAction::LaunchColumn: launchColumn(e.column - 1); break;
+    case ScheduleAction::Go: go(); break;
+    case ScheduleAction::Stop: stopAll(); break;
+    case ScheduleAction::BlackoutOn: blackout = true; break;
+    case ScheduleAction::BlackoutOff: blackout = false; break;
+    default: break;
+    }
+    oscLog.push_back(std::string("[agenda] ") + scheduleActionName(e.action));
+  }
 }
 
 void Engine::go() {
@@ -198,6 +289,9 @@ void Engine::stopLayer(int layerId, float fade) {
 
 void Engine::stopAll(float fade) {
   for (auto &l : project.layers) stopLayer(l.id, fade);
+  if (activeColumn_ >= 0 && activeColumn_ < int(project.columns.size()) && !project.oscTargets.empty())
+    sendOsc(OscMessage{"/millumin/board/stoppedColumn",
+                       {int32_t(activeColumn_ + 1), project.columns[size_t(activeColumn_)].name}, ""}, true);
   activeColumn_ = -1;
   if (!project.oscTargets.empty()) sendOsc(OscMessage{"/lumen/status/column", {int32_t(0), std::string()}, ""}, true);
 }
@@ -226,6 +320,9 @@ void Engine::update(double dt) {
   osc_.drain(inbox_);
   size_t oscCount = inbox_.size();
   midi_.drain(inbox_);
+  dmxIn_.drain(inbox_);
+  for (auto &m : injected_) inbox_.push_back(std::move(m));
+  injected_.clear();
   for (size_t i = 0; i < inbox_.size(); ++i) {
     const OscMessage &m = inbox_[i];
     bool known = i < oscCount ? handleOsc(m) : true;
@@ -239,7 +336,12 @@ void Engine::update(double dt) {
     midiRescanAt_ = time_ + 3.0;
   }
 
+  updateTweens(dt);
+  updateSchedule();
+  project.resolveSurfaces();
+
   MediaContext ctx = context();
+  std::vector<int> ended;
   for (auto it = states_.begin(); it != states_.end();) {
     LayerState &st = it->second;
     if (st.fade < 1) {
@@ -262,9 +364,24 @@ void Engine::update(double dt) {
     };
     tick(st.current, st.currentTex, incomingOpacity(st));
     tick(st.previous, st.previousTex, outgoingOpacity(st));
+    if (st.current && !st.fadingOut && !st.endHandled && st.endMode != EndMode::Loop &&
+        st.endMode != EndMode::Freeze && st.current->finished()) {
+      st.endHandled = true;
+      ended.push_back(it->first);
+    }
     if (!st.current && !st.previous) it = states_.erase(it);
     else ++it;
   }
+  // Acted upon after the loop: these start transitions (they change states_).
+  bool next = false;
+  for (int id : ended) {
+    auto it = states_.find(id);
+    if (it == states_.end()) continue;
+    if (it->second.endMode == EndMode::Stop) stopLayer(id, columnTransition(activeColumn_));
+    else if (it->second.endMode == EndMode::NextColumn) next = true;
+  }
+  if (next && activeColumn_ + 1 < int(project.columns.size())) launchColumn(activeColumn_ + 1);
+  updateAutoGo();
   cache.pruneLive();
 }
 

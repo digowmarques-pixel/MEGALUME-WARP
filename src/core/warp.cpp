@@ -193,4 +193,13 @@ void Warp::tessellate(int n, float u0, float v0, float u1, float v1,
     }
 }
 
+bool Warp::operator==(const Warp &o) const {
+  if (meshCols != o.meshCols || meshRows != o.meshRows || mesh.size() != o.mesh.size()) return false;
+  for (size_t i = 0; i < 4; ++i)
+    if (corners[i].x != o.corners[i].x || corners[i].y != o.corners[i].y) return false;
+  for (size_t i = 0; i < mesh.size(); ++i)
+    if (mesh[i].x != o.mesh[i].x || mesh[i].y != o.mesh[i].y) return false;
+  return true;
+}
+
 } // namespace lumen

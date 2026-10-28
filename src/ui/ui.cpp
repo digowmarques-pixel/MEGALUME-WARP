@@ -12,6 +12,7 @@
 #include <imgui_internal.h>
 
 #include <algorithm>
+#include <cstring>
 #include <cctype>
 #include <cmath>
 #include <cstdio>
@@ -506,6 +507,11 @@ void Ui::dashboard(App &app) {
     std::snprintf(label, sizeof(label), "%02d  \xe2\x96\xb6  %s", c + 1, colRef.name.c_str()); // ▶
     if (ImGui::Button(label, {cellW - 4, 0})) e.launchColumn(c);
     if (active) ImGui::PopStyleColor();
+    if (colRef.color[0] > 0 || colRef.color[1] > 0 || colRef.color[2] > 0) {
+      ImVec2 a = ImGui::GetItemRectMin(), b = ImGui::GetItemRectMax();
+      ImGui::GetWindowDrawList()->AddRectFilled({a.x, b.y - 3}, {b.x, b.y},
+          ImGui::GetColorU32(ImVec4(colRef.color[0], colRef.color[1], colRef.color[2], 1)));
+    }
     if (!colRef.notes.empty()) ImGui::SetItemTooltip("%s", colRef.notes.c_str());
     // Transition line (click: column window), like Millumin's "no transition ⚙".
     {
@@ -513,6 +519,13 @@ void Ui::dashboard(App &app) {
       char tl[64];
       if (colRef.transitionType == TransitionType::Cut || dur <= 0) std::snprintf(tl, sizeof(tl), "corte");
       else std::snprintf(tl, sizeof(tl), "%s %.1fs", colRef.transitionType == TransitionType::ThroughBlack ? "pelo preto" : "crossfade", dur);
+      // Auto-go: countdown on the live column, wait time on the others.
+      if (colRef.autoGo >= 0) {
+        size_t n = std::strlen(tl);
+        float left = active ? e.autoGoRemaining() : -1;
+        if (left >= 0) std::snprintf(tl + n, sizeof(tl) - n, "  \xe2\x8f\xb1%.1f", left); // ⏱
+        else std::snprintf(tl + n, sizeof(tl) - n, "  \xe2\x8f\xb1%.0fs", colRef.autoGo);
+      }
       ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
       ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
       if (ImGui::SmallButton(tl)) ImGui::OpenPopup("colpop");
@@ -552,6 +565,75 @@ void Ui::dashboard(App &app) {
         ImGui::SameLine();
         ImGui::TextDisabled("(padrão %.2f s)", p.defaultTransition);
       }
+      ImGui::SeparatorText("Auto-GO");
+      {
+        bool on = colRef.autoGo >= 0;
+        if (ImGui::Checkbox("Disparar outra coluna sozinho", &on)) {
+          colRef.autoGo = on ? 10.0f : -1.0f;
+          app.edited();
+        }
+        helpMarker("Para instalações: depois do tempo de espera, dispara a próxima coluna "
+                   "(na última, volta para a primeira) ou uma coluna escolhida.");
+        if (on) {
+          ImGui::SetNextItemWidth(160);
+          if (ImGui::DragFloat("Espera (s)", &colRef.autoGo, 0.1f, 0, 36000, "%.1f s")) app.edited();
+          if (ImGui::Checkbox("Contar depois da transição", &colRef.autoGoAfterTransition)) app.edited();
+          ImGui::SetNextItemWidth(160);
+          if (ImGui::InputInt("Coluna (0 = próxima)", &colRef.autoGoTarget)) {
+            colRef.autoGoTarget = std::clamp(colRef.autoGoTarget, 0, ncols);
+            app.edited();
+          }
+        }
+      }
+      ImGui::SeparatorText("Estados (animar parâmetros)");
+      {
+        helpMarker("Grava o valor atual de parâmetros de uma layer nesta coluna. Ao disparar a "
+                   "coluna, eles vão até esse valor durante a transição. Colunas sem valor "
+                   "herdam o da coluna anterior.");
+        Layer *sl = p.layer(app.sel.layerId);
+        static const MappingTarget recordable[] = {
+            MappingTarget::Opacity,    MappingTarget::PositionX,  MappingTarget::PositionY,
+            MappingTarget::Scale,      MappingTarget::Rotation,   MappingTarget::Brightness,
+            MappingTarget::Contrast,   MappingTarget::Saturation, MappingTarget::Hue,
+            MappingTarget::Volume};
+        if (sl) {
+          ImGui::Text("Layer selecionada: %s", sl->name.c_str());
+          if (ImGui::Button("Gravar opacidade + transformação")) {
+            for (auto t : {MappingTarget::Opacity, MappingTarget::PositionX, MappingTarget::PositionY,
+                           MappingTarget::Scale, MappingTarget::Rotation})
+              e.storeState(c, sl->id, t);
+            app.edited();
+          }
+          ImGui::SameLine();
+          if (ImGui::Button("Gravar...")) ImGui::OpenPopup("statepick");
+          if (ImGui::BeginPopup("statepick")) {
+            for (auto t : recordable)
+              if (ImGui::MenuItem(mappingTargetName(t))) { e.storeState(c, sl->id, t); app.edited(); }
+            ImGui::EndPopup();
+          }
+        } else {
+          ImGui::TextDisabled("Selecione uma layer para gravar estados.");
+        }
+        int removeState = -1;
+        for (size_t si = 0; si < colRef.states.size(); ++si) {
+          ColumnState &cs = colRef.states[si];
+          const Layer *L = p.layer(cs.layerId);
+          ImGui::PushID(int(si));
+          if (ImGui::SmallButton("x")) removeState = int(si);
+          ImGui::SameLine();
+          ImGui::SetNextItemWidth(110);
+          char lbl[128];
+          std::snprintf(lbl, sizeof(lbl), "%s · %s", L ? L->name.c_str() : "?", mappingTargetName(MappingTarget(cs.param)));
+          if (ImGui::DragFloat(lbl, &cs.value, 0.01f)) app.edited();
+          ImGui::PopID();
+        }
+        if (removeState >= 0) {
+          colRef.states.erase(colRef.states.begin() + removeState);
+          app.edited();
+        }
+      }
+      ImGui::SeparatorText("Organizar");
+      if (ImGui::ColorEdit3("Cor", colRef.color, ImGuiColorEditFlags_NoInputs)) app.edited();
       if (ImGui::MenuItem("Mover para a esquerda", nullptr, false, c > 0)) { moveColumn = c; moveDir = -1; }
       if (ImGui::MenuItem("Mover para a direita", nullptr, false, c + 1 < ncols)) { moveColumn = c; moveDir = 1; }
       ImGui::SeparatorText("Ações OSC ao disparar");
@@ -656,7 +738,16 @@ void Ui::dashboard(App &app) {
         ImGui::EndDragDropTarget();
       }
       if (cell && ImGui::BeginPopupContextItem("##cellctx")) {
-        if (ImGui::MenuItem("Loop", nullptr, &cell->loop)) app.edited();
+        ImGui::TextDisabled("No fim da mídia");
+        for (int em = 0; em < int(EndMode::COUNT); ++em) {
+          static const char *names[] = {"Loop", "Congelar no último quadro", "Parar",
+                                        "Disparar a próxima coluna"};
+          if (ImGui::MenuItem(names[em], nullptr, int(cell->endMode) == em)) {
+            cell->setEndMode(EndMode(em));
+            app.edited();
+          }
+        }
+        ImGui::Separator();
         if (ImGui::MenuItem("Limpar célula")) {
           col.cells.erase(l.id);
           cell = nullptr;
@@ -679,11 +770,16 @@ void Ui::dashboard(App &app) {
         dl->PushClipRect(pos, br, true);
         dl->AddText({pos.x + 5, br.y - 18}, IM_COL32(220, 220, 220, 255), m->name.c_str());
         dl->PopClipRect();
-        if (!cell->loop) dl->AddText({br.x - 16, br.y - 18}, IM_COL32(160, 160, 160, 255), "1x");
+        static const char *endMark[] = {"", "1x", "\xe2\x96\xa0", "\xe2\x86\x92"}; // ■ →
+        if (cell->endMode != EndMode::Loop)
+          dl->AddText({br.x - 16, br.y - 18}, IM_COL32(160, 160, 160, 255), endMark[int(cell->endMode)]);
       } else {
         dl->AddText({pos.x + size.x * 0.5f - 4, pos.y + size.y * 0.5f - 8},
                     IM_COL32(70, 70, 75, 255), "+");
       }
+      // ◆: this column stores parameter states of this layer.
+      if (std::any_of(col.states.begin(), col.states.end(), [&](auto &x) { return x.layerId == l.id; }))
+        dl->AddText({pos.x + 4, pos.y + 2}, kAccentU32, "\xe2\x97\x86");
       if (playing) {
         dl->AddRect(pos, br, kPlayingU32, 4, 0, 2.5f);
         double dur = st->current->duration();
@@ -856,6 +952,57 @@ void Ui::layerInspector(App &app) {
       Slice &s = l->slices[size_t(si)];
       ImGui::SeparatorText(s.name.c_str());
       if (inputText("Nome da fatia", s.name)) app.edited();
+      // Surface: a mapping shared with other layers.
+      {
+        Surface *bound = p.surface(s.surfaceId);
+        if (ImGui::BeginCombo("Surface", bound ? bound->name.c_str() : "(mapping próprio)")) {
+          if (ImGui::Selectable("(mapping próprio)", !bound)) { s.surfaceId = -1; app.edited(); }
+          for (auto &sf : p.surfaces) {
+            ImGui::PushID(sf.id);
+            ImGui::ColorButton("##c", ImVec4(sf.color.r, sf.color.g, sf.color.b, 1),
+                               ImGuiColorEditFlags_NoTooltip, {12, 12});
+            ImGui::SameLine();
+            if (ImGui::Selectable(sf.name.c_str(), bound == &sf)) {
+              s.surfaceId = sf.id;
+              p.resolveSurfaces();
+              app.edited();
+            }
+            ImGui::PopID();
+          }
+          ImGui::Separator();
+          if (ImGui::Selectable("+ Nova surface com este mapping")) {
+            s.surfaceId = p.addSurface(s.warp).id;
+            app.edited();
+          }
+          ImGui::EndCombo();
+        }
+        helpMarker("Surface = mapping compartilhado. Várias layers ligadas à mesma surface "
+                   "seguem o mesmo mapping: quando o cenário ou o projetor muda de lugar, "
+                   "ajuste uma vez e todas acompanham.");
+        if (bound) {
+          ImGui::SameLine();
+          if (ImGui::SmallButton("Soltar")) { s.surfaceId = -1; app.edited(); }
+          int users = 0;
+          for (auto &L : p.layers)
+            for (auto &S : L.slices) users += S.surfaceId == bound->id;
+          ImGui::PushID("surf");
+          ImGui::SetNextItemWidth(140);
+          if (inputText("##sname", bound->name)) app.edited();
+          ImGui::SameLine();
+          if (colorEdit("##scol", bound->color)) app.edited();
+          ImGui::SameLine();
+          ImGui::TextDisabled("%d fatia(s)", users);
+          ImGui::SameLine();
+          if (ImGui::SmallButton("Apagar surface")) {
+            int id = bound->id;
+            p.surfaces.erase(std::remove_if(p.surfaces.begin(), p.surfaces.end(),
+                                            [&](auto &x) { return x.id == id; }), p.surfaces.end());
+            p.resolveSurfaces(); // bound slices keep the last mapping
+            app.edited();
+          }
+          ImGui::PopID();
+        }
+      }
       float crop[4] = {s.u0, s.v0, s.u1, s.v1};
       if (ImGui::DragFloat4("Recorte UV", crop, 0.002f, 0, 1)) {
         s.u0 = crop[0]; s.v0 = crop[1]; s.u1 = crop[2]; s.v1 = crop[3];
@@ -971,8 +1118,15 @@ void Ui::cellInspector(App &app) {
   ImGui::Text("Layer: %s", l->name.c_str());
   ImGui::Text("Mídia: %s", m ? m->name.c_str() : "(removida)");
   ImGui::Separator();
-  if (ImGui::Checkbox("Loop", &cell.loop)) app.edited();
-  helpMarker("Sem loop, o vídeo para no último quadro.");
+  {
+    int em = int(cell.endMode);
+    if (ImGui::Combo("No fim", &em, "Loop\0Congelar no último quadro\0Parar\0Disparar a próxima coluna\0")) {
+      cell.setEndMode(EndMode(em));
+      app.edited();
+    }
+    helpMarker("Parar: a mídia some com a transição da coluna. Próxima coluna: o show segue "
+               "sozinho quando o vídeo acaba (auto-follow), bom para instalações.");
+  }
   if (ImGui::DragFloat("Velocidade", &cell.speed, 0.01f, 0, 8, "%.2fx")) app.edited();
   if (ImGui::Button("Disparar")) app.engine.launchCell(c, l->id);
   ImGui::SameLine();
@@ -1323,6 +1477,14 @@ void Ui::blackAndColorControls(App &app, OutputConfig *o) {
                "todos e reduza o ganho do canal que estiver sobrando.");
   }
 
+  ImGui::SeparatorText("Sincronia");
+  if (ImGui::SliderInt("Atraso (quadros)", &o->delayFrames, 0, 8)) app.edited();
+  helpMarker("Projetores de modelos diferentes têm latências diferentes. Atrase os mais rápidos "
+             "até a imagem andar junta na emenda (filme em câmera lenta com o celular para conferir).");
+  if (ImGui::Checkbox("Mostrar controles no projetor (Ctrl+Shift+D)", &app.showOutputControls)) {}
+  helpMarker("Desenha os cantos e a malha da saída selecionada na própria projeção, para ajustar "
+             "olhando a parede.");
+
 }
 
 void Ui::outputMaskControls(App &app, OutputConfig *o, Workspace &ws) {
@@ -1435,6 +1597,37 @@ void Ui::interactionInspector(App &app) {
     ImGui::TextDisabled("MIDI chega como /midi/cc/<canal>/<n>, /midi/note/<canal>/<nota>: use \"Aprender\".");
   }
 
+  ImGui::SeparatorText("Teclado");
+  if (ImGui::Checkbox("Teclas como entrada (/key/<tecla>)", &p.keyboardInput)) app.edited();
+  helpMarker("Cada tecla vira /key/a, /key/1, /key/f1, /key/left... com valor 1 ao apertar e 0 ao "
+             "soltar, também com as janelas de saída em foco. Use num mapeamento: ex. a tecla A "
+             "dispara a coluna 3. Espaço, Esc e B continuam com as funções do programa.");
+
+  ImGui::SeparatorText("DMX de entrada (mesa de luz)");
+  {
+    DmxInputConfig &d = p.dmxInput;
+    bool ch = ImGui::Checkbox("Receber DMX", &d.enabled);
+    int proto = int(d.protocol);
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(110);
+    ch |= ImGui::Combo("##dmxproto", &proto, "Art-Net\0sACN\0");
+    d.protocol = DmxProtocol(proto);
+    ImGui::SetNextItemWidth(90);
+    ch |= ImGui::InputInt("Universo inicial", &d.universe);
+    ImGui::SetNextItemWidth(90);
+    ch |= ImGui::InputInt("Quantidade", &d.count);
+    d.universe = std::clamp(d.universe, 0, 32767);
+    d.count = std::clamp(d.count, 1, 64);
+    if (ch) { e.restartDmxInput(); app.edited(); }
+    if (e.dmxInput().running())
+      ImGui::TextColored({0.4f, 0.9f, 0.5f, 1}, "Recebendo (%d pacotes). Canais chegam como %s/<universo>/<canal> (0-255).",
+                         e.dmxInput().packets(), d.protocol == DmxProtocol::ArtNet ? "/artnet" : "/sacn");
+    else if (!e.dmxInputError().empty())
+      ImGui::TextColored({1, 0.4f, 0.4f, 1}, "Erro: %s", e.dmxInputError().c_str());
+    helpMarker("Uma mesa de luz (grandMA, Chamsys, Hog...) controla o Lumen: ligue um canal à "
+               "opacidade de uma layer, ou dispare colunas com um canal (valor acima de 127).");
+  }
+
   ImGui::SeparatorText("Mapeamentos (sensor → parâmetro)");
   ImGui::TextWrapped("Ligue qualquer mensagem OSC (TouchOSC, TouchDesigner, Arduino, sensores...) "
                      "a um parâmetro. Clique em \"Aprender\" e envie a mensagem.");
@@ -1457,6 +1650,25 @@ void Ui::interactionInspector(App &app) {
       if (inputText("Endereço", m.address)) app.edited();
       helpMarker("Aceita curingas OSC: /sensor/* , /pad/[1-4]");
       if (ImGui::InputInt("Argumento #", &m.argIndex)) { m.argIndex = std::max(0, m.argIndex); app.edited(); }
+      if (ImGui::Button("Calibrar")) { calibrating_ = int(i); calMin_ = 1e30f; calMax_ = -1e30f; }
+      helpMarker("Mexa o sensor ou fader até os extremos: a faixa de entrada é ajustada sozinha. "
+                 "Clique de novo para terminar.");
+      if (calibrating_ == int(i)) {
+        for (auto &msg : e.frameInputs())
+          if (oscMatch(m.address.c_str(), msg.address.c_str()) && size_t(m.argIndex) < msg.args.size()) {
+            float v = msg.number(size_t(m.argIndex));
+            calMin_ = std::min(calMin_, v);
+            calMax_ = std::max(calMax_, v);
+          }
+        ImGui::SameLine();
+        if (calMax_ >= calMin_) ImGui::Text("%.2f .. %.2f", calMin_, calMax_);
+        else ImGui::TextDisabled("aguardando valores...");
+        ImGui::SameLine();
+        if (ImGui::Button("Concluir")) {
+          if (calMax_ > calMin_) { m.inMin = calMin_; m.inMax = calMax_; app.edited(); }
+          calibrating_ = -1;
+        }
+      }
       float in[2] = {m.inMin, m.inMax};
       if (ImGui::DragFloat2("Entrada min/max", in, 0.01f)) { m.inMin = in[0]; m.inMax = in[1]; app.edited(); }
       int t = int(m.target);
@@ -1466,6 +1678,23 @@ void Ui::interactionInspector(App &app) {
         items.push_back('\0');
       }
       if (ImGui::Combo("Alvo", &t, items.c_str())) { m.target = MappingTarget(t); app.edited(); }
+      if (!mappingTargetIsTrigger(m.target)) {
+        int tr = int(m.transformer);
+        if (ImGui::Combo("Transformação", &tr, "Linear (segue a entrada)\0Chave (alto = máx, baixo = mín)\0"
+                                                  "Alternar (cada toque troca mín/máx)\0Acumular (cada toque soma o passo)\0")) {
+          m.transformer = Transformer(tr);
+          app.edited();
+        }
+        if (m.transformer == Transformer::Accumulator && ImGui::DragFloat("Passo", &m.step, 0.01f)) app.edited();
+      }
+      int cols[2] = {m.firstColumn, m.lastColumn};
+      if (ImGui::InputInt2("Só nas colunas (de/até)", cols)) {
+        m.firstColumn = std::max(0, cols[0]);
+        m.lastColumn = std::max(0, cols[1]);
+        app.edited();
+      }
+      helpMarker("0 0 = sempre ativo. Ex.: 3 7 = o sensor só age enquanto uma coluna de 3 a 7 "
+                 "estiver no ar.");
       if (mappingTargetNeedsLayer(m.target)) {
         Layer *l = p.layer(m.layerId);
         if (ImGui::BeginCombo("Layer", l ? l->name.c_str() : "(escolha)")) {
@@ -1500,6 +1729,59 @@ void Ui::interactionInspector(App &app) {
     m.layerId = app.sel.layerId >= 0 ? app.sel.layerId : (p.layers.empty() ? -1 : p.layers.front().id);
     p.mappings.push_back(m);
     app.edited();
+  }
+
+  ImGui::SeparatorText("Agenda (instalações)");
+  {
+    ImGui::TextWrapped("Ações em horários fixos, ex.: liga a coluna 1 às 9:00 e faz blackout às 22:00.");
+    int removeEntry = -1;
+    for (size_t i = 0; i < p.schedule.size(); ++i) {
+      ScheduleEntry &se = p.schedule[i];
+      ImGui::PushID(7000 + int(i));
+      if (ImGui::Checkbox("##en", &se.enabled)) app.edited();
+      ImGui::SameLine();
+      int hm[2] = {se.hour, se.minute};
+      ImGui::SetNextItemWidth(80);
+      if (ImGui::InputInt2("##hm", hm)) {
+        se.hour = std::clamp(hm[0], 0, 23);
+        se.minute = std::clamp(hm[1], 0, 59);
+        app.edited();
+      }
+      ImGui::SameLine();
+      int act = int(se.action);
+      ImGui::SetNextItemWidth(130);
+      if (ImGui::Combo("##act", &act, "Disparar coluna\0GO (próxima)\0Parar tudo\0Blackout liga\0Blackout desliga\0")) {
+        se.action = ScheduleAction(act);
+        app.edited();
+      }
+      if (se.action == ScheduleAction::LaunchColumn) {
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(70);
+        if (ImGui::InputInt("##col", &se.column)) { se.column = std::max(1, se.column); app.edited(); }
+      }
+      ImGui::SameLine();
+      if (ImGui::SmallButton("x")) removeEntry = int(i);
+      static const char *dn[] = {"D", "S", "T", "Q", "Q", "S", "S"};
+      for (int d = 0; d < 7; ++d) {
+        ImGui::PushID(d);
+        bool on = se.days & (1 << d);
+        if (d) ImGui::SameLine();
+        if (ImGui::Checkbox(dn[d], &on)) {
+          se.days = on ? (se.days | (1 << d)) : (se.days & ~(1 << d));
+          app.edited();
+        }
+        ImGui::PopID();
+      }
+      ImGui::PopID();
+    }
+    if (removeEntry >= 0) {
+      p.schedule.erase(p.schedule.begin() + removeEntry);
+      app.edited();
+    }
+    if (ImGui::Button("+ Horário")) {
+      p.schedule.push_back({});
+      app.edited();
+    }
   }
 
   ImGui::SeparatorText("Monitor OSC");
@@ -1720,6 +2002,16 @@ void Ui::projectInspector(App &app) {
   if (colorEdit("Fundo", p.background)) app.edited();
   ImGui::SeparatorText("Show");
   if (ImGui::DragFloat("Fade padrão (s)", &p.defaultTransition, 0.05f, 0, 60)) app.edited();
+
+  ImGui::SeparatorText("Ao abrir o projeto (instalação)");
+  if (ImGui::Checkbox("Abrir as saídas", &p.startOutputs)) app.edited();
+  ImGui::SetNextItemWidth(100);
+  if (ImGui::InputInt("Disparar a coluna (0 = nenhuma)", &p.startColumn)) {
+    p.startColumn = std::max(0, p.startColumn);
+    app.edited();
+  }
+  helpMarker("Para uma instalação que liga sozinha: coloque um atalho do Lumen com o projeto "
+             "(Lumen.exe show.lumen) na pasta Inicializar do Windows (Win+R, shell:startup).");
 
   ImGui::SeparatorText("Áudio");
   Engine &e = app.engine;

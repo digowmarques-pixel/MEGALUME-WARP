@@ -15,6 +15,7 @@ static void usage() {
       "  --launch N              dispara a coluna N ao abrir\n"
       "  --outputs               abre as janelas de saída ao iniciar (instalações)\n"
       "  --no-outputs            nunca abre as janelas de saída\n"
+      "  --output-controls       desenha os cantos/malha da 1a saída no projetor\n"
       "  --size LxA              tamanho da janela de controle\n"
       "  --frames N              sai depois de N quadros (testes)\n"
       "  --screenshot-canvas F   salva o canvas em F (.ppm) no último quadro\n"
@@ -45,6 +46,7 @@ int main(int argc, char **argv) {
     else if (a == "--launch") opts.launchColumn = std::atoi(next().c_str());
     else if (a == "--no-outputs") opts.noOutputs = true;
     else if (a == "--outputs") opts.openOutputs = true;
+    else if (a == "--output-controls") opts.outputControls = true;
     else if (a == "--frames") opts.frames = std::atoi(next().c_str());
     else if (a == "--screenshot-canvas") opts.screenshotCanvas = next();
     else if (a == "--screenshot-ui") opts.screenshotUi = next();

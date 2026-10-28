@@ -3,6 +3,7 @@
 // main thread except decoding, the audio callback and the input sockets.
 #pragma once
 
+#include "control/dmxin.h"
 #include "control/midi.h"
 #include "control/osc.h"
 #include "core/project.h"
@@ -25,12 +26,24 @@ struct LayerState {
   bool fadingOut = false;  // current is being stopped
   TransitionType type = TransitionType::Crossfade;
   int columnId = -1;       // column the current content came from
+  EndMode endMode = EndMode::Loop;
+  bool endHandled = false; // the end of the current media was acted upon
   const Texture *currentTex = nullptr, *previousTex = nullptr;
 };
 
 struct MappingState {
   float target = 0, value = 0;
   bool hasValue = false, active = false, triggered = false;
+  bool toggled = false; // Toggle transformer state
+  float accum = 0;      // Accumulator transformer value
+  bool accumInit = false;
+};
+
+// A layer parameter moving to the value stored in a column (column states).
+struct ParamTween {
+  int layerId = -1;
+  MappingTarget param = MappingTarget::Opacity;
+  float from = 0, to = 0, elapsed = 0, duration = 0;
 };
 
 class Engine {
@@ -83,9 +96,25 @@ public:
   int learnMapping = -1;          // index of a mapping waiting for an incoming address
   bool handleOsc(const OscMessage &m);
   void setParam(Layer &l, MappingTarget t, float v);
+  float getParam(const Layer &l, MappingTarget t) const;
+  // Records the current value of `param` of a layer in column `index`.
+  void storeState(int index, int layerId, MappingTarget param);
+  // Messages from the keyboard and other local inputs, handled like OSC.
+  void injectInput(OscMessage m) { injected_.push_back(std::move(m)); }
+  int selectedLayerId = -1; // for /selectedLayer/... (set by the UI)
+  // Requests for the application (outputs live in the App): -1 none.
+  int requestOutputs = -1;  // 0 close, 1 open
+  // DMX input (Art-Net / sACN receive).
+  void restartDmxInput();
+  const DmxReceiver &dmxInput() const { return dmxIn_; }
+  const std::string &dmxInputError() const { return dmxInError_; }
+  // Seconds until auto-go fires (<0: none pending).
+  float autoGoRemaining() const;
   // Sends to every enabled OSC output target.
   void sendOsc(const OscMessage &m, bool feedbackOnly = false);
   int oscSent() const { return oscSent_; }
+  // Every input message of the last update (OSC, MIDI, keys, DMX).
+  const std::vector<OscMessage> &frameInputs() const { return inbox_; }
 
   // LED pixel mapping (Art-Net / sACN).
   LedEngine leds;
@@ -102,11 +131,26 @@ private:
   Layer *findLayer(const std::string &key);
   MediaContext context();
   void runColumnActions(const Column &c, int index);
+  void applyColumnStates(int index, float duration);
+  void updateTweens(double dt);
+  void updateAutoGo();
+  void updateSchedule();
+  void handleMediaEnd(int layerId, LayerState &st);
+  bool handleMillumin(const std::vector<std::string> &path, const OscMessage &m);
+  bool setLayerProperty(Layer &l, const std::vector<std::string> &prop, const OscMessage &m);
 
   Compositor compositor_;
   std::map<int, LayerState> states_;
   std::vector<MappingState> mappingStates_;
   int activeColumn_ = -1;
+  double columnLaunchedAt_ = 0;
+  bool autoGoFired_ = false;
+  std::vector<ParamTween> tweens_;
+  std::vector<OscMessage> injected_;
+  DmxReceiver dmxIn_;
+  DmxInputConfig dmxInConfig_;
+  std::string dmxInError_;
+  int lastScheduleMinute_ = -1;
   double time_ = 0;
   uint64_t frame_ = 0;
   OscServer osc_;

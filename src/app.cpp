@@ -226,6 +226,39 @@ bool App::writePpm(const std::string &path, int w, int h, const std::vector<unsi
   return bool(f);
 }
 
+// Keys become /key/<name> inputs (1 = pressed, 0 = released) for the
+// mappings, from the control window and from the output windows.
+void App::pollKeyboard(bool mainWindowKeys) {
+  struct KeyName { int key; const char *name; };
+  static std::vector<KeyName> keys = [] {
+    std::vector<KeyName> k = {
+        {GLFW_KEY_SPACE, "space"},     {GLFW_KEY_ENTER, "enter"},   {GLFW_KEY_ESCAPE, "escape"},
+        {GLFW_KEY_TAB, "tab"},         {GLFW_KEY_BACKSPACE, "backspace"},
+        {GLFW_KEY_LEFT, "left"},       {GLFW_KEY_RIGHT, "right"},   {GLFW_KEY_UP, "up"},
+        {GLFW_KEY_DOWN, "down"},       {GLFW_KEY_PAGE_UP, "pageup"}, {GLFW_KEY_PAGE_DOWN, "pagedown"},
+        {GLFW_KEY_HOME, "home"},       {GLFW_KEY_END, "end"}};
+    static char letters[26][2], digits[10][2], fkeys[12][4], pad[10][5];
+    for (int i = 0; i < 26; ++i) { letters[i][0] = char('a' + i); k.push_back({GLFW_KEY_A + i, letters[i]}); }
+    for (int i = 0; i < 10; ++i) { digits[i][0] = char('0' + i); k.push_back({GLFW_KEY_0 + i, digits[i]}); }
+    for (int i = 0; i < 12; ++i) { std::snprintf(fkeys[i], 4, "f%d", i + 1); k.push_back({GLFW_KEY_F1 + i, fkeys[i]}); }
+    for (int i = 0; i < 10; ++i) { std::snprintf(pad[i], 5, "kp%d", i); k.push_back({GLFW_KEY_KP_0 + i, pad[i]}); }
+    return k;
+  }();
+  keyDown_.resize(keys.size(), false);
+  std::vector<GLFWwindow *> wins = outputs.handles();
+  if (mainWindowKeys) wins.push_back(window);
+  bool ctrl = glfwGetKey(window, GLFW_KEY_LEFT_CONTROL) == GLFW_PRESS ||
+              glfwGetKey(window, GLFW_KEY_RIGHT_CONTROL) == GLFW_PRESS;
+  for (size_t i = 0; i < keys.size(); ++i) {
+    bool down = false;
+    if (!ctrl) // Ctrl+key are the program's shortcuts
+      for (GLFWwindow *w : wins) down = down || glfwGetKey(w, keys[i].key) == GLFW_PRESS;
+    if (down == keyDown_[i]) continue;
+    keyDown_[i] = down;
+    engine.injectInput(OscMessage{std::string("/key/") + keys[i].name, {int32_t(down ? 1 : 0)}, "teclado"});
+  }
+}
+
 int App::run(const Options &opts) {
   std::printf("Lumen %s iniciando\n", LUMEN_VERSION);
   glfwSetErrorCallback(onGlfwError);
@@ -292,8 +325,14 @@ int App::run(const Options &opts) {
     if (opts.pattern >= 0 && opts.pattern < int(TestPattern::COUNT)) o.pattern = TestPattern(opts.pattern);
     if (opts.blackLevel >= 0) o.blackLevel = {opts.blackLevel, opts.blackLevel, opts.blackLevel, 1};
   }
+  // Installation start-up (project settings), then the command line.
+  outputsOpen = opts.openOutputs || engine.project.startOutputs;
+  if (opts.outputControls && !engine.project.outputs.empty()) {
+    showOutputControls = true;
+    sel.outputId = engine.project.outputs.front().id;
+  }
   if (opts.launchColumn > 0) engine.launchColumn(opts.launchColumn - 1);
-  outputsOpen = opts.openOutputs;
+  else if (engine.project.startColumn > 0) engine.launchColumn(engine.project.startColumn - 1);
 
   double last = glfwGetTime(), fpsTimer = last;
   int frame = 0, fpsFrames = 0;
@@ -326,7 +365,16 @@ int App::run(const Options &opts) {
       if (frame < 3) std::printf("[frame %d] %s\n", frame, what);
     };
     step("update");
+    engine.selectedLayerId = sel.layerId;
     engine.update(dt);
+    if (engine.selectedLayerId != sel.layerId && engine.project.layer(engine.selectedLayerId)) {
+      sel.layerId = engine.selectedLayerId; // /action/selectLayer
+      sel.slice = 0;
+    }
+    if (engine.requestOutputs >= 0) {
+      outputsOpen = engine.requestOutputs == 1;
+      engine.requestOutputs = -1;
+    }
     step("render");
     engine.render();
     step("ui");
@@ -348,12 +396,16 @@ int App::run(const Options &opts) {
       if (ctrl && ImGui::IsKeyPressed(ImGuiKey_I, false)) importDialog();
       if (ctrl && !shift && ImGui::IsKeyPressed(ImGuiKey_P, false)) outputsOpen = !outputsOpen;
       if (ctrl && shift && ImGui::IsKeyPressed(ImGuiKey_P, false)) ui_->openOutputs();
+      if (ctrl && shift && ImGui::IsKeyPressed(ImGuiKey_D, false)) showOutputControls = !showOutputControls;
       if (ctrl && ImGui::IsKeyPressed(ImGuiKey_Z)) shift ? redo() : undo();
       if (ctrl && ImGui::IsKeyPressed(ImGuiKey_Y)) redo();
       ui_->workspace.handleShortcuts(*this);
     }
+    if (engine.project.keyboardInput) pollKeyboard(!io.WantTextInput);
 
     ui_->draw(*this);
+    // Editing a slice bound to a surface edits the surface (and its other layers).
+    engine.project.pushSurfaceEdits();
 
     if (g_closeRequested) {
       g_closeRequested = false;
@@ -391,6 +443,11 @@ int App::run(const Options &opts) {
     if (lastFrame) {
       // Summary for automated tests.
       std::printf("[test] audio device: %s\n", engine.audio.deviceName().c_str());
+      std::printf("[test] column=%d\n", engine.activeColumn() + 1);
+      for (auto &l : engine.project.layers)
+        std::printf("[test] layer %s: opacity=%.3f scale=%.3f x=%.1f contrast=%.3f playing=%d\n", l.name.c_str(), l.opacity,
+                    l.transform.scale, l.transform.position.x, l.fx.contrast,
+                    engine.layerState(l.id) && engine.layerState(l.id)->current ? 1 : 0);
       for (auto &l : engine.project.layers)
         if (const LayerState *st = engine.layerState(l.id); st && st->current)
           std::printf("[test] layer %s: t=%.3f audio=%d hw=%s\n", l.name.c_str(), st->current->time(),
@@ -433,7 +490,13 @@ int App::run(const Options &opts) {
       step("outputs sync");
       outputs.sync(engine.project);
       step("outputs render");
-      outputs.render(engine.project, engine.canvas().texture(), engine.time(), engine.blackout);
+      OutputControls ctl;
+      if (showOutputControls) {
+        ctl.outputId = sel.outputId >= 0 ? sel.outputId : ui_->editedOutput();
+        ctl.corner = sel.corner;
+        ctl.meshPoint = sel.meshPoint;
+      }
+      outputs.render(engine.project, engine.canvas().texture(), engine.time(), engine.blackout, &ctl);
     } else if (outputs.openCount() > 0) {
       outputs.shutdown(); // closed by the user
     }

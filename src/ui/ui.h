@@ -45,6 +45,8 @@ class Ui {
 public:
   void setup();
   void openOutputs() { showOutputs_ = true; outputsPage_ = 0; }
+  // Output shown in the mapping page of the Outputs window (-1: none).
+  int editedOutput() const { return showOutputs_ && outputsPage_ == 1 ? outputsSel_ : -1; }
   void draw(App &app);
   Workspace workspace;
 
@@ -74,6 +76,8 @@ private:
   int outputsSel_ = -1;   // output id shown in the mapping page
   int mappingTab_ = 0;    // slice, mapping, masks, colour
   Workspace outputsWs_;   // workspace embedded in the mapping page
+  int calibrating_ = -1; // mapping whose input range is being learnt
+  float calMin_ = 0, calMax_ = 0;
   int dashZoom_ = 1;      // 0 small, 1 medium, 2 large cells
   bool showDemo_ = false;
   bool showHelp_ = false;

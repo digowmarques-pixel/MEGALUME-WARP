@@ -22,6 +22,12 @@ struct MonitorInfo {
   int refresh = 60;
 };
 
+// Calibration overlay drawn on the real projector ("show controls in output").
+struct OutputControls {
+  int outputId = -1;
+  int corner = -1, meshPoint = -1; // selected handle
+};
+
 class OutputManager {
 public:
   bool init(GLFWwindow *mainWindow);
@@ -30,7 +36,8 @@ public:
   // Opens / closes / moves windows so they match the project.
   void sync(Project &p);
   // Draws every output from the canvas texture. Restores the main context.
-  void render(const Project &p, const Texture &canvas, double time, bool blackout);
+  void render(const Project &p, const Texture &canvas, double time, bool blackout,
+              const OutputControls *controls = nullptr);
   // Draws an output into a framebuffer of the main context (workspace preview).
   void renderPreview(const Project &p, const OutputConfig &o, int outputIndex,
                      const Texture &canvas, Framebuffer &target, DynamicMesh &mesh,
@@ -39,6 +46,7 @@ public:
   static std::vector<MonitorInfo> monitors();
   int openCount() const { return int(windows_.size()); }
   bool windowFor(int outputId) const;
+  std::vector<GLFWwindow *> handles() const;
   // Shows the numbered test card on every output for a few seconds.
   void identify(double seconds = 4.0);
   bool identifying() const;
@@ -54,13 +62,19 @@ private:
     std::string title;
   };
   void destroy(Window &w);
+  void drawControls(const OutputConfig &o, const OutputControls &c, DynamicMesh &mesh, int w, int h);
+  // Canvas history for outputs with a frame delay (main-context framebuffers).
+  const Texture &delayedCanvas(const Texture &canvas, int delay);
+  void pushHistory(const Project &p, const Texture &canvas);
   void draw(const Project &p, const OutputConfig &o, int index, const Texture &canvas,
             const Texture *mask, DynamicMesh &mesh, int w, int h, double time, bool blackout);
   void updateSwapIntervals();
   const Texture *outputMask(const OutputConfig &o, int w, int h, bool preview, DynamicMesh &mesh);
 
   GLFWwindow *main_ = nullptr;
-  Shader shader_;
+  Shader shader_, solid_, copy_;
+  std::vector<std::unique_ptr<Framebuffer>> history_;
+  int historyHead_ = -1, historyCount_ = 0;
   std::vector<std::unique_ptr<Window>> windows_;
   bool swapDirty_ = true;
   MaskRenderer masks_;

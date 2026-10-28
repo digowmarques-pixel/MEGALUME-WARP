@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(Lumen VERSION 0.5.0 LANGUAGES C CXX)
+project(Lumen VERSION 0.6.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -107,6 +107,7 @@ add_executable(lumen
   src/engine/compositor.cpp
   src/engine/outputs.cpp
   src/control/osc.cpp
+  src/control/dmxin.cpp
   src/control/mapping.cpp
   src/ui/ui.cpp
   src/ui/workspace.cpp

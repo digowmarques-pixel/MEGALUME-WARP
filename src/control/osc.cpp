@@ -1,6 +1,7 @@
 #include "control/osc.h"
 
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 
 #ifdef _WIN32
@@ -273,6 +274,37 @@ bool oscMatch(const char *pattern, const char *address) {
   return *pattern == 0 && *address == 0;
 }
 
+// Splits `/addr 1 2.5 "some text" word` into an OSC message.
+bool parseOscText(const std::string &line, OscMessage &m) {
+  std::vector<std::string> tokens;
+  std::string cur;
+  bool quoted = false, any = false;
+  for (char c : line) {
+    if (c == '"') { quoted = !quoted; any = true; continue; }
+    if (!quoted && (c == ' ' || c == '\t')) {
+      if (!cur.empty() || any) tokens.push_back(cur);
+      cur.clear();
+      any = false;
+      continue;
+    }
+    cur += c;
+  }
+  if (!cur.empty() || any) tokens.push_back(cur);
+  if (tokens.empty() || tokens[0].empty() || tokens[0][0] != '/') return false;
+  m.address = tokens[0];
+  m.args.clear();
+  for (size_t i = 1; i < tokens.size(); ++i) {
+    const std::string &t = tokens[i];
+    char *end = nullptr;
+    long iv = std::strtol(t.c_str(), &end, 10);
+    if (!t.empty() && *end == 0) { m.args.emplace_back(int32_t(iv)); continue; }
+    float fv = std::strtof(t.c_str(), &end);
+    if (!t.empty() && *end == 0) { m.args.emplace_back(fv); continue; }
+    m.args.emplace_back(t);
+  }
+  return true;
+}
+
 OscServer::~OscServer() { stop(); }
 
 bool OscServer::start(int port, std::string *error) {
@@ -330,7 +362,22 @@ void OscServer::run() {
                          reinterpret_cast<sockaddr *>(&from), &fromLen));
     if (n <= 0) continue;
     std::vector<OscMessage> msgs;
-    if (!parseOsc(buf.data(), size_t(n), msgs)) continue;
+    if (!parseOsc(buf.data(), size_t(n), msgs)) {
+      // Plain text is accepted too, one message per line:
+      //   echo "/lumen/go" | nc -u 127.0.0.1 8000
+      msgs.clear();
+      std::string text(reinterpret_cast<const char *>(buf.data()), size_t(n)), line;
+      for (size_t i = 0; i <= text.size(); ++i) {
+        if (i == text.size() || text[i] == '\n' || text[i] == '\r' || text[i] == 0) {
+          OscMessage m;
+          if (parseOscText(line, m)) msgs.push_back(m);
+          line.clear();
+        } else {
+          line += text[i];
+        }
+      }
+      if (msgs.empty()) continue;
+    }
     char ip[INET_ADDRSTRLEN] = {};
     inet_ntop(AF_INET, &from.sin_addr, ip, sizeof(ip));
     std::string sender = std::string(ip) + ":" + std::to_string(ntohs(from.sin_port));

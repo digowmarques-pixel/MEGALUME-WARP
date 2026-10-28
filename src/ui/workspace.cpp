@@ -200,6 +200,17 @@ void Workspace::drawCanvasOverlay(App &app, ImDrawList *dl, ImVec2 origin, float
     }
   }
 
+  // Surfaces (shared mappings) in their colour, with their name.
+  for (auto &sf : p.surfaces) {
+    auto pts = warpOutline(sf.warp);
+    std::vector<ImVec2> sp;
+    for (auto &v : pts) sp.push_back(toScreen(v));
+    ImU32 col = ImGui::GetColorU32(ImVec4(sf.color.r, sf.color.g, sf.color.b, 0.55f));
+    dl->AddPolyline(sp.data(), int(sp.size()), col, ImDrawFlags_Closed, 1.5f);
+    ImVec2 c = toScreen(sf.warp.center());
+    dl->AddText({c.x - ImGui::CalcTextSize(sf.name.c_str()).x * 0.5f, c.y - 7}, col, sf.name.c_str());
+  }
+
   // ---- end of drag
   if (dragging_ && !ImGui::IsMouseDown(ImGuiMouseButton_Left)) dragging_ = false;
 

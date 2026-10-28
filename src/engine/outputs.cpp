@@ -127,6 +127,20 @@ void main() {
 }
 )";
 
+static const char *kSolidFS = R"(#version 330 core
+in vec2 vUV;
+out vec4 fragColor;
+uniform vec4 uColor;
+void main() { fragColor = uColor; }
+)";
+
+static const char *kCopyFS = R"(#version 330 core
+in vec2 vUV;
+out vec4 fragColor;
+uniform sampler2D uTex;
+void main() { fragColor = texture(uTex, vUV); }
+)";
+
 std::vector<MonitorInfo> OutputManager::monitors() {
   std::vector<MonitorInfo> out;
   int count = 0;
@@ -160,7 +174,8 @@ static void dwmFlush() {
 
 bool OutputManager::init(GLFWwindow *mainWindow) {
   main_ = mainWindow;
-  return shader_.build(kPixelVertexShader, kOutputFS) && masks_.init();
+  return shader_.build(kPixelVertexShader, kOutputFS) && solid_.build(kPixelVertexShader, kSolidFS) &&
+         copy_.build(kPixelVertexShader, kCopyFS) && masks_.init();
 }
 
 void OutputManager::identify(double seconds) { identifyUntil_ = glfwGetTime() + seconds; }
@@ -180,11 +195,102 @@ void OutputManager::destroy(Window &w) {
 void OutputManager::shutdown() {
   for (auto &w : windows_) destroy(*w);
   windows_.clear();
+  history_.clear();
+  historyHead_ = -1;
+  historyCount_ = 0;
+}
+
+void OutputManager::pushHistory(const Project &p, const Texture &canvas) {
+  int maxDelay = 0;
+  for (auto &o : p.outputs)
+    if (o.enabled) maxDelay = std::max(maxDelay, std::clamp(o.delayFrames, 0, 8));
+  if (maxDelay == 0) {
+    history_.clear();
+    historyHead_ = -1;
+    historyCount_ = 0;
+    return;
+  }
+  size_t n = size_t(maxDelay) + 1;
+  while (history_.size() < n) history_.push_back(std::make_unique<Framebuffer>());
+  historyHead_ = (historyHead_ + 1) % int(history_.size());
+  Framebuffer &fb = *history_[size_t(historyHead_)];
+  if (fb.width() != canvas.width() || fb.height() != canvas.height()) fb.resize(canvas.width(), canvas.height());
+  fb.bind();
+  glViewport(0, 0, fb.width(), fb.height());
+  glDisable(GL_BLEND);
+  copy_.use();
+  copy_.set("uTarget", float(fb.width()), float(fb.height()));
+  copy_.set("uTex", 0);
+  canvas.bind(0);
+  // Same orientation as the canvas (bottom-up).
+  mainMesh_.drawQuad(0, 0, float(fb.width()), float(fb.height()), 0, 1, 1, 0);
+  Framebuffer::unbind();
+  historyCount_ = std::min(historyCount_ + 1, int(history_.size()));
+}
+
+const Texture &OutputManager::delayedCanvas(const Texture &canvas, int delay) {
+  if (delay <= 0 || history_.empty() || historyHead_ < 0) return canvas;
+  delay = std::min(delay, historyCount_ - 1);
+  int n = int(history_.size());
+  return history_[size_t(((historyHead_ - delay) % n + n) % n)]->texture();
+}
+
+void OutputManager::drawControls(const OutputConfig &o, const OutputControls &c, DynamicMesh &mesh,
+                                 int w, int h) {
+  glEnable(GL_BLEND);
+  glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+  solid_.use();
+  solid_.set("uTarget", float(w), float(h));
+  Warp warp = o.warp;
+  for (auto &v : warp.corners) v = {v.x * float(w), v.y * float(h)};
+  std::vector<float> v;
+  auto line = [&](Vec2 a, Vec2 b, float t) {
+    float dx = b.x - a.x, dy = b.y - a.y, len = std::sqrt(dx * dx + dy * dy);
+    if (len < 1e-3f) return;
+    float nx = -dy / len * t * 0.5f, ny = dx / len * t * 0.5f;
+    float q[] = {a.x + nx, a.y + ny, b.x + nx, b.y + ny, b.x - nx, b.y - ny, a.x - nx, a.y - ny};
+    int idx[] = {0, 1, 2, 0, 2, 3};
+    for (int i : idx) v.insert(v.end(), {q[i * 2], q[i * 2 + 1], 0, 0});
+  };
+  auto box = [&](Vec2 p, float r, float t) {
+    line({p.x - r, p.y - r}, {p.x + r, p.y - r}, t);
+    line({p.x + r, p.y - r}, {p.x + r, p.y + r}, t);
+    line({p.x + r, p.y + r}, {p.x - r, p.y + r}, t);
+    line({p.x - r, p.y + r}, {p.x - r, p.y - r}, t);
+  };
+  auto flush = [&](float r, float g, float b, float a) {
+    if (v.empty()) return;
+    solid_.set("uColor", r, g, b, a);
+    mesh.draw(v);
+    v.clear();
+  };
+  // Mesh lines (the grid as it lands on the wall).
+  int cols = warp.meshCols, rows = warp.meshRows;
+  for (int r = 0; r < rows; ++r)
+    for (int cc = 0; cc + 1 < cols; ++cc) line(warp.meshPointDest(cc, r), warp.meshPointDest(cc + 1, r), 2);
+  for (int cc = 0; cc < cols; ++cc)
+    for (int r = 0; r + 1 < rows; ++r) line(warp.meshPointDest(cc, r), warp.meshPointDest(cc, r + 1), 2);
+  flush(0.98f, 0.62f, 0.18f, 0.8f);
+  for (int i = 0; i < cols * rows; ++i)
+    if (warp.hasMesh()) box(warp.meshPointDest(i % cols, i / cols), 5, 2);
+  for (auto &cn : warp.corners) box(cn, 14, 3);
+  flush(1, 1, 1, 0.9f);
+  // Selected handle.
+  if (c.corner >= 0 && c.corner < 4) box(warp.corners[size_t(c.corner)], 20, 5);
+  else if (c.meshPoint >= 0 && c.meshPoint < cols * rows) box(warp.meshPointDest(c.meshPoint % cols, c.meshPoint / cols), 10, 4);
+  flush(0.98f, 0.62f, 0.18f, 1);
+  glDisable(GL_BLEND);
 }
 
 bool OutputManager::windowFor(int outputId) const {
   return std::any_of(windows_.begin(), windows_.end(),
                      [&](auto &w) { return w->outputId == outputId; });
+}
+
+std::vector<GLFWwindow *> OutputManager::handles() const {
+  std::vector<GLFWwindow *> out;
+  for (auto &w : windows_) out.push_back(w->handle);
+  return out;
 }
 
 void OutputManager::sync(Project &p) {
@@ -342,9 +448,11 @@ void OutputManager::draw(const Project &p, const OutputConfig &o, int index,
   mesh.draw(verts);
 }
 
-void OutputManager::render(const Project &p, const Texture &canvas, double time, bool blackout) {
+void OutputManager::render(const Project &p, const Texture &canvas, double time, bool blackout,
+                           const OutputControls *controls) {
   if (windows_.empty()) return;
   if (swapDirty_) updateSwapIntervals();
+  pushHistory(p, canvas);
 
   // The canvas was drawn in the main context: make sure it is complete before
   // other contexts sample it.
@@ -372,7 +480,10 @@ void OutputManager::render(const Project &p, const Texture &canvas, double time,
     glWaitSync(fence, 0, GL_TIMEOUT_IGNORED);
     int fw, fh;
     glfwGetFramebufferSize(w->handle, &fw, &fh);
-    if (fw > 0 && fh > 0) draw(p, *o, index, canvas, masks[k], *w->mesh, fw, fh, time, blackout);
+    if (fw > 0 && fh > 0) {
+      draw(p, *o, index, delayedCanvas(canvas, o->delayFrames), masks[k], *w->mesh, fw, fh, time, blackout);
+      if (controls && controls->outputId == o->id) drawControls(*o, *controls, *w->mesh, fw, fh);
+    }
   }
   for (auto &w : windows_) glfwSwapBuffers(w->handle);
 #ifdef _WIN32

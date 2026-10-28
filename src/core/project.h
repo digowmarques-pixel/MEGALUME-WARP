@@ -46,8 +46,18 @@ const char *blendName(BlendMode b);
 struct Slice {
   std::string name = "Slice";
   float u0 = 0, v0 = 0, u1 = 1, v1 = 1;
-  Warp warp; // canvas pixels
+  Warp warp; // canvas pixels (a copy of the surface's warp when bound)
   bool enabled = true;
+  int surfaceId = -1; // bound to a shared Surface: follows its mapping
+};
+
+// A named mapping shared by several layers ("surfaces" in Millumin): when the
+// set or a projector moves, adjusting the surface moves every layer bound to it.
+struct Surface {
+  int id = 0;
+  std::string name = "Surface";
+  Color color{0.98f, 0.62f, 0.18f, 1};
+  Warp warp; // canvas pixels
 };
 
 struct Mask {
@@ -87,10 +97,31 @@ struct Layer {
   std::vector<Mask> masks;
 };
 
+// What a media does when it reaches its end. Values are stored: only append.
+enum class EndMode {
+  Loop,       // starts again
+  Freeze,     // holds the last frame
+  Stop,       // disappears (fades out with the column transition)
+  NextColumn, // launches the next column (auto-follow)
+  COUNT
+};
+const char *endModeName(EndMode m);
+
 struct Cell {
   int mediaId = -1;
-  bool loop = true;
+  bool loop = true; // kept in sync with endMode == Loop
+  EndMode endMode = EndMode::Loop;
   float speed = 1;
+  void setEndMode(EndMode m) { endMode = m; loop = m == EndMode::Loop; }
+};
+
+// Value of a layer parameter recorded in a column ("states" in Millumin): on
+// launch, the parameter moves to it during the column transition. Columns
+// without a value inherit from the previous columns.
+struct ColumnState {
+  int layerId = -1;
+  int param = 0; // MappingTarget (continuous layer parameter)
+  float value = 0;
 };
 
 // Values are stored in project files: only append.
@@ -106,6 +137,13 @@ struct Column {
   // OSC messages sent to every OSC output target when the column is launched,
   // one per line: "/address arg1 arg2" (numbers or "quoted strings").
   std::vector<std::string> oscActions;
+  std::vector<ColumnState> states;
+  // Auto-go: after `autoGo` seconds (counted from the launch, or from the end
+  // of the transition) launch another column. <0 = off.
+  float autoGo = -1;
+  bool autoGoAfterTransition = false;
+  int autoGoTarget = 0; // 0 = next column, n = column n (1-based)
+  float color[3] = {0, 0, 0}; // 0,0,0 = default
 };
 
 struct OscTarget {
@@ -149,6 +187,7 @@ struct OutputConfig {
   // the brighter black inside them.
   Color blackLevel{0, 0, 0, 1};
   std::vector<Mask> masks;        // output space: points in 0..1, feather in output px
+  int delayFrames = 0;            // compensates projectors with different latency
 };
 
 // An Art-Net node or sACN receiver (LED controller such as DMXking LeDMX4 Pro,
@@ -199,7 +238,19 @@ inline bool mappingTargetIsTrigger(MappingTarget t) {
          t == MappingTarget::StopAll || t == MappingTarget::Blackout;
 }
 
-// Maps an incoming OSC value onto a parameter (like "MIDI learn").
+// How an input value becomes the output value. Values are stored: only append.
+enum class Transformer {
+  Linear,      // output follows the input inside the range
+  Switch,      // output is max while the input is high, min otherwise
+  Toggle,      // each press flips the output between min and max
+  Accumulator, // each press adds `step`; wraps back to min after max
+  COUNT
+};
+const char *transformerName(Transformer t);
+
+// Maps an incoming OSC value onto a parameter (like "MIDI learn"). Inputs are
+// addressed as OSC: MIDI (/midi/...), keyboard (/key/...), DMX (/artnet/...,
+// /sacn/...) and plain OSC.
 struct InputMapping {
   bool enabled = true;
   std::string address = "/sensor/1";
@@ -209,6 +260,32 @@ struct InputMapping {
   int layerId = -1;
   float outMin = 0, outMax = 1; // for LaunchColumn: outMin = column number (1-based)
   float smoothing = 0;          // 0 = immediate, 0.99 = very slow
+  Transformer transformer = Transformer::Linear;
+  float step = 0.1f;            // accumulator increment (output units)
+  // Only active while the launched column is in this range (1-based, 0 = no limit).
+  int firstColumn = 0, lastColumn = 0;
+};
+
+// Values are stored: only append.
+enum class ScheduleAction { LaunchColumn, Go, Stop, BlackoutOn, BlackoutOff, COUNT };
+const char *scheduleActionName(ScheduleAction a);
+
+// Unattended installations: actions at a time of day on selected weekdays.
+struct ScheduleEntry {
+  bool enabled = true;
+  int hour = 9, minute = 0;
+  int days = 0x7F; // bit 0 = Sunday ... bit 6 = Saturday
+  ScheduleAction action = ScheduleAction::LaunchColumn;
+  int column = 1; // 1-based, for LaunchColumn
+};
+
+// Art-Net / sACN receiver: incoming channels become /artnet/<u>/<ch> or
+// /sacn/<u>/<ch> inputs (value 0..255) for the mappings.
+struct DmxInputConfig {
+  bool enabled = false;
+  DmxProtocol protocol = DmxProtocol::ArtNet;
+  int universe = 0;  // first universe (Art-Net from 0, sACN from 1)
+  int count = 1;     // number of universes
 };
 
 struct Project {
@@ -229,6 +306,13 @@ struct Project {
   // Output layout of the Outputs window (projector grid). Applied with
   // applyBlendLayout; kept so the window shows the current layout.
   BlendLayoutParams outputLayout{1, 1, 1920, 1080, 0, 0, {}, {}};
+  std::vector<ScheduleEntry> schedule;
+  DmxInputConfig dmxInput;
+  bool keyboardInput = true; // keys become /key/<name> inputs
+  // Installation start-up: open the outputs and launch a column when the
+  // project is opened (0 = none).
+  bool startOutputs = false;
+  int startColumn = 0;
   int nextId = 1;
 
   std::vector<MediaItem> library;
@@ -238,6 +322,7 @@ struct Project {
   std::vector<InputMapping> mappings;
   std::vector<DmxDevice> dmxDevices;
   std::vector<LedMapping> ledMappings;
+  std::vector<Surface> surfaces;
 
   int newId() { return nextId++; }
   DmxDevice *dmxDevice(int id);
@@ -260,6 +345,14 @@ struct Project {
   MediaItem &addLive(const std::string &name, const std::string &url, const std::string &format,
                      const std::string &options);
   MediaItem &addSpout(const std::string &senderName);
+  Surface *surface(int id);
+  Surface &addSurface(const Warp &w);
+  // Copies every surface's mapping into the slices bound to it (and unbinds
+  // slices whose surface was removed).
+  void resolveSurfaces();
+  // A slice bound to a surface was edited (its warp differs from the
+  // surface): the surface takes the new mapping, then every bound slice.
+  void pushSurfaceEdits();
   void removeLayer(int id);
   void removeMedia(int id);
 

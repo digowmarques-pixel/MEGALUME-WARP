@@ -37,6 +37,21 @@ Ordem pensada para **videomapping** e **instalações interativas**.
 - Coluna com título, notas e tipo de transição (crossfade, corte, fade pelo preto)
 - Dashboard: colunas 01, 02… com ▶, linha de transição, coluna de parar e zoom
 
+## ✅ v0.6 (estudo da documentação do Millumin, veja [MILLUMIN.md](MILLUMIN.md))
+- **Fim da mídia** por célula: loop, congelar, parar, **disparar a próxima coluna** (auto-follow)
+- **Auto-GO** por coluna (espera, contar depois da transição, coluna de destino) com contagem
+  regressiva no dashboard; na última coluna volta para a primeira
+- **Estados por coluna**: parâmetros de layer gravados na coluna e animados durante a
+  transição, com herança das colunas anteriores (◆ na célula)
+- **Surfaces**: mapping compartilhado por várias layers
+- **Entradas**: teclado (`/key/...`), **DMX de entrada** (Art-Net/sACN), calibrar,
+  transformações (linear, chave, alternar, acumular), mapeamento ativo só em algumas colunas
+- **Agenda** por horário e dia da semana; projeto que abre as saídas e dispara uma coluna
+- **API OSC do Millumin** (`/millumin/action/...`, `/layer:Nome/...`, `/selectedLayer`,
+  `/+` `/-`), feedback `launchedColumn`, OSC em texto puro
+- Saídas: **atraso em quadros** por projetor e **controles desenhados no projetor**
+  (Ctrl+Shift+D); cor por coluna
+
 ## ⚠️ Pendente de teste em Windows real
 Tudo foi compilado para Windows, mas **ainda não rodou numa máquina Windows**:
 Spout, WASAPI, DirectShow, D3D11VA e WinMM precisam de um teste de verdade.
@@ -44,15 +59,18 @@ Spout, WASAPI, DirectShow, D3D11VA e WinMM precisam de um teste de verdade.
 ## 🔜 Próximas tarefas (por prioridade)
 
 1. **Teste no Windows** com projetor, placa de vídeo dedicada, câmera, Spout e controlador MIDI
-2. **NDI** (vídeo pela rede): receber e enviar
-3. **Timeline** com keyframes (opacidade, posição, efeitos) e cues com tempo
-4. **Efeitos em shader** carregados de arquivo (GLSL estilo ISF/Shadertoy) com parâmetros
-5. **DMX de entrada** (ser controlado por mesa de luz via Art-Net/sACN), USB DMX (Enttec),
-   plano de luz com fixtures (moving heads, PAR) e estados por coluna
-6. Áudio: roteamento multicanal por layer, ASIO, áudio das câmeras/streams,
-   time-stretch para velocidade ≠ 1
-7. Upload assíncrono de textura (PBO) e decodificação D3D11 sem cópia para 8K
-8. **Kinect / câmera de profundidade / MediaPipe** para detecção de pessoas
-9. **Scripts** (Lua ou JavaScript) para lógica de instalações
-10. Autosave, modo "show" travado, monitor de desempenho, relink de mídias ausentes
-11. Instalador (.msi) e auto-atualização
+2. **Timeline** com keyframes, curvas, segmentos (loop / intro) e flags que disparam ações;
+   timeline como mídia dentro de uma célula
+3. **Efeitos em pilha** por layer, incluindo **shaders ISF** (efeitos, geradores e transições),
+   LUT, níveis, chroma key, espelho, blur, soft crop
+4. **Blob tracking** na câmera (posição das pessoas → parâmetros) e modos de **matte**
+   (alpha / luma) para usar uma layer como máscara da de baixo
+5. **NDI** (receber e enviar), **texto dinâmico** (OSC `/layer/media/text`, arquivo .txt)
+6. **Video routing**: vários canvases, saídas sem tela (NDI/Spout), blend entre fatias livres
+7. **Máscaras** com pontos bezier, modo mostrar/esconder em pilha, opacidade, SVG;
+   **warp com pontos de entrada** (malha do lado da mídia) e malha bezier
+8. Data-tracks: comandos MIDI / DMX / PJLink (ligar projetor, obturador) / string TCP por coluna
+9. Timecode LTC/MTC (entrada e geração), cues de ensaio, transição manual por fader
+10. Estrutura 3D (anamorfose): importar OBJ, câmera do público, calibração por 6 pontos (DLT)
+11. Scripts (JavaScript/QuickJS), Arduino por serial, gamepad
+12. Áudio multicanal por layer, ASIO; upload assíncrono (PBO) para 8K; instalador

@@ -68,6 +68,50 @@ Em *Interação → Saída OSC* adicione destinos (IP e porta). Eles recebem:
 - As **ações OSC da coluna**: botão direito no cabeçalho da coluna, uma mensagem por
   linha, ex.: `/luz/cena 3` ou `/som/play "abertura" 0.8`.
 
+## Compatível com o Millumin
+
+O Lumen também entende a API OSC do Millumin (V5). Assim, os modelos de TouchOSC,
+Bitfocus Companion (Stream Deck), Open Stage Control e Chataigne feitos para o Millumin
+funcionam sem mudança. O prefixo `/millumin` é opcional e maiúsculas não importam.
+
+| Endereço | Ação |
+|---|---|
+| `/millumin/action/launchColumn <n ou "nome">` | Dispara a coluna (1 = primeira) |
+| `/action/launchOrStopColumn <n>` | Dispara, ou para se já estiver no ar |
+| `/action/stopColumn` | Para tudo |
+| `/action/launchNextColumn`, `/action/launchPreviousColumn` | GO / voltar |
+| `/action/displayTestCard`, `/action/hideTestCard` | Test card em todas as saídas |
+| `/action/enterFullscreen`, `/action/exitFullscreen` | Abre / fecha as saídas |
+| `/action/selectLayer <n ou "nome">` | Seleciona a layer (para `/selectedLayer`) |
+| `/masterVideo`, `/masterAudio`, `/masterDMX <0..1>` | Masters |
+| `/layer:Nome/opacity 0.5` | Propriedade de uma layer pelo nome |
+| `/index:2/scale 1.2` | Pela posição (1 = a de cima) |
+| `/selectedLayer/rotation 45` | Na layer selecionada |
+| `/Nome/position/xy 100 50`, `/Nome/x 100`, `/Nome/y 50` | Posição |
+| `/Nome/mapping/topLeft 10 20` (`topRight`, `bottomRight`, `bottomLeft`; `/x` `/y`) | Cantos do mapping (px do canvas) |
+| `/Nome/startMedia [coluna]`, `/Nome/stopMedia` | Mídia da layer |
+| `/Nome/opacity/+ 0.1`, `/Nome/position/x/- 10` | Soma / subtrai do valor atual |
+
+**Feedback.** Os destinos com *Status* recebem, além de `/lumen/status/column`, as mensagens
+`/millumin/board/launchedColumn <n> "<nome>"` e `/millumin/board/stoppedColumn`.
+Isso permite montar uma **máquina reserva** (backup): ponha o IP dela como destino na
+principal e mapeie `launchedColumn` → `/millumin/action/launchColumn` no Chataigne.
+
+**Texto puro.** O servidor também aceita mensagens como texto, uma por linha:
+
+```
+echo "/millumin/action/launchColumn 2" | nc -u -w1 127.0.0.1 8000
+```
+
+## Teclado e DMX como entrada
+
+- **Teclado**: cada tecla vira `/key/<tecla>` (`/key/a`, `/key/1`, `/key/f1`, `/key/left`,
+  `/key/space`, `/key/kp0`...) com 1 ao apertar e 0 ao soltar. Funciona também com a
+  janela do projetor em foco. Use num mapeamento, por exemplo `/key/a` → *Disparar coluna 3*.
+- **DMX** (*Interação → DMX de entrada*): Art-Net ou sACN. Cada canal que muda chega como
+  `/artnet/<universo>/<canal>` (ou `/sacn/...`) com valor 0–255. Assim uma mesa de luz
+  controla opacidades e dispara colunas.
+
 ## Mapeamentos (sensor → parâmetro)
 
 Para sensores que enviam endereços próprios (ex.: `/sensor/distancia 512`), crie
@@ -84,6 +128,25 @@ um **mapeamento** em *Interação*:
 - **Suavização**: 0 = imediato; perto de 1 = movimento lento e suave (filtra ruído)
 
 O botão **Aprender** preenche o endereço com a próxima mensagem recebida.
+**Calibrar** aprende a faixa de entrada: mexa o sensor ou fader até os extremos e clique
+em *Concluir*.
+
+**Transformação** (como no Millumin):
+
+| Tipo | Comportamento |
+|---|---|
+| Linear | A saída segue a entrada dentro da faixa |
+| Chave | Entrada alta (acima da metade) = máximo, baixa = mínimo |
+| Alternar | Cada toque troca entre mínimo e máximo (um botão que liga/desliga) |
+| Acumular | Cada toque soma o *passo*; depois do máximo volta para o mínimo |
+
+**Só nas colunas de/até**: o mapeamento só age enquanto uma dessas colunas está no ar
+(ex.: o sensor de presença só funciona na cena interativa). `0 0` = sempre.
+
+## Agenda
+
+*Interação → Agenda*: ações em horários fixos e dias da semana (disparar coluna, GO,
+parar, blackout liga/desliga). Para uma instalação que liga e desliga sozinha.
 
 ## Testar rapidamente
 
