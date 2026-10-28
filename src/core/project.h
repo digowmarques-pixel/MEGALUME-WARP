@@ -2,6 +2,7 @@
 // Runtime state (decoders, textures, playback clocks) lives in the engine.
 #pragma once
 
+#include "core/blend.h"
 #include "core/dmx.h"
 #include "core/warp.h"
 
@@ -115,6 +116,18 @@ struct SoftEdge {
   float power = 2.0f;
 };
 
+// Per-projector colour matching (applied to everything the output shows).
+struct OutputColor {
+  float brightness = 1, contrast = 1, gamma = 1;
+  Color gain{1, 1, 1, 1};
+  bool isIdentity() const {
+    return brightness == 1 && contrast == 1 && gamma == 1 && gain.r == 1 && gain.g == 1 && gain.b == 1;
+  }
+};
+
+// Values are stored in project files: only append.
+enum class TestPattern { None, Card, BlendGrid, White, Black, COUNT };
+
 struct OutputConfig {
   int id = 0;
   std::string name = "Output";
@@ -124,7 +137,13 @@ struct OutputConfig {
   float srcX = 0, srcY = 0, srcW = 1920, srcH = 1080; // canvas region (px)
   Warp warp;                      // output-normalised space (0..1)
   SoftEdge softEdge;
-  bool testCard = false;
+  TestPattern pattern = TestPattern::None;
+  OutputColor color;
+  // Black level compensation: light a projector leaks when showing black
+  // (0..1 of white, linear). Areas outside the overlaps are lifted to match
+  // the brighter black inside them.
+  Color blackLevel{0, 0, 0, 1};
+  std::vector<Mask> masks;        // output space: points in 0..1, feather in output px
 };
 
 // An Art-Net node or sACN receiver (LED controller such as DMXking LeDMX4 Pro,
@@ -223,6 +242,7 @@ struct Project {
   Layer *layer(int id);
   int layerIndex(int id) const;
   OutputConfig *output(int id);
+  const OutputConfig *output(int id) const { return const_cast<Project *>(this)->output(id); }
 
   Layer &addLayer(const std::string &name = "");
   Column &addColumn();
@@ -237,6 +257,12 @@ struct Project {
 
   static Project makeDefault();
 };
+
+// Blend assistant: makes exactly cols*rows outputs (reusing existing ones, so
+// their warps and colour settings survive), sets canvas size, regions and soft
+// edges. firstMonitor >= 0 assigns monitors in order; -1 keeps windows.
+// scaleContent rescales slices, masks and LED areas to the new canvas size.
+void applyBlendLayout(Project &p, const BlendLayoutParams &params, int firstMonitor, bool scaleContent);
 
 std::string serializeProject(const Project &p, const std::string &baseDir);
 bool deserializeProject(const std::string &json, const std::string &baseDir, Project &out,

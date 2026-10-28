@@ -2,38 +2,59 @@
 
 #include <GLFW/glfw3.h>
 
+#ifdef _WIN32
+#include <windows.h>
+#endif
+
 #include <algorithm>
 #include <cmath>
 
 namespace lumen {
 
 static const char *kOutputFS = R"(#version 330 core
-in vec2 vUV;              // 0..1 across the output warp
+in vec2 vUV;              // 0..1 across the output warp (content space)
 out vec4 fragColor;
 uniform sampler2D uCanvas;
+uniform sampler2D uMask;
+uniform int uUseMask;
 uniform vec4 uRect;       // canvas region, normalised: x y w h (y down)
+uniform vec2 uCanvasPx;   // canvas size in pixels
 uniform vec4 uSoft;       // left right top bottom (fraction)
-uniform float uGamma;
+uniform float uGamma;     // display gamma of the projector
 uniform float uPower;
-uniform int uTestCard;
+uniform int uPattern;     // 0 none, 1 card, 2 blend grid, 3 white, 4 black
 uniform int uIndex;
 uniform vec2 uRes;
 uniform float uTime;
-uniform float uBlack;
+uniform float uBlack;     // blackout
+uniform vec4 uColorAdj;   // brightness, contrast, gamma, -
+uniform vec3 uGain;
+uniform vec3 uBlackLevel; // projector black leak (linear)
 
 float ramp(float x, float width) {
   if (width <= 0.0) return 1.0;
   float t = clamp(x / width, 0.0, 1.0);
-  // Classic edge-blend curve: symmetric power curve, then gamma compensation.
+  // Edge-blend curve: symmetric (c(t) + c(1-t) = 1), then gamma compensation
+  // so the *light* of two projectors adds up to exactly one.
   float c = t < 0.5 ? 0.5 * pow(2.0 * t, uPower) : 1.0 - 0.5 * pow(2.0 * (1.0 - t), uPower);
   return pow(c, 1.0 / uGamma);
 }
 
+// 1 inside an overlap zone, 0 outside, with a few pixels of feather.
+float zone(float x, float width, float px) {
+  if (width <= 0.0) return 0.0;
+  return 1.0 - smoothstep(width - px, width + px, x);
+}
+
 float line(float d, float w) { return 1.0 - smoothstep(0.0, w, abs(d)); }
 
-vec3 testCard(vec2 uv) {
+vec3 accentColor() {
   vec3 hues[6] = vec3[6](vec3(1,0.3,0.3), vec3(0.3,1,0.3), vec3(0.3,0.5,1), vec3(1,1,0.3), vec3(1,0.3,1), vec3(0.3,1,1));
-  vec3 accent = hues[uIndex % 6];
+  return hues[uIndex % 6];
+}
+
+vec3 testCard(vec2 uv) {
+  vec3 accent = accentColor();
   vec2 px = uv * uRes;
   float cell = uRes.y / 10.0;
   vec2 g = mod(px, cell);
@@ -52,17 +73,57 @@ vec3 testCard(vec2 uv) {
   return col;
 }
 
+// Drawn in *canvas* coordinates, so lines continue across projectors: if the
+// projectors are aligned, the grids overlap perfectly in the blend zones.
+vec3 blendGrid(vec2 cuv) {
+  vec2 p = cuv * uCanvasPx;
+  float lw = max(1.0, uCanvasPx.y / 700.0);
+  vec2 g = abs(mod(p + 50.0, 100.0) - 50.0);
+  vec2 G = abs(mod(p + 250.0, 500.0) - 250.0);
+  vec3 col = vec3(0.02) + accentColor() * 0.12; // faint tint shows who lights what
+  col = mix(col, vec3(0.55), max(line(g.x, lw), line(g.y, lw)));
+  col = mix(col, vec3(1.0), max(line(G.x, lw * 2.0), line(G.y, lw * 2.0)));
+  vec2 c = p - uCanvasPx * 0.5;
+  col = mix(col, vec3(1.0, 0.85, 0.2), line(length(c) - uCanvasPx.y * 0.45, lw * 2.0));
+  float diag1 = (p.x / uCanvasPx.x - p.y / uCanvasPx.y) * uCanvasPx.y;
+  float diag2 = (p.x / uCanvasPx.x + p.y / uCanvasPx.y - 1.0) * uCanvasPx.y;
+  col = mix(col, vec3(0.3, 0.9, 1.0), max(line(diag1, lw * 1.5), line(diag2, lw * 1.5)));
+  return col;
+}
+
 void main() {
+  vec2 cuv = uRect.xy + vUV * uRect.zw;
   vec3 col;
-  if (uTestCard != 0) {
-    col = testCard(vUV);
-  } else {
-    vec2 cuv = uRect.xy + vUV * uRect.zw;
-    col = texture(uCanvas, vec2(cuv.x, 1.0 - cuv.y)).rgb;
-  }
+  if (uPattern == 1) col = testCard(vUV);
+  else if (uPattern == 2) col = blendGrid(cuv);
+  else if (uPattern == 3) col = vec3(1.0);
+  else if (uPattern == 4) col = vec3(0.0);
+  else col = texture(uCanvas, vec2(cuv.x, 1.0 - cuv.y)).rgb;
+
+  // Per-projector colour matching.
+  col = clamp((col - 0.5) * uColorAdj.y + 0.5, 0.0, 1.0) * uColorAdj.x * uGain;
+  col = pow(max(col, vec3(0.0)), vec3(1.0 / max(uColorAdj.z, 0.05)));
+
   float s = ramp(vUV.x, uSoft.x) * ramp(1.0 - vUV.x, uSoft.y) *
             ramp(vUV.y, uSoft.z) * ramp(1.0 - vUV.y, uSoft.w);
-  fragColor = vec4(col * s * (1.0 - uBlack), 1.0);
+  col *= s * (1.0 - uBlack);
+
+  // Black level compensation: inside an overlap N projectors add their black
+  // leak; everywhere else is lifted so the whole image has the same black.
+  if (any(greaterThan(uBlackLevel, vec3(0.0)))) {
+    // The neighbour's black starts at its physical edge, which is sharp: the
+    // lift must switch just as sharply (sub-pixel smoothing only).
+    vec2 fpx = 0.5 / uRes;
+    float hz = max(zone(vUV.x, uSoft.x, fpx.x), zone(1.0 - vUV.x, uSoft.y, fpx.x));
+    float vz = max(zone(vUV.y, uSoft.z, fpx.y), zone(1.0 - vUV.y, uSoft.w, fpx.y));
+    float n = (1.0 + hz) * (1.0 + vz);
+    float nmax = ((uSoft.x > 0.0 || uSoft.y > 0.0) ? 2.0 : 1.0) * ((uSoft.z > 0.0 || uSoft.w > 0.0) ? 2.0 : 1.0);
+    vec3 lift = uBlackLevel * (nmax - n) / n * (1.0 - uBlack);
+    col = pow(pow(col, vec3(uGamma)) + lift, vec3(1.0 / uGamma));
+  }
+
+  if (uUseMask != 0) col *= texture(uMask, gl_FragCoord.xy / uRes).r;
+  fragColor = vec4(col, 1.0);
 }
 )";
 
@@ -84,10 +145,27 @@ std::vector<MonitorInfo> OutputManager::monitors() {
   return out;
 }
 
+#ifdef _WIN32
+// DwmFlush paces presentation to the desktop compositor (one vblank) without
+// linking dwmapi: every output can then swap without blocking.
+static void dwmFlush() {
+  using Fn = long(__stdcall *)();
+  static Fn fn = [] {
+    HMODULE m = LoadLibraryW(L"dwmapi.dll");
+    return m ? reinterpret_cast<Fn>(reinterpret_cast<void *>(GetProcAddress(m, "DwmFlush"))) : nullptr;
+  }();
+  if (fn) fn();
+}
+#endif
+
 bool OutputManager::init(GLFWwindow *mainWindow) {
   main_ = mainWindow;
-  return shader_.build(kPixelVertexShader, kOutputFS);
+  return shader_.build(kPixelVertexShader, kOutputFS) && masks_.init();
 }
+
+void OutputManager::identify(double seconds) { identifyUntil_ = glfwGetTime() + seconds; }
+
+bool OutputManager::identifying() const { return glfwGetTime() < identifyUntil_; }
 
 void OutputManager::destroy(Window &w) {
   if (!w.handle) return;
@@ -195,20 +273,42 @@ void OutputManager::sync(Project &p) {
 }
 
 void OutputManager::updateSwapIntervals() {
-  // Only one window may block on vsync, otherwise each swap halves the frame rate.
+  // If every window waited for vsync, each swap would divide the frame rate.
+#ifdef _WIN32
+  // Windows: no window blocks; render() calls DwmFlush once per frame so all
+  // projectors present the same frame on the same vblank.
+  glfwMakeContextCurrent(main_);
+  glfwSwapInterval(windows_.empty() ? 1 : 0);
+  for (auto &w : windows_) {
+    glfwMakeContextCurrent(w->handle);
+    glfwSwapInterval(0);
+  }
+#else
+  // Elsewhere: the first output paces the loop.
   glfwMakeContextCurrent(main_);
   glfwSwapInterval(windows_.empty() ? 1 : 0);
   for (size_t i = 0; i < windows_.size(); ++i) {
     glfwMakeContextCurrent(windows_[i]->handle);
     glfwSwapInterval(i == 0 ? 1 : 0);
   }
+#endif
   glfwMakeContextCurrent(main_);
   swapDirty_ = false;
 }
 
+const Texture *OutputManager::outputMask(const OutputConfig &o, int w, int h, bool preview,
+                                         DynamicMesh &mesh) {
+  if (!MaskRenderer::anyActive(o.masks)) return nullptr;
+  auto &map = preview ? previewMasks_ : masks2_;
+  auto &fb = map[o.id];
+  if (!fb) fb = std::make_unique<Framebuffer>();
+  masks_.render(o.masks, float(w), float(h), w, h, *fb, mesh);
+  return &fb->texture();
+}
+
 void OutputManager::draw(const Project &p, const OutputConfig &o, int index,
-                         const Texture &canvas, DynamicMesh &mesh, int w, int h, double time,
-                         bool blackout) {
+                         const Texture &canvas, const Texture *mask, DynamicMesh &mesh, int w,
+                         int h, double time, bool blackout) {
   glViewport(0, 0, w, h);
   glClearColor(0, 0, 0, 1);
   glClear(GL_COLOR_BUFFER_BIT);
@@ -221,11 +321,18 @@ void OutputManager::draw(const Project &p, const OutputConfig &o, int index,
   shader_.set("uSoft", o.softEdge.left, o.softEdge.right, o.softEdge.top, o.softEdge.bottom);
   shader_.set("uGamma", std::max(0.1f, o.softEdge.gamma));
   shader_.set("uPower", std::max(0.1f, o.softEdge.power));
-  shader_.set("uTestCard", o.testCard ? 1 : 0);
+  shader_.set("uPattern", identifying() ? int(TestPattern::Card) : int(o.pattern));
   shader_.set("uIndex", index);
   shader_.set("uRes", float(w), float(h));
+  shader_.set("uCanvasPx", cw, ch);
   shader_.set("uTime", float(time));
   shader_.set("uBlack", blackout ? 1.0f : 0.0f);
+  shader_.set("uColorAdj", o.color.brightness, o.color.contrast, o.color.gamma, 0.0f);
+  shader_.set("uGain", o.color.gain.r, o.color.gain.g, o.color.gain.b);
+  shader_.set("uBlackLevel", o.blackLevel.r, o.blackLevel.g, o.blackLevel.b);
+  shader_.set("uMask", 1);
+  shader_.set("uUseMask", mask ? 1 : 0);
+  if (mask) mask->bind(1);
   canvas.bind(0);
 
   Warp warp = o.warp;
@@ -241,10 +348,21 @@ void OutputManager::render(const Project &p, const Texture &canvas, double time,
 
   // The canvas was drawn in the main context: make sure it is complete before
   // other contexts sample it.
+  double t0 = glfwGetTime();
+  // Output masks are rendered here, in the main context, at each window's size.
+  std::vector<const Texture *> masks(windows_.size(), nullptr);
+  DynamicMesh &mainMesh = mainMesh_;
+  for (size_t k = 0; k < windows_.size(); ++k)
+    if (const OutputConfig *o = p.output(windows_[k]->outputId)) {
+      int fw, fh;
+      glfwGetFramebufferSize(windows_[k]->handle, &fw, &fh);
+      if (fw > 0 && fh > 0) masks[k] = outputMask(*o, fw, fh, false, mainMesh);
+    }
   GLsync fence = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
   glFlush();
 
-  for (auto &w : windows_) {
+  for (size_t k = 0; k < windows_.size(); ++k) {
+    auto &w = windows_[k];
     const OutputConfig *o = nullptr;
     int index = 0;
     for (size_t i = 0; i < p.outputs.size(); ++i)
@@ -254,18 +372,23 @@ void OutputManager::render(const Project &p, const Texture &canvas, double time,
     glWaitSync(fence, 0, GL_TIMEOUT_IGNORED);
     int fw, fh;
     glfwGetFramebufferSize(w->handle, &fw, &fh);
-    if (fw > 0 && fh > 0) draw(p, *o, index, canvas, *w->mesh, fw, fh, time, blackout);
+    if (fw > 0 && fh > 0) draw(p, *o, index, canvas, masks[k], *w->mesh, fw, fh, time, blackout);
   }
   for (auto &w : windows_) glfwSwapBuffers(w->handle);
+#ifdef _WIN32
+  dwmFlush();
+#endif
   glfwMakeContextCurrent(main_);
   glDeleteSync(fence);
+  renderMs_ = float((glfwGetTime() - t0) * 1000.0);
 }
 
 void OutputManager::renderPreview(const Project &p, const OutputConfig &o, int index,
                                   const Texture &canvas, Framebuffer &target, DynamicMesh &mesh,
                                   double time, bool blackout) {
+  const Texture *mask = outputMask(o, target.width(), target.height(), true, mesh);
   target.bind();
-  draw(p, o, index, canvas, mesh, target.width(), target.height(), time, blackout);
+  draw(p, o, index, canvas, mask, mesh, target.width(), target.height(), time, blackout);
   Framebuffer::unbind();
 }
 

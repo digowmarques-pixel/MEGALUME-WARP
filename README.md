@@ -12,9 +12,9 @@ Millumin, feito para **Windows** (também compila no Linux).
 | **Áudio** | Som dos vídeos (WASAPI no Windows), volume e mudo por layer, o fade do áudio acompanha o fade da imagem, volume master, escolha da placa de som, medidores. O relógio do áudio comanda o vídeo, então imagem e som não se perdem nem depois de horas em loop |
 | **Ao vivo** | Câmeras e placas de captura (DirectShow), streams de rede (RTSP, SRT, UDP, HTTP) e **Spout** (receber de TouchDesigner, Resolume, OBS, Unreal...). Uma câmera usada por várias layers abre uma vez só. Reconecta sozinho se o sinal cair |
 | **Desempenho** | Conversão de cor YUV → RGB na GPU (8, 10 e 12 bits, BT.601/709/2020), **decodificação por hardware** (D3D11VA/DXVA2), **HAP / HAP Alpha / HAP Q / HAP Q Alpha direto na GPU** como textura comprimida, sem decodificar na CPU |
-| **Videomapping** | Fatias (slices) com recorte UV, perspectiva de 4 cantos (homografia), malha deformável (mesh warp) até 33×33, máscaras poligonais com borda suave, bordas com anti-aliasing |
+| **Videomapping** | Fatias (slices) com recorte UV, perspectiva de 4 cantos (homografia, com troca automática para bilinear quando o quadrilátero fica côncavo), malha deformável (mesh warp) até 33×33, máscaras poligonais com borda suave, bordas com anti-aliasing |
 | **Composição** | Blend normal / adição / multiplicar / tela, opacidade, brilho, contraste, saturação, matiz, inverter, tinta, transformação (posição, escala, rotação) por layer |
-| **Saídas** | Várias saídas, cada uma num monitor (sem bordas) ou em janela; recorte de região do canvas, warp por saída (keystone e malha), **soft edge** para blend entre projetores, test card por saída |
+| **Saídas / blend** | Várias saídas (abertas só quando você pede: **Abrir saídas** / Ctrl+P), cada uma num monitor sem bordas. **Assistente de blend** para grades de projetores, soft edge com curva complementar, **compensação de nível de preto**, **cor por projetor**, **máscaras por saída**, warp por saída (keystone e malha), padrões de teste (card, **grade contínua**, branco, preto) e identificação das saídas. Veja [docs/BLEND.md](docs/BLEND.md) |
 | **Interação** | Servidor **OSC** (UDP) com comandos `/lumen/...`, **MIDI** (controladores USB, com reconexão automática), **mapeamentos** sensor/MIDI → parâmetro com faixa, suavização e botão **Aprender**, monitor de mensagens |
 | **LED mapping** | Pixel mapping de fitas e matrizes de LED por **Art-Net** e **sACN**: RGB/BGR/GRB/RGBW/mono, 8/16 bits, zigzag, inversão, curva de brilho, vários universos automáticos, monitor DMX e DMX master. Veja [docs/LED.md](docs/LED.md) |
 | **Saída de controle** | **OSC de saída**: status do cue para TouchOSC/Companion e **ações OSC por coluna** (disparar luz, som, outros computadores). **Spout de saída**: o canvas inteiro vai para OBS, TouchDesigner, Resolume... |
@@ -99,7 +99,8 @@ cmake -S . -B build && cmake --build build -j
 2. Pressione **Espaço** para avançar as colunas (Alinhamento → Plasma → Só o cubo → Fim).
 3. Selecione a layer **Cubo**, pressione **M** (Perspectiva) e arraste os cantos no workspace.
 4. Pressione **G** (Malha), aumente a malha em *Propriedades → Fatias* (ex.: 5 × 5) e curve a imagem.
-5. Em *Saídas*, escolha o **monitor** do projetor. Desative o espelhamento (Win+P → *Estender*).
+5. Em *Saídas*, escolha o **monitor** do projetor (ou use o *Assistente de blend*) e clique em
+   **Abrir saídas**. Desative o espelhamento (Win+P → *Estender*).
 6. Em *Interação*, envie OSC para a porta 8000 (ex.: `/sensor/1 0.5` gira o matiz do cubo).
 7. Ligue um controlador MIDI, crie um mapeamento, clique em **Aprender** e mexa num knob.
 8. **+ Ao vivo** na biblioteca adiciona câmera, stream de rede ou Spout.
@@ -126,6 +127,7 @@ cmake -S . -B build && cmake --build build -j
 | Roda / botão do meio / Alt+arrastar | Zoom e mover a vista |
 | Ctrl+Z / Ctrl+Y | Desfazer / refazer |
 | Ctrl+S / Ctrl+Shift+S / Ctrl+O / Ctrl+N / Ctrl+I | Salvar / salvar como / abrir / novo / importar |
+| Ctrl+P | Abrir / fechar as janelas dos projetores |
 
 ## Controle por OSC
 
@@ -160,7 +162,8 @@ Mais detalhes em [docs/ARQUITETURA.md](docs/ARQUITETURA.md). Próximos passos em
 ## Linha de comando
 
 ```
-lumen [projeto.lumen] [--launch N] [--no-outputs] [--size LxA]
+lumen [projeto.lumen] [--launch N] [--outputs | --no-outputs] [--size LxA]
+      [--blend 3x1:0.15:1920x1080] [--pattern N] [--black-level V]
       [--frames N --screenshot-canvas F.ppm --screenshot-ui F.ppm --screenshot-output F.ppm]
 ```
 

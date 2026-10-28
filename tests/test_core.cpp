@@ -61,6 +61,22 @@ static void testWarp() {
   r.translate({10, 0});
   CHECK(near(r.center(), {60, 50}, 1e-3f));
 
+  // Concave quad (a corner dragged inside): no perspective blow-up, corners
+  // still exact, the map stays inside the quad's bounds and unmap inverts it.
+  Warp cc;
+  cc.corners = {Vec2{1100, 700}, Vec2{1920, 0}, Vec2{1920, 1080}, Vec2{0, 1080}};
+  CHECK(!cc.perspectiveValid());
+  CHECK(w.perspectiveValid());
+  CHECK(near(cc.map(0, 0), cc.corners[0]) && near(cc.map(1, 1), cc.corners[2]));
+  bool bounded = true;
+  for (float u = 0; u <= 1.0f; u += 0.1f)
+    for (float v = 0; v <= 1.0f; v += 0.1f) {
+      Vec2 q = cc.map(u, v);
+      bounded &= q.x >= -1 && q.x <= 1921 && q.y >= -1 && q.y <= 1081;
+    }
+  CHECK(bounded);
+  CHECK(near(cc.unmapPerspective(cc.map(0.7f, 0.4f)), {0.7f, 0.4f}, 1e-2f));
+
   CHECK(pointInPolygon({5, 5}, {{0, 0}, {10, 0}, {10, 10}, {0, 10}}));
   CHECK(!pointInPolygon({15, 5}, {{0, 0}, {10, 0}, {10, 10}, {0, 10}}));
 }
@@ -270,7 +286,34 @@ static void testDmx() {
   CHECK(back.ledMappings[0].zigzag && back.ledMappings[1].universe == 2);
 }
 
+static void testBlendLayout() {
+  BlendLayoutParams p;
+  p.cols = 3; p.rows = 1; p.projW = 1920; p.projH = 1080; p.overlapX = 0.15f;
+  BlendLayout b = computeBlendLayout(p);
+  CHECK(b.overlapPxX == 288 && b.canvasW == 3 * 1920 - 2 * 288 && b.canvasH == 1080);
+  CHECK(b.projectors.size() == 3);
+  CHECK(b.projectors[0].left == 0 && b.projectors[0].right > 0.149f && b.projectors[1].left > 0.149f);
+  CHECK(b.projectors[2].right == 0 && b.projectors[1].srcX == 1920 - 288);
+  // Neighbour regions overlap by exactly the blend width.
+  CHECK(b.projectors[0].srcX + b.projectors[0].srcW - b.projectors[1].srcX == 288);
+  // 2x2 grid has vertical blends too.
+  p.cols = 2; p.rows = 2; p.overlapY = 0.1f;
+  b = computeBlendLayout(p);
+  CHECK(b.projectors.size() == 4 && b.projectors[0].bottom > 0 && b.projectors[3].top > 0 && b.projectors[3].bottom == 0);
+  // The curve is complementary: two projectors always add to one.
+  for (float t = 0; t <= 1.0f; t += 0.05f)
+    for (float pw : {1.0f, 2.0f, 3.5f}) CHECK(std::fabs(blendCurve(t, pw) + blendCurve(1 - t, pw) - 1) < 1e-5f);
+  // Applying it to a project.
+  Project pr = Project::makeDefault();
+  BlendLayoutParams q;
+  q.cols = 2; q.rows = 1; q.overlapX = 0.2f;
+  applyBlendLayout(pr, q, 1, true);
+  CHECK(pr.outputs.size() == 2 && pr.outputs[1].monitor == 2 && pr.canvasW == 2 * 1920 - 384);
+  CHECK(std::fabs(pr.layers[0].slices[0].warp.corners[1].x - float(pr.canvasW)) < 0.5f); // full-canvas slice rescaled
+}
+
 int main() {
+  testBlendLayout();
   testDmx();
   testWarp();
   testOsc();

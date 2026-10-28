@@ -16,6 +16,7 @@
 #include <cmath>
 #include <cstdio>
 #include <filesystem>
+#include <map>
 
 namespace lumen {
 
@@ -249,6 +250,8 @@ void Ui::menuBar(App &app) {
     ImGui::EndMenu();
   }
   if (ImGui::BeginMenu("Saídas")) {
+    if (ImGui::MenuItem(app.outputsOpen ? "Fechar saídas" : "Abrir saídas", "Ctrl+P")) app.outputsOpen = !app.outputsOpen;
+    ImGui::Separator();
     if (ImGui::MenuItem("Adicionar saída")) {
       OutputConfig &o = app.engine.project.addOutput();
       app.sel.outputId = o.id;
@@ -296,6 +299,15 @@ void Ui::toolbar(App &app) {
   if (ImGui::Button("Blackout", {80, 30})) e.blackout = !e.blackout;
   if (e.blackout) ImGui::PopStyleColor(2);
   ImGui::SetItemTooltip("Escurece todas as saídas (B)");
+  ImGui::SameLine();
+  bool open = app.outputsOpen;
+  if (open) {
+    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.2f, 0.45f, 0.8f, 1));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.3f, 0.55f, 0.9f, 1));
+  }
+  if (ImGui::Button(open ? "Fechar saídas" : "Abrir saídas", {110, 30})) app.outputsOpen = !open;
+  if (open) ImGui::PopStyleColor(2);
+  ImGui::SetItemTooltip("Abre/fecha as janelas dos projetores (Ctrl+P). O workspace mostra a prévia mesmo fechadas.");
 
   ImGui::SameLine(0, 20);
   ImGui::SetNextItemWidth(120);
@@ -999,6 +1011,82 @@ void Ui::mediaInspector(App &app) {
 
 void Ui::outputInspector(App &app) {
   Project &p = app.engine.project;
+  if (ImGui::CollapsingHeader("Assistente de blend (vários projetores)")) {
+    static BlendLayoutParams bp;
+    static int firstMonitor = 1; // monitor 2: the control screen is usually monitor 1
+    static bool scale = true;
+    ImGui::TextWrapped("Monta as saídas, as regiões do canvas e as bordas suaves de uma grade de "
+                       "projetores sobrepostos.");
+    ImGui::SetNextItemWidth(120);
+    ImGui::InputInt("Colunas", &bp.cols);
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(120);
+    ImGui::InputInt("Linhas", &bp.rows);
+    bp.cols = std::clamp(bp.cols, 1, 16);
+    bp.rows = std::clamp(bp.rows, 1, 16);
+    int res[2] = {bp.projW, bp.projH};
+    if (ImGui::InputInt2("Resolução do projetor", res)) {
+      bp.projW = std::clamp(res[0], 16, 16384);
+      bp.projH = std::clamp(res[1], 16, 16384);
+    }
+    float ov[2] = {bp.overlapX * 100, bp.overlapY * 100};
+    if (ImGui::DragFloat2("Sobreposição % (horiz/vert)", ov, 0.1f, 0, 50, "%.1f%%")) {
+      bp.overlapX = ov[0] / 100;
+      bp.overlapY = ov[1] / 100;
+    }
+    helpMarker("Quanto da largura de cada projetor se sobrepõe ao vizinho. 10–20% é o comum.");
+    auto mons = OutputManager::monitors();
+    std::string mlabel = firstMonitor < 0 ? "Janelas (teste)" : "A partir do monitor " + std::to_string(firstMonitor + 1);
+    if (ImGui::BeginCombo("Monitores", mlabel.c_str())) {
+      if (ImGui::Selectable("Janelas (teste)", firstMonitor < 0)) firstMonitor = -1;
+      for (size_t i = 0; i < mons.size(); ++i) {
+        std::string l = "A partir do monitor " + std::to_string(i + 1) + " (" + mons[i].name + ")";
+        if (ImGui::Selectable(l.c_str(), firstMonitor == int(i))) firstMonitor = int(i);
+      }
+      ImGui::EndCombo();
+    }
+    ImGui::Checkbox("Escalar o mapping atual para o novo canvas", &scale);
+    BlendLayout preview = computeBlendLayout(bp);
+    ImGui::Text("Canvas: %d × %d  ·  sobreposição: %d × %d px  ·  %d saídas", preview.canvasW,
+                preview.canvasH, preview.overlapPxX, preview.overlapPxY, int(preview.projectors.size()));
+    // Small diagram of the layout.
+    {
+      ImDrawList *dl = ImGui::GetWindowDrawList();
+      ImVec2 o0 = ImGui::GetCursorScreenPos();
+      float W = ImGui::GetContentRegionAvail().x, k = W / float(std::max(1, preview.canvasW));
+      float H = float(preview.canvasH) * k;
+      dl->AddRect(o0, {o0.x + W, o0.y + H}, IM_COL32(120, 120, 120, 255));
+      for (size_t i = 0; i < preview.projectors.size(); ++i) {
+        auto &b = preview.projectors[i];
+        ImU32 col = IM_COL32(90 + int(i * 53) % 160, 160, 255 - int(i * 37) % 120, 70);
+        ImVec2 a{o0.x + b.srcX * k, o0.y + b.srcY * k}, z{o0.x + (b.srcX + b.srcW) * k, o0.y + (b.srcY + b.srcH) * k};
+        dl->AddRectFilled(a, z, col);
+        dl->AddRect(a, z, IM_COL32(255, 255, 255, 160));
+        char t[24];
+        std::snprintf(t, sizeof(t), "%zu", i + 1);
+        dl->AddText({a.x + 4, a.y + 2}, IM_COL32(255, 255, 255, 230), t);
+      }
+      ImGui::Dummy({W, H + 4});
+    }
+    if (ImGui::Button("Aplicar")) {
+      applyBlendLayout(p, bp, firstMonitor, scale);
+      if (!p.outputs.empty()) app.sel.outputId = p.outputs.front().id;
+      app.edited();
+      app.status("Blend aplicado: " + std::to_string(p.outputs.size()) + " saídas");
+    }
+    ImGui::SameLine();
+    ImGui::TextDisabled("Depois: padrão \"Grade de blend\" para alinhar");
+  }
+  if (ImGui::Button("Identificar saídas")) app.outputs.identify();
+  ImGui::SetItemTooltip("Mostra o número de cada saída por alguns segundos");
+  ImGui::SameLine();
+  if (ImGui::Button("Grade em todas")) {
+    bool any = std::any_of(p.outputs.begin(), p.outputs.end(), [](auto &x) { return x.pattern == TestPattern::BlendGrid; });
+    for (auto &x : p.outputs) x.pattern = any ? TestPattern::None : TestPattern::BlendGrid;
+    app.edited();
+  }
+  ImGui::SetItemTooltip("Liga/desliga a grade de alinhamento em todos os projetores");
+  ImGui::Separator();
   for (auto &o : p.outputs) {
     ImGui::PushID(o.id);
     if (ImGui::Selectable(o.name.c_str(), app.sel.outputId == o.id)) app.sel.outputId = o.id;
@@ -1030,9 +1118,15 @@ void Ui::outputInspector(App &app) {
   ImGui::SeparatorText(o->name.c_str());
   if (inputText("Nome", o->name)) app.edited();
   if (ImGui::Checkbox("Ativa", &o->enabled)) app.edited();
-  ImGui::SameLine();
-  if (ImGui::Checkbox("Test card", &o->testCard)) app.edited();
-  helpMarker("Mostra um padrão de teste nesta saída para focar e alinhar o projetor.");
+  int pat = int(o->pattern);
+  ImGui::SetNextItemWidth(200);
+  if (ImGui::Combo("Padrão de teste", &pat, "Nenhum (conteúdo)\0Test card da saída\0Grade de blend (contínua)\0Branco\0Preto\0")) {
+    o->pattern = TestPattern(pat);
+    app.edited();
+  }
+  helpMarker("Test card: foco e identificação. Grade de blend: desenhada no canvas, continua de um "
+             "projetor para o outro (alinhe até as linhas coincidirem). Branco: ajuste as bordas "
+             "até a emenda sumir. Preto: ajuste o nível de preto.");
 
   auto mons = OutputManager::monitors();
   std::string current = o->monitor < 0 ? "Janela (teste)" : "Monitor " + std::to_string(o->monitor + 1);
@@ -1106,7 +1200,96 @@ void Ui::outputInspector(App &app) {
   se |= ImGui::SliderFloat("Curva", &o->softEdge.power, 0.5f, 6);
   if (se) app.edited();
   helpMarker("Para dois projetores lado a lado com sobreposição: cada um mostra uma região do "
-             "canvas que inclui a faixa sobreposta, e a borda é suavizada com a mesma largura.");
+             "canvas que inclui a faixa sobreposta, e a borda é suavizada com a mesma largura. "
+             "O Assistente de blend calcula tudo isso.");
+
+  ImGui::SeparatorText("Nível de preto");
+  {
+    float bl[3] = {o->blackLevel.r, o->blackLevel.g, o->blackLevel.b};
+    static std::map<int, bool> perChannel; // UI state only
+    bool linked = !perChannel[o->id] && bl[0] == bl[1] && bl[1] == bl[2];
+    if (linked) {
+      if (ImGui::SliderFloat("Compensação", &bl[0], 0, 0.1f, "%.4f", ImGuiSliderFlags_Logarithmic)) {
+        o->blackLevel = {bl[0], bl[0], bl[0], 1};
+        app.edited();
+      }
+    } else if (ImGui::SliderFloat3("Compensação RGB", bl, 0, 0.1f, "%.4f", ImGuiSliderFlags_Logarithmic)) {
+      o->blackLevel = {bl[0], bl[1], bl[2], 1};
+      app.edited();
+    }
+    if (ImGui::SmallButton(linked ? "Ajustar por cor" : "Unificar")) {
+      perChannel[o->id] = linked;
+      if (!linked) {
+        o->blackLevel = {bl[0], bl[0], bl[0], 1};
+        app.edited();
+      }
+    }
+    helpMarker("Projetores não mostram preto puro: na sobreposição os dois \"pretos\" somam e aparece "
+               "uma faixa cinza nas cenas escuras. Use o padrão Preto e aumente até o resto da imagem "
+               "ficar igual à faixa. Valores típicos: 0.002 a 0.02.");
+  }
+
+  ImGui::SeparatorText("Cor do projetor");
+  {
+    bool c = false;
+    c |= ImGui::SliderFloat("Brilho##out", &o->color.brightness, 0, 2);
+    c |= ImGui::SliderFloat("Contraste##out", &o->color.contrast, 0, 2);
+    c |= ImGui::SliderFloat("Gamma##out", &o->color.gamma, 0.3f, 3);
+    float g[3] = {o->color.gain.r, o->color.gain.g, o->color.gain.b};
+    if (ImGui::SliderFloat3("Ganho R G B", g, 0, 2)) {
+      o->color.gain = {g[0], g[1], g[2], 1};
+      c = true;
+    }
+    if (ImGui::SmallButton("Zerar cor")) {
+      o->color = {};
+      c = true;
+    }
+    if (c) app.edited();
+    helpMarker("Iguale projetores diferentes (ou com lâmpadas de idades diferentes): mostre Branco em "
+               "todos e reduza o ganho do canal que estiver sobrando.");
+  }
+
+  ImGui::SeparatorText("Máscaras da saída");
+  ImGui::TextWrapped("Recortam a imagem deste projetor (obstáculos, bordas irregulares, cúpulas). "
+                     "Edite no workspace com a saída em vista e a ferramenta Máscara (K).");
+  {
+    int removeMask = -1;
+    for (size_t i = 0; i < o->masks.size(); ++i) {
+      ImGui::PushID(3000 + int(i));
+      Mask &m = o->masks[i];
+      if (ImGui::Checkbox("##en", &m.enabled)) app.edited();
+      ImGui::SameLine();
+      if (ImGui::Selectable(m.name.c_str(), app.sel.outMask == int(i))) app.sel.outMask = int(i);
+      if (ImGui::BeginPopupContextItem()) {
+        if (ImGui::MenuItem("Remover")) removeMask = int(i);
+        ImGui::EndPopup();
+      }
+      ImGui::PopID();
+    }
+    if (removeMask >= 0) {
+      o->masks.erase(o->masks.begin() + removeMask);
+      app.sel.outMask = -1;
+      app.edited();
+    }
+    if (ImGui::Button("+ Máscara de saída")) {
+      Mask m;
+      m.name = "Máscara " + std::to_string(o->masks.size() + 1);
+      m.subtract = true;
+      m.feather = 20;
+      o->masks.push_back(m);
+      app.sel.outMask = int(o->masks.size()) - 1;
+      workspace.viewOutputId = o->id;
+      workspace.tool = Tool::Mask;
+      app.edited();
+    }
+    if (app.sel.outMask >= 0 && app.sel.outMask < int(o->masks.size())) {
+      Mask &m = o->masks[size_t(app.sel.outMask)];
+      int mode = m.subtract ? 1 : 0;
+      if (ImGui::Combo("Modo##om", &mode, "Revelar dentro\0Esconder dentro\0")) { m.subtract = mode == 1; app.edited(); }
+      if (ImGui::SliderFloat("Suavizar (px)##om", &m.feather, 0, 300)) app.edited();
+      ImGui::Text("%zu pontos", m.points.size());
+    }
+  }
   ImGui::PopID();
 }
 
@@ -1502,7 +1685,7 @@ void Ui::statusBar(App &app) {
   const Project &p = app.engine.project;
   ImGui::TextDisabled("Canvas %d×%d", p.canvasW, p.canvasH);
   ImGui::SameLine(0, 20);
-  ImGui::TextDisabled("Saídas abertas: %d", app.outputs.openCount());
+  ImGui::TextDisabled("Saídas abertas: %d (%.1f ms)", app.outputs.openCount(), app.outputs.renderMs());
   ImGui::SameLine(0, 20);
   if (app.engine.oscServer().running()) ImGui::TextDisabled("OSC :%d", app.engine.oscServer().port());
   else ImGui::TextDisabled("OSC desligado");

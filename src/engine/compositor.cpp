@@ -49,30 +49,6 @@ void main() {
 }
 )";
 
-static const char *kFillFS = R"(#version 330 core
-out vec4 fragColor;
-uniform vec4 uColor;
-void main() { fragColor = uColor; }
-)";
-
-static const char *kBlurFS = R"(#version 330 core
-in vec2 vUV;
-out vec4 fragColor;
-uniform sampler2D uTex;
-uniform vec2 uDir;     // texel step (already scaled)
-uniform float uSigma;  // in taps
-void main() {
-  vec2 uv = gl_FragCoord.xy / vec2(textureSize(uTex, 0));
-  float sum = 0.0, wsum = 0.0;
-  for (int i = -12; i <= 12; ++i) {
-    float w = exp(-0.5 * float(i * i) / (uSigma * uSigma));
-    sum += texture(uTex, uv + uDir * float(i)).r * w;
-    wsum += w;
-  }
-  fragColor = vec4(sum / wsum);
-}
-)";
-
 Vec2 layerPivot(const Layer &l) {
   Vec2 c;
   int n = 0;
@@ -96,72 +72,13 @@ Warp transformedWarp(const Layer &l, const Slice &s) {
 
 bool Compositor::init() {
   return layerShader_.build(kPixelVertexShader, kLayerFS) &&
-         fillShader_.build(kPixelVertexShader, kFillFS) &&
-         blurShader_.build(kPixelVertexShader, kBlurFS);
+         masks_.init();
 }
 
 void Compositor::renderMask(const Project &p, const Layer &l, DynamicMesh &mesh) {
-  auto &fb = masks_[l.id];
+  auto &fb = maskFbs_[l.id];
   if (!fb) fb = std::make_unique<Framebuffer>();
-  fb->resize(p.canvasW, p.canvasH, true, GL_R8);
-  fb->bind();
-
-  // Start empty if any mask reveals, otherwise start fully visible.
-  bool anyReveal = false;
-  float feather = 0;
-  for (auto &m : l.masks)
-    if (m.enabled && m.points.size() >= 3) {
-      anyReveal |= !m.subtract;
-      feather = std::max(feather, m.feather);
-    }
-  float base = anyReveal ? 0.0f : 1.0f;
-  glClearColor(base, base, base, 1);
-  glClearStencil(0);
-  glClear(GL_COLOR_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
-  glDisable(GL_BLEND);
-
-  fillShader_.use();
-  fillShader_.set("uTarget", float(p.canvasW), float(p.canvasH));
-  glEnable(GL_STENCIL_TEST);
-  std::vector<float> fan;
-  for (auto &m : l.masks) {
-    if (!m.enabled || m.points.size() < 3) continue;
-    // Even-odd fill of an arbitrary (concave) polygon using the stencil invert trick.
-    glClear(GL_STENCIL_BUFFER_BIT);
-    glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
-    glStencilMask(0xFF);
-    glStencilFunc(GL_ALWAYS, 0, 0xFF);
-    glStencilOp(GL_KEEP, GL_KEEP, GL_INVERT);
-    fan.clear();
-    for (auto &pt : m.points) fan.insert(fan.end(), {pt.x, pt.y, 0, 0});
-    mesh.draw(fan, GL_TRIANGLE_FAN);
-
-    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
-    glStencilFunc(GL_NOTEQUAL, 0, 0xFF);
-    glStencilOp(GL_KEEP, GL_KEEP, GL_KEEP);
-    float v = m.subtract ? 0.0f : 1.0f;
-    fillShader_.set("uColor", v, v, v, 1.0f);
-    mesh.drawQuad(0, 0, float(p.canvasW), float(p.canvasH));
-  }
-  glDisable(GL_STENCIL_TEST);
-
-  if (feather > 0.5f) {
-    blurTmp_.resize(p.canvasW, p.canvasH, false, GL_R8);
-    float step = std::max(1.0f, feather / 12.0f);
-    blurShader_.use();
-    blurShader_.set("uTarget", float(p.canvasW), float(p.canvasH));
-    blurShader_.set("uTex", 0);
-    blurShader_.set("uSigma", feather / step / 2.0f);
-    blurTmp_.bind();
-    fb->texture().bind(0);
-    blurShader_.set("uDir", step / float(p.canvasW), 0.0f);
-    mesh.drawQuad(0, 0, float(p.canvasW), float(p.canvasH));
-    fb->bind();
-    blurTmp_.texture().bind(0);
-    blurShader_.set("uDir", 0.0f, step / float(p.canvasH));
-    mesh.drawQuad(0, 0, float(p.canvasW), float(p.canvasH));
-  }
-  Framebuffer::unbind();
+  masks_.render(l.masks, 1, 1, p.canvasW, p.canvasH, *fb, mesh);
 }
 
 void Compositor::render(const Project &p, const std::vector<LayerDraw> &draws,
@@ -170,10 +87,8 @@ void Compositor::render(const Project &p, const std::vector<LayerDraw> &draws,
 
   // Masks first: they need their own framebuffer bindings.
   for (auto &d : draws) {
-    bool hasMask = std::any_of(d.layer->masks.begin(), d.layer->masks.end(),
-                               [](const Mask &m) { return m.enabled && m.points.size() >= 3; });
-    if (hasMask) renderMask(p, *d.layer, mesh);
-    else masks_.erase(d.layer->id);
+    if (MaskRenderer::anyActive(d.layer->masks)) renderMask(p, *d.layer, mesh);
+    else maskFbs_.erase(d.layer->id);
   }
 
   canvas_.resize(W, H);
@@ -202,9 +117,9 @@ void Compositor::render(const Project &p, const std::vector<LayerDraw> &draws,
     case BlendMode::Screen: glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_COLOR); break;
     }
     d.texture->bind(0);
-    auto mask = masks_.find(l.id);
-    if (mask != masks_.end()) mask->second->texture().bind(1);
-    s.set("uUseMask", mask != masks_.end() ? 1 : 0);
+    auto mask = maskFbs_.find(l.id);
+    if (mask != maskFbs_.end()) mask->second->texture().bind(1);
+    s.set("uUseMask", mask != maskFbs_.end() ? 1 : 0);
     s.set("uOpacity", std::clamp(l.opacity * d.opacity * master, 0.0f, 1.0f));
     s.set("uBrightness", l.fx.brightness);
     s.set("uContrast", l.fx.contrast);

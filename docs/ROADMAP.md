@@ -24,6 +24,12 @@ Ordem pensada para **videomapping** e **instalações interativas**.
 ## ✅ v0.3
 - **LED mapping** por Art-Net e sACN, com monitor DMX e DMX master
 
+## ✅ v0.4
+- **Blend multi-projetor**: assistente de layout, compensação de nível de preto, cor por
+  projetor, grade de blend contínua, branco/preto de teste, máscaras por saída,
+  identificar saídas, sincronia por DwmFlush no Windows. Validado numericamente
+- Saídas abrem só quando solicitado; perspectiva côncava sem distorção
+
 ## ⚠️ Pendente de teste em Windows real
 Tudo foi compilado para Windows, mas **ainda não rodou numa máquina Windows**:
 Spout, WASAPI, DirectShow, D3D11VA e WinMM precisam de um teste de verdade.

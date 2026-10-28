@@ -513,6 +513,70 @@ void Workspace::drawOutputOverlay(App &app, ImDrawList *dl, ImVec2 origin, ImVec
   for (auto &v : pts) sp.push_back(toScreen(v));
   dl->AddPolyline(sp.data(), int(sp.size()), IM_COL32(90, 160, 255, 255), ImDrawFlags_Closed, 2);
 
+  // Output masks (projector space, 0..1).
+  for (size_t mi = 0; mi < o->masks.size(); ++mi) {
+    const Mask &m = o->masks[mi];
+    if (m.points.empty()) continue;
+    std::vector<ImVec2> sp;
+    for (auto &v : m.points) sp.push_back(toScreen(v));
+    bool active = int(mi) == app.sel.outMask && tool == Tool::Mask;
+    ImU32 col = m.subtract ? IM_COL32(255, 90, 90, active ? 255 : 130) : IM_COL32(80, 220, 255, active ? 255 : 130);
+    dl->AddPolyline(sp.data(), int(sp.size()), col, ImDrawFlags_Closed, active ? 2.0f : 1.0f);
+  }
+
+  if (tool == Tool::Mask) {
+    bool rclicked = ImGui::IsItemHovered() && ImGui::IsMouseClicked(ImGuiMouseButton_Right);
+    if (app.sel.outMask < 0 || app.sel.outMask >= int(o->masks.size())) {
+      if (!clicked) return;
+      Mask m;
+      m.name = "Máscara " + std::to_string(o->masks.size() + 1);
+      m.subtract = true;
+      m.feather = 20;
+      o->masks.push_back(m);
+      app.sel.outMask = int(o->masks.size()) - 1;
+    }
+    Mask &m = o->masks[size_t(app.sel.outMask)];
+    for (size_t i = 0; i < m.points.size(); ++i)
+      handle(dl, toScreen(m.points[i]), IM_COL32(255, 120, 120, 255), app.sel.outMaskPoint == int(i), true);
+    int nearIdx = -1;
+    float bestD = kPick;
+    for (size_t i = 0; i < m.points.size(); ++i) {
+      float d = dist(io.MousePos, toScreen(m.points[i]));
+      if (d < bestD) { bestD = d; nearIdx = int(i); }
+    }
+    if (rclicked && nearIdx >= 0) {
+      m.points.erase(m.points.begin() + nearIdx);
+      app.sel.outMaskPoint = -1;
+      app.edited();
+    } else if (clicked) {
+      if (nearIdx >= 0) {
+        app.sel.outMaskPoint = nearIdx;
+      } else {
+        // Insert on the nearest edge when close to one, otherwise append.
+        int at = int(m.points.size());
+        if (m.points.size() >= 3) {
+          float best = kPick / std::max(1.0f, size.x);
+          for (size_t i = 0; i < m.points.size(); ++i) {
+            float d = distToSegment(mn, m.points[i], m.points[(i + 1) % m.points.size()]);
+            if (d < best) { best = d; at = int(i) + 1; }
+          }
+        }
+        m.points.insert(m.points.begin() + at, mn);
+        app.sel.outMaskPoint = at;
+        app.edited();
+      }
+      dragging_ = true;
+      dragKind_ = 10;
+    }
+    if (dragging_ && dragKind_ == 10 && app.sel.outMaskPoint >= 0 && app.sel.outMaskPoint < int(m.points.size())) {
+      m.points[size_t(app.sel.outMaskPoint)] = mn;
+      app.edited();
+    }
+    dl->AddText({origin.x + 8, origin.y + 8}, IM_COL32(255, 255, 255, 220),
+                "Máscara da saída: clique adiciona ponto, arraste move, botão direito apaga.");
+    return;
+  }
+
   if (tool == Tool::Mesh) {
     for (int r = 0; r < w.meshRows; ++r)
       for (int c = 0; c < w.meshCols; ++c)

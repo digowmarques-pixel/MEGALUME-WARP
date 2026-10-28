@@ -21,8 +21,13 @@ struct Options {
   std::string screenshotOutput; // write output #1 preview to a PPM and exit
   int frames = 0;               // exit after N frames (0 = run forever)
   int launchColumn = -1;        // 1-based column to launch at start
-  bool noOutputs = false;       // do not open output windows
+  bool noOutputs = false;       // never open output windows
+  bool openOutputs = false;     // open output windows at start (installations)
   int width = 1600, height = 900;
+  std::string blend;             // "3x1:0.15:1920x1080" applies the blend assistant at start
+  int pattern = -1;              // test pattern for every output (TestPattern value)
+  float blackLevel = -1;         // black level compensation for every output
+  std::string screenshotOutputs; // prefix: writes <prefix>1.ppm... (1 px = 1 canvas px)
 };
 
 enum class Inspector { Layer, Cell, Media, Output, Led, Interaction, Project };
@@ -38,6 +43,7 @@ struct Selection {
   int mediaId = -1;
   int outputId = -1;
   int ledId = -1, dmxDeviceId = -1;
+  int outMask = -1, outMaskPoint = -1;
   Inspector inspector = Inspector::Layer;
 };
 
@@ -61,8 +67,12 @@ public:
   ~App();
   int run(const Options &opts);
 
-  Engine engine;
-  OutputManager outputs;
+  // Owned through pointers so their GPU objects can be released while the GL
+  // context still exists (end of run()); the references keep call sites simple.
+  std::unique_ptr<Engine> enginePtr_ = std::make_unique<Engine>();
+  std::unique_ptr<OutputManager> outputsPtr_ = std::make_unique<OutputManager>();
+  Engine &engine = *enginePtr_;
+  OutputManager &outputs = *outputsPtr_;
   Selection sel;
   GLFWwindow *window = nullptr;
 
@@ -87,6 +97,8 @@ public:
 
   float fps() const { return fps_; }
   bool requestQuit = false;
+  // Output windows open only when the user asks (toolbar / Ctrl+P / --outputs).
+  bool outputsOpen = false;
 
 private:
   void commitIfNeeded();

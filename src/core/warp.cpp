@@ -105,19 +105,47 @@ Vec2 Warp::meshInterp(float u, float v) const {
           catmull(rows[0].y, rows[1].y, rows[2].y, rows[3].y, ty)};
 }
 
-Vec2 Warp::map(float u, float v) const {
+bool Warp::perspectiveValid() const {
+  // The homography's w must keep one sign over the whole square. A concave
+  // (or nearly degenerate) quad sends part of the image through infinity,
+  // which shows up as wild stretched stripes.
   Mat3 h = Mat3::squareToQuad(corners);
-  if (meshCols == 2 && meshRows == 2 && meshIsIdentity()) return h.apply({u, v});
-  return h.apply(meshInterp(u, v));
+  const float uv[4][2] = {{0, 0}, {1, 0}, {1, 1}, {0, 1}};
+  for (auto &q : uv)
+    if (h.m[6] * q[0] + h.m[7] * q[1] + h.m[8] < 0.02f) return false;
+  return true;
+}
+
+Vec2 Warp::baseMap(Vec2 uv) const {
+  if (perspectiveValid()) return Mat3::squareToQuad(corners).apply(uv);
+  // Bilinear fallback: follows the four corners without any singularity.
+  Vec2 top = corners[0] + (corners[1] - corners[0]) * uv.x;
+  Vec2 bottom = corners[3] + (corners[2] - corners[3]) * uv.x;
+  return top + (bottom - top) * uv.y;
+}
+
+Vec2 Warp::map(float u, float v) const {
+  if (meshCols == 2 && meshRows == 2 && meshIsIdentity()) return baseMap({u, v});
+  return baseMap(meshInterp(u, v));
 }
 
 Vec2 Warp::unmapPerspective(Vec2 p) const {
-  return Mat3::squareToQuad(corners).inverse().apply(p);
+  if (perspectiveValid()) return Mat3::squareToQuad(corners).inverse().apply(p);
+  // Inverse bilinear by Newton iterations (converges in a few steps).
+  Vec2 uv{0.5f, 0.5f};
+  for (int it = 0; it < 12; ++it) {
+    Vec2 f = baseMap(uv) - p;
+    const float e = 1e-3f;
+    Vec2 du = (baseMap({uv.x + e, uv.y}) - baseMap(uv)) * (1.0f / e);
+    Vec2 dv = (baseMap({uv.x, uv.y + e}) - baseMap(uv)) * (1.0f / e);
+    float det = du.x * dv.y - du.y * dv.x;
+    if (std::fabs(det) < 1e-9f) break;
+    uv = {uv.x - (f.x * dv.y - f.y * dv.x) / det, uv.y - (du.x * f.y - du.y * f.x) / det};
+  }
+  return uv;
 }
 
-Vec2 Warp::meshPointDest(int c, int r) const {
-  return Mat3::squareToQuad(corners).apply(meshAt(c, r));
-}
+Vec2 Warp::meshPointDest(int c, int r) const { return baseMap(meshAt(c, r)); }
 
 Vec2 Warp::center() const {
   Vec2 s;
@@ -144,12 +172,14 @@ void Warp::rotateAround(Vec2 p, float a) {
 void Warp::tessellate(int n, float u0, float v0, float u1, float v1,
                       std::vector<float> &out) const {
   Mat3 h = Mat3::squareToQuad(corners);
+  bool persp = perspectiveValid();
   bool identity = meshCols == 2 && meshRows == 2 && meshIsIdentity();
   std::vector<Vec2> pos(size_t((n + 1) * (n + 1)));
   for (int j = 0; j <= n; ++j)
     for (int i = 0; i <= n; ++i) {
       float u = float(i) / float(n), v = float(j) / float(n);
-      pos[size_t(j * (n + 1) + i)] = h.apply(identity ? Vec2{u, v} : meshInterp(u, v));
+      Vec2 q = identity ? Vec2{u, v} : meshInterp(u, v);
+      pos[size_t(j * (n + 1) + i)] = persp ? h.apply(q) : baseMap(q);
     }
   auto push = [&](int i, int j) {
     const Vec2 &p = pos[size_t(j * (n + 1) + i)];

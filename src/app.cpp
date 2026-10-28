@@ -278,7 +278,22 @@ int App::run(const Options &opts) {
     newProject();
   }
   if (!engine.project.layers.empty() && sel.layerId < 0) sel.layerId = engine.project.layers.front().id;
+  if (!opts.blend.empty()) {
+    BlendLayoutParams bp;
+    if (std::sscanf(opts.blend.c_str(), "%dx%d:%f:%dx%d", &bp.cols, &bp.rows, &bp.overlapX, &bp.projW,
+                    &bp.projH) >= 3) {
+      bp.overlapY = bp.overlapX;
+      applyBlendLayout(engine.project, bp, -1, true);
+      std::printf("[blend] %dx%d projetores, canvas %dx%d\n", bp.cols, bp.rows, engine.project.canvasW,
+                  engine.project.canvasH);
+    }
+  }
+  for (auto &o : engine.project.outputs) {
+    if (opts.pattern >= 0 && opts.pattern < int(TestPattern::COUNT)) o.pattern = TestPattern(opts.pattern);
+    if (opts.blackLevel >= 0) o.blackLevel = {opts.blackLevel, opts.blackLevel, opts.blackLevel, 1};
+  }
   if (opts.launchColumn > 0) engine.launchColumn(opts.launchColumn - 1);
+  outputsOpen = opts.openOutputs;
 
   double last = glfwGetTime(), fpsTimer = last;
   int frame = 0, fpsFrames = 0;
@@ -331,6 +346,7 @@ int App::run(const Options &opts) {
       if (ctrl && ImGui::IsKeyPressed(ImGuiKey_O, false)) openDialog();
       if (ctrl && ImGui::IsKeyPressed(ImGuiKey_N, false)) newProject();
       if (ctrl && ImGui::IsKeyPressed(ImGuiKey_I, false)) importDialog();
+      if (ctrl && ImGui::IsKeyPressed(ImGuiKey_P, false)) outputsOpen = !outputsOpen;
       if (ctrl && ImGui::IsKeyPressed(ImGuiKey_Z)) shift ? redo() : undo();
       if (ctrl && ImGui::IsKeyPressed(ImGuiKey_Y)) redo();
       ui_->workspace.handleShortcuts(*this);
@@ -390,6 +406,17 @@ int App::run(const Options &opts) {
         glReadPixels(0, 0, fbw, fbh, GL_RGBA, GL_UNSIGNED_BYTE, px.data());
         writePpm(opts.screenshotUi, fbw, fbh, px, true);
       }
+      if (!opts.screenshotOutputs.empty()) {
+        for (size_t i = 0; i < engine.project.outputs.size(); ++i) {
+          const OutputConfig &o = engine.project.outputs[i];
+          Framebuffer fb;
+          fb.resize(int(o.srcW), int(o.srcH));
+          outputs.renderPreview(engine.project, o, int(i), engine.canvas().texture(), fb, engine.mesh,
+                                engine.time(), engine.blackout);
+          fb.readPixels(px);
+          writePpm(opts.screenshotOutputs + std::to_string(i + 1) + ".ppm", fb.width(), fb.height(), px, true);
+        }
+      }
       if (!opts.screenshotOutput.empty() && !engine.project.outputs.empty()) {
         Framebuffer fb;
         const OutputConfig &o = engine.project.outputs.front();
@@ -401,11 +428,13 @@ int App::run(const Options &opts) {
       }
     }
 
-    if (!opts.noOutputs) {
+    if (!opts.noOutputs && outputsOpen) {
       step("outputs sync");
       outputs.sync(engine.project);
       step("outputs render");
       outputs.render(engine.project, engine.canvas().texture(), engine.time(), engine.blackout);
+    } else if (outputs.openCount() > 0) {
+      outputs.shutdown(); // closed by the user
     }
     step("swap");
     glfwSwapBuffers(window);
@@ -417,6 +446,10 @@ int App::run(const Options &opts) {
 
   outputs.shutdown();
   engine.shutdown();
+  // GPU objects must die while the context is alive (before glfwTerminate).
+  ui_.reset();
+  outputsPtr_.reset();
+  enginePtr_.reset();
   ImGui_ImplOpenGL3_Shutdown();
   ImGui_ImplGlfw_Shutdown();
   ImGui::DestroyContext();

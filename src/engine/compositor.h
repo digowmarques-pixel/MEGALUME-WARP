@@ -3,6 +3,7 @@
 
 #include "core/project.h"
 #include "render/gpu.h"
+#include "render/mask.h"
 
 #include <map>
 #include <memory>
@@ -27,15 +28,15 @@ public:
   void render(const Project &p, const std::vector<LayerDraw> &draws, DynamicMesh &mesh,
               float masterOpacity);
   Framebuffer &canvas() { return canvas_; }
-  void releaseLayer(int layerId) { masks_.erase(layerId); }
+  void releaseLayer(int layerId) { maskFbs_.erase(layerId); }
 
 private:
   void renderMask(const Project &p, const Layer &l, DynamicMesh &mesh);
 
-  Shader layerShader_, fillShader_, blurShader_;
+  Shader layerShader_;
   Framebuffer canvas_;
-  Framebuffer blurTmp_;
-  std::map<int, std::unique_ptr<Framebuffer>> masks_;
+  MaskRenderer masks_;
+  std::map<int, std::unique_ptr<Framebuffer>> maskFbs_;
 };
 
 } // namespace lumen

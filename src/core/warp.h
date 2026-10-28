@@ -51,6 +51,9 @@ struct Warp {
   Vec2 unmapPerspective(Vec2 p) const;
   // Position of mesh control point (c,r) in destination space.
   Vec2 meshPointDest(int c, int r) const;
+  // False when the corners make a concave / degenerate quad: then the warp
+  // uses bilinear interpolation instead of a (singular) perspective.
+  bool perspectiveValid() const;
 
   Vec2 center() const;
   // Bounding-box helpers used by the transform tools.
@@ -64,6 +67,7 @@ struct Warp {
 
 private:
   Vec2 meshInterp(float u, float v) const;
+  Vec2 baseMap(Vec2 uv) const; // corners only: perspective, or bilinear fallback
 };
 
 inline bool pointInPolygon(Vec2 p, const std::vector<Vec2> &poly) {

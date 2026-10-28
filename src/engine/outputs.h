@@ -4,6 +4,9 @@
 
 #include "core/project.h"
 #include "render/gpu.h"
+#include "render/mask.h"
+
+#include <map>
 
 #include <memory>
 #include <string>
@@ -36,6 +39,10 @@ public:
   static std::vector<MonitorInfo> monitors();
   int openCount() const { return int(windows_.size()); }
   bool windowFor(int outputId) const;
+  // Shows the numbered test card on every output for a few seconds.
+  void identify(double seconds = 4.0);
+  bool identifying() const;
+  float renderMs() const { return renderMs_; } // CPU time of the last output pass
 
 private:
   struct Window {
@@ -48,13 +55,19 @@ private:
   };
   void destroy(Window &w);
   void draw(const Project &p, const OutputConfig &o, int index, const Texture &canvas,
-            DynamicMesh &mesh, int w, int h, double time, bool blackout);
+            const Texture *mask, DynamicMesh &mesh, int w, int h, double time, bool blackout);
   void updateSwapIntervals();
+  const Texture *outputMask(const OutputConfig &o, int w, int h, bool preview, DynamicMesh &mesh);
 
   GLFWwindow *main_ = nullptr;
   Shader shader_;
   std::vector<std::unique_ptr<Window>> windows_;
   bool swapDirty_ = true;
+  MaskRenderer masks_;
+  std::map<int, std::unique_ptr<Framebuffer>> masks2_, previewMasks_;
+  DynamicMesh mainMesh_; // main-context mesh for mask rendering
+  double identifyUntil_ = 0;
+  float renderMs_ = 0;
 };
 
 } // namespace lumen

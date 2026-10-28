@@ -213,6 +213,44 @@ Project Project::makeDefault() {
   return p;
 }
 
+void applyBlendLayout(Project &p, const BlendLayoutParams &params, int firstMonitor, bool scaleContent) {
+  BlendLayout lay = computeBlendLayout(params);
+  if (scaleContent && p.canvasW > 0 && p.canvasH > 0) {
+    float sx = float(lay.canvasW) / float(p.canvasW), sy = float(lay.canvasH) / float(p.canvasH);
+    auto scale = [&](Vec2 &v) { v = {v.x * sx, v.y * sy}; };
+    for (auto &l : p.layers) {
+      for (auto &sl : l.slices)
+        for (auto &c : sl.warp.corners) scale(c);
+      for (auto &m : l.masks)
+        for (auto &pt : m.points) scale(pt);
+      scale(l.transform.position);
+    }
+    for (auto &m : p.ledMappings)
+      for (auto &c : m.area.corners) scale(c);
+  }
+  p.canvasW = lay.canvasW;
+  p.canvasH = lay.canvasH;
+
+  size_t n = lay.projectors.size();
+  while (p.outputs.size() < n) p.addOutput();
+  p.outputs.resize(n);
+  for (size_t i = 0; i < n; ++i) {
+    OutputConfig &o = p.outputs[i];
+    const BlendProjector &b = lay.projectors[i];
+    o.name = "Projetor " + std::to_string(i + 1);
+    o.enabled = true;
+    o.srcX = b.srcX;
+    o.srcY = b.srcY;
+    o.srcW = b.srcW;
+    o.srcH = b.srcH;
+    o.softEdge.left = b.left;
+    o.softEdge.right = b.right;
+    o.softEdge.top = b.top;
+    o.softEdge.bottom = b.bottom;
+    if (firstMonitor >= 0) o.monitor = firstMonitor + int(i);
+  }
+}
+
 // ------------------------------------------------------------------ paths
 
 static std::string lower(std::string s) {
@@ -295,6 +333,31 @@ static void fromJson(const json &j, Warp &w) {
   }
 }
 
+static json masksToJson(const std::vector<Mask> &masks) {
+  json arr = json::array();
+  for (auto &m : masks) {
+    json jm = {{"name", m.name}, {"enabled", m.enabled}, {"subtract", m.subtract},
+               {"feather", m.feather}, {"points", json::array()}};
+    for (auto &pt : m.points) jm["points"].push_back(toJson(pt));
+    arr.push_back(jm);
+  }
+  return arr;
+}
+
+static std::vector<Mask> masksFromJson(const json &arr) {
+  std::vector<Mask> out;
+  for (auto &jm : arr) {
+    Mask m;
+    m.name = jm.value("name", "Mask");
+    m.enabled = jm.value("enabled", true);
+    m.subtract = jm.value("subtract", false);
+    m.feather = jm.value("feather", 0.0f);
+    for (auto &pt : jm.value("points", json::array())) m.points.push_back(vecFrom(pt));
+    out.push_back(m);
+  }
+  return out;
+}
+
 template <typename E> static E enumFrom(const json &j, const char *key, E def, int count) {
   int v = j.value(key, int(def));
   return (v >= 0 && v < count) ? E(v) : def;
@@ -361,13 +424,7 @@ std::string serializeProject(const Project &p, const std::string &baseDir) {
     for (auto &s : l.slices)
       jl["slices"].push_back({{"name", s.name}, {"enabled", s.enabled},
                               {"crop", {s.u0, s.v0, s.u1, s.v1}}, {"warp", toJson(s.warp)}});
-    jl["masks"] = json::array();
-    for (auto &m : l.masks) {
-      json jm = {{"name", m.name}, {"enabled", m.enabled}, {"subtract", m.subtract},
-                 {"feather", m.feather}, {"points", json::array()}};
-      for (auto &pt : m.points) jm["points"].push_back(toJson(pt));
-      jl["masks"].push_back(jm);
-    }
+    jl["masks"] = masksToJson(l.masks);
     j["layers"].push_back(jl);
   }
 
@@ -390,7 +447,11 @@ std::string serializeProject(const Project &p, const std::string &baseDir) {
          {"softEdge", {{"left", o.softEdge.left}, {"right", o.softEdge.right},
                        {"top", o.softEdge.top}, {"bottom", o.softEdge.bottom},
                        {"gamma", o.softEdge.gamma}, {"power", o.softEdge.power}}},
-         {"testCard", o.testCard}});
+         {"pattern", int(o.pattern)},
+         {"color", {{"brightness", o.color.brightness}, {"contrast", o.color.contrast},
+                    {"gamma", o.color.gamma}, {"gain", toJson(o.color.gain)}}},
+         {"blackLevel", toJson(o.blackLevel)},
+         {"masks", masksToJson(o.masks)}});
   }
 
   for (auto &m : p.mappings)
@@ -541,15 +602,7 @@ bool deserializeProject(const std::string &text, const std::string &baseDir, Pro
         s.warp.setRect({0, 0}, {float(p.canvasW), float(p.canvasH)});
         l.slices.push_back(s);
       }
-      for (auto &jm : jl.value("masks", json::array())) {
-        Mask m;
-        m.name = jm.value("name", "Mask");
-        m.enabled = jm.value("enabled", true);
-        m.subtract = jm.value("subtract", false);
-        m.feather = jm.value("feather", 0.0f);
-        for (auto &pt : jm.value("points", json::array())) m.points.push_back(vecFrom(pt));
-        l.masks.push_back(m);
-      }
+      l.masks = masksFromJson(jl.value("masks", json::array()));
       p.layers.push_back(l);
     }
 
@@ -595,7 +648,17 @@ bool deserializeProject(const std::string &text, const std::string &baseDir, Pro
         o.softEdge.gamma = s.value("gamma", 2.2f);
         o.softEdge.power = s.value("power", 2.0f);
       }
-      o.testCard = jo.value("testCard", false);
+      if (jo.contains("pattern")) o.pattern = enumFrom(jo, "pattern", TestPattern::None, int(TestPattern::COUNT));
+      else if (jo.value("testCard", false)) o.pattern = TestPattern::Card; // v0.1 files
+      if (jo.contains("color")) {
+        auto &c = jo["color"];
+        o.color.brightness = c.value("brightness", 1.0f);
+        o.color.contrast = c.value("contrast", 1.0f);
+        o.color.gamma = c.value("gamma", 1.0f);
+        if (c.contains("gain")) fromJson(c["gain"], o.color.gain);
+      }
+      if (jo.contains("blackLevel")) fromJson(jo["blackLevel"], o.blackLevel);
+      o.masks = masksFromJson(jo.value("masks", json::array()));
       p.outputs.push_back(o);
     }
 

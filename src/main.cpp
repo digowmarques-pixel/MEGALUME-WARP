@@ -13,12 +13,17 @@ static void usage() {
       "Lumen %s\n"
       "uso: lumen [projeto.lumen] [opções]\n"
       "  --launch N              dispara a coluna N ao abrir\n"
-      "  --no-outputs            não abre as janelas de saída\n"
+      "  --outputs               abre as janelas de saída ao iniciar (instalações)\n"
+      "  --no-outputs            nunca abre as janelas de saída\n"
       "  --size LxA              tamanho da janela de controle\n"
       "  --frames N              sai depois de N quadros (testes)\n"
       "  --screenshot-canvas F   salva o canvas em F (.ppm) no último quadro\n"
       "  --screenshot-ui F       salva a interface em F (.ppm) no último quadro\n"
-      "  --screenshot-output F   salva a saída 1 em F (.ppm) no último quadro\n",
+      "  --screenshot-output F   salva a saída 1 em F (.ppm) no último quadro\n"
+      "  --screenshot-outputs P  salva todas as saídas em P1.ppm, P2.ppm... (1 px = 1 px do canvas)\n"
+      "  --blend CxL:SOBR:LxA    aplica o assistente de blend, ex.: 3x1:0.15:1920x1080\n"
+      "  --pattern N             padrão de teste em todas as saídas (0 nenhum, 1 card, 2 grade, 3 branco, 4 preto)\n"
+      "  --black-level V         compensação de preto em todas as saídas\n",
       LUMEN_VERSION);
 }
 
@@ -39,10 +44,15 @@ int main(int argc, char **argv) {
     if (a == "-h" || a == "--help") { usage(); return 0; }
     else if (a == "--launch") opts.launchColumn = std::atoi(next().c_str());
     else if (a == "--no-outputs") opts.noOutputs = true;
+    else if (a == "--outputs") opts.openOutputs = true;
     else if (a == "--frames") opts.frames = std::atoi(next().c_str());
     else if (a == "--screenshot-canvas") opts.screenshotCanvas = next();
     else if (a == "--screenshot-ui") opts.screenshotUi = next();
     else if (a == "--screenshot-output") opts.screenshotOutput = next();
+    else if (a == "--screenshot-outputs") opts.screenshotOutputs = next();
+    else if (a == "--blend") opts.blend = next();
+    else if (a == "--pattern") opts.pattern = std::atoi(next().c_str());
+    else if (a == "--black-level") opts.blackLevel = float(std::atof(next().c_str()));
     else if (a == "--size") {
       std::string s = next();
       std::sscanf(s.c_str(), "%dx%d", &opts.width, &opts.height);
