@@ -1,0 +1,1158 @@
+#include "ui/ui.h"
+
+#include "app.h"
+#include "engine/outputs.h"
+#include "platform/platform.h"
+
+#include <GLFW/glfw3.h>
+#include <imgui.h>
+#include <imgui_internal.h>
+
+#include <algorithm>
+#include <cctype>
+#include <cmath>
+#include <cstdio>
+#include <filesystem>
+
+namespace lumen {
+
+namespace {
+
+ImTextureID texId(const Texture &t) { return ImTextureID(intptr_t(t.id())); }
+
+// Colours of the Lumen theme.
+const ImVec4 kAccent{0.98f, 0.62f, 0.18f, 1.0f};
+const ImU32 kAccentU32 = IM_COL32(250, 158, 46, 255);
+const ImU32 kPlayingU32 = IM_COL32(80, 200, 120, 255);
+
+bool colorEdit(const char *label, Color &c, bool alpha = false) {
+  float v[4] = {c.r, c.g, c.b, c.a};
+  bool changed = alpha ? ImGui::ColorEdit4(label, v, ImGuiColorEditFlags_Float)
+                       : ImGui::ColorEdit3(label, v, ImGuiColorEditFlags_Float);
+  if (changed) c = {v[0], v[1], v[2], v[3]};
+  return changed;
+}
+
+bool inputText(const char *label, std::string &s) {
+  char buf[512];
+  std::snprintf(buf, sizeof(buf), "%s", s.c_str());
+  if (ImGui::InputText(label, buf, sizeof(buf))) {
+    s = buf;
+    return true;
+  }
+  return false;
+}
+
+void helpMarker(const char *text) {
+  ImGui::SameLine();
+  ImGui::TextDisabled("(?)");
+  if (ImGui::BeginItemTooltip()) {
+    ImGui::PushTextWrapPos(ImGui::GetFontSize() * 30.0f);
+    ImGui::TextUnformatted(text);
+    ImGui::PopTextWrapPos();
+    ImGui::EndTooltip();
+  }
+}
+
+// Draws a texture fitted inside a box, keeping its aspect ratio.
+void fittedImage(const Texture *tex, ImVec2 box, bool flip = false) {
+  ImVec2 cursor = ImGui::GetCursorScreenPos();
+  ImDrawList *dl = ImGui::GetWindowDrawList();
+  dl->AddRectFilled(cursor, {cursor.x + box.x, cursor.y + box.y}, IM_COL32(20, 20, 22, 255));
+  if (tex && !tex->empty()) {
+    float s = std::min(box.x / float(tex->width()), box.y / float(tex->height()));
+    ImVec2 sz{float(tex->width()) * s, float(tex->height()) * s};
+    ImVec2 p{cursor.x + (box.x - sz.x) * 0.5f, cursor.y + (box.y - sz.y) * 0.5f};
+    dl->AddImage(texId(*tex), p, {p.x + sz.x, p.y + sz.y}, flip ? ImVec2(0, 1) : ImVec2(0, 0),
+                 flip ? ImVec2(1, 0) : ImVec2(1, 1));
+  }
+  ImGui::Dummy(box);
+}
+
+const char *mediaTypeLabel(MediaType t) {
+  switch (t) {
+  case MediaType::Video: return "Vídeo";
+  case MediaType::Image: return "Imagem";
+  case MediaType::Generator: return "Gerador";
+  }
+  return "";
+}
+
+} // namespace
+
+void Ui::setup() {
+  ImGuiIO &io = ImGui::GetIO();
+  // No keyboard navigation: Space must always mean GO, never "press focused button".
+  io.ConfigFlags &= ~ImGuiConfigFlags_NavEnableKeyboard;
+  io.IniFilename = nullptr; // fixed layout, nothing to persist
+
+  // Prefer a proper system UI font; fall back to the built-in one.
+  const char *fonts[] = {"C:/Windows/Fonts/segoeui.ttf",
+                         "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+                         "/System/Library/Fonts/SFNS.ttf"};
+  bool loaded = false;
+  for (const char *f : fonts) {
+    std::error_code ec;
+    if (std::filesystem::exists(f, ec)) {
+      if (io.Fonts->AddFontFromFileTTF(f, 16.0f, nullptr, io.Fonts->GetGlyphRangesDefault())) {
+        loaded = true;
+        break;
+      }
+    }
+  }
+  if (!loaded) io.Fonts->AddFontDefault();
+
+  ImGui::StyleColorsDark();
+  ImGuiStyle &s = ImGui::GetStyle();
+  s.WindowRounding = 0;
+  s.FrameRounding = 3;
+  s.GrabRounding = 3;
+  s.TabRounding = 3;
+  s.WindowBorderSize = 1;
+  s.FramePadding = {6, 4};
+  s.ItemSpacing = {6, 5};
+  ImVec4 *c = s.Colors;
+  c[ImGuiCol_WindowBg] = {0.11f, 0.11f, 0.12f, 1};
+  c[ImGuiCol_ChildBg] = {0.09f, 0.09f, 0.10f, 1};
+  c[ImGuiCol_TitleBg] = c[ImGuiCol_TitleBgActive] = {0.14f, 0.14f, 0.15f, 1};
+  c[ImGuiCol_Header] = {0.98f, 0.62f, 0.18f, 0.35f};
+  c[ImGuiCol_HeaderHovered] = {0.98f, 0.62f, 0.18f, 0.55f};
+  c[ImGuiCol_HeaderActive] = {0.98f, 0.62f, 0.18f, 0.8f};
+  c[ImGuiCol_Button] = {0.22f, 0.22f, 0.24f, 1};
+  c[ImGuiCol_ButtonHovered] = {0.32f, 0.32f, 0.35f, 1};
+  c[ImGuiCol_ButtonActive] = {0.98f, 0.62f, 0.18f, 0.9f};
+  c[ImGuiCol_FrameBg] = {0.17f, 0.17f, 0.19f, 1};
+  c[ImGuiCol_FrameBgHovered] = {0.23f, 0.23f, 0.26f, 1};
+  c[ImGuiCol_SliderGrab] = c[ImGuiCol_CheckMark] = kAccent;
+  c[ImGuiCol_SliderGrabActive] = {1.0f, 0.75f, 0.35f, 1};
+  c[ImGuiCol_Tab] = {0.16f, 0.16f, 0.18f, 1};
+  c[ImGuiCol_TabHovered] = {0.98f, 0.62f, 0.18f, 0.6f};
+  c[ImGuiCol_TabSelected] = {0.98f, 0.62f, 0.18f, 0.45f};
+}
+
+void Ui::draw(App &app) {
+  ImGuiViewport *vp = ImGui::GetMainViewport();
+  menuBar(app);
+
+  const float toolbarH = 46, statusH = 26;
+  const float libraryW = std::clamp(vp->WorkSize.x * 0.17f, 220.0f, 320.0f);
+  const float inspectorW = std::clamp(vp->WorkSize.x * 0.24f, 320.0f, 440.0f);
+  const float x0 = vp->WorkPos.x, y0 = vp->WorkPos.y;
+  const float W = vp->WorkSize.x, H = vp->WorkSize.y;
+  const float bodyY = y0 + toolbarH, bodyH = H - toolbarH - statusH;
+  const float centerW = W - libraryW - inspectorW;
+  const float dashH = std::clamp(bodyH * 0.38f, 180.0f, 420.0f);
+
+  ImGuiWindowFlags fixed = ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize |
+                           ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoBringToFrontOnFocus;
+
+  ImGui::SetNextWindowPos({x0, y0});
+  ImGui::SetNextWindowSize({W, toolbarH});
+  ImGui::Begin("##toolbar", nullptr, fixed | ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoScrollbar);
+  toolbar(app);
+  ImGui::End();
+
+  ImGui::SetNextWindowPos({x0, bodyY});
+  ImGui::SetNextWindowSize({libraryW, bodyH});
+  ImGui::Begin("Biblioteca", nullptr, fixed);
+  library(app);
+  ImGui::End();
+
+  ImGui::SetNextWindowPos({x0 + libraryW, bodyY});
+  ImGui::SetNextWindowSize({centerW, bodyH - dashH});
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {4, 4});
+  ImGui::Begin("Workspace", nullptr, fixed | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+  workspace.draw(app, ImGui::GetContentRegionAvail());
+  ImGui::End();
+  ImGui::PopStyleVar();
+
+  ImGui::SetNextWindowPos({x0 + libraryW, bodyY + bodyH - dashH});
+  ImGui::SetNextWindowSize({centerW, dashH});
+  ImGui::Begin("Dashboard", nullptr, fixed);
+  dashboard(app);
+  ImGui::End();
+
+  ImGui::SetNextWindowPos({x0 + W - inspectorW, bodyY});
+  ImGui::SetNextWindowSize({inspectorW, bodyH});
+  ImGui::Begin("Propriedades", nullptr, fixed);
+  inspector(app);
+  ImGui::End();
+
+  ImGui::SetNextWindowPos({x0, y0 + H - statusH});
+  ImGui::SetNextWindowSize({W, statusH});
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {8, 4});
+  ImGui::Begin("##status", nullptr, fixed | ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoScrollbar);
+  statusBar(app);
+  ImGui::End();
+  ImGui::PopStyleVar();
+
+  if (showDemo_) ImGui::ShowDemoWindow(&showDemo_);
+  if (showHelp_) {
+    ImGui::SetNextWindowSize({520, 460}, ImGuiCond_FirstUseEver);
+    if (ImGui::Begin("Atalhos e ajuda", &showHelp_)) {
+      ImGui::SeparatorText("Show");
+      ImGui::BulletText("Espaço: GO (próxima coluna)   |   Shift+Espaço: coluna anterior");
+      ImGui::BulletText("Esc: parar tudo com fade   |   B: blackout");
+      ImGui::BulletText("Clique numa célula: dispara só aquela layer");
+      ImGui::SeparatorText("Workspace / mapping");
+      ImGui::BulletText("V: selecionar/mover   M: perspectiva (4 cantos)");
+      ImGui::BulletText("G: malha (mesh warp)   K: máscara");
+      ImGui::BulletText("Tab: próximo canto/ponto   Setas: ajuste fino (Shift = 10px)");
+      ImGui::BulletText("Roda do mouse: zoom   Botão do meio / Alt+arrastar: mover a vista");
+      ImGui::BulletText("F: enquadrar   Máscara: clique adiciona ponto, botão direito apaga");
+      ImGui::SeparatorText("Projeto");
+      ImGui::BulletText("Ctrl+N novo, Ctrl+O abrir, Ctrl+S salvar, Ctrl+Shift+S salvar como");
+      ImGui::BulletText("Ctrl+Z desfazer, Ctrl+Y / Ctrl+Shift+Z refazer, Ctrl+I importar");
+      ImGui::BulletText("Arraste arquivos do Explorer para a janela para importar");
+      ImGui::SeparatorText("OSC");
+      ImGui::TextWrapped("Envie mensagens para a porta configurada (padrão 8000). "
+                         "Exemplos: /lumen/go, /lumen/column/launch 2, /lumen/layer/1/opacity 0.5. "
+                         "Veja docs/OSC.md para a lista completa.");
+    }
+    ImGui::End();
+  }
+}
+
+void Ui::menuBar(App &app) {
+  if (!ImGui::BeginMainMenuBar()) return;
+  if (ImGui::BeginMenu("Arquivo")) {
+    if (ImGui::MenuItem("Novo projeto", "Ctrl+N")) app.newProject();
+    if (ImGui::MenuItem("Abrir...", "Ctrl+O")) app.openDialog();
+    if (ImGui::MenuItem("Salvar", "Ctrl+S")) app.saveProject(false);
+    if (ImGui::MenuItem("Salvar como...", "Ctrl+Shift+S")) app.saveProject(true);
+    ImGui::Separator();
+    if (ImGui::MenuItem("Importar mídia...", "Ctrl+I")) app.importDialog();
+    ImGui::Separator();
+    if (ImGui::MenuItem("Sair")) app.requestQuit = true;
+    ImGui::EndMenu();
+  }
+  if (ImGui::BeginMenu("Editar")) {
+    if (ImGui::MenuItem("Desfazer", "Ctrl+Z")) app.undo();
+    if (ImGui::MenuItem("Refazer", "Ctrl+Y")) app.redo();
+    ImGui::Separator();
+    if (ImGui::MenuItem("Nova layer")) {
+      Layer &l = app.engine.project.addLayer();
+      app.sel.layerId = l.id;
+      app.edited();
+    }
+    if (ImGui::MenuItem("Nova coluna")) {
+      app.engine.project.addColumn();
+      app.edited();
+    }
+    ImGui::EndMenu();
+  }
+  if (ImGui::BeginMenu("Saídas")) {
+    if (ImGui::MenuItem("Adicionar saída")) {
+      OutputConfig &o = app.engine.project.addOutput();
+      app.sel.outputId = o.id;
+      app.sel.inspector = Inspector::Output;
+      app.edited();
+    }
+    ImGui::Separator();
+    auto mons = OutputManager::monitors();
+    ImGui::TextDisabled("Monitores detectados:");
+    for (size_t i = 0; i < mons.size(); ++i)
+      ImGui::TextDisabled("  %zu: %s  %dx%d @%dHz", i + 1, mons[i].name.c_str(), mons[i].w,
+                          mons[i].h, mons[i].refresh);
+    ImGui::EndMenu();
+  }
+  if (ImGui::BeginMenu("Ajuda")) {
+    if (ImGui::MenuItem("Atalhos e ajuda", "F1")) showHelp_ = true;
+    ImGui::MenuItem("Demo do ImGui", nullptr, &showDemo_);
+    ImGui::Separator();
+    ImGui::TextDisabled("Lumen %s", LUMEN_VERSION);
+    ImGui::EndMenu();
+  }
+  ImGui::EndMainMenuBar();
+}
+
+void Ui::toolbar(App &app) {
+  Engine &e = app.engine;
+  ImGui::SetCursorPosY(ImGui::GetCursorPosY() + 2);
+
+  ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.15f, 0.55f, 0.3f, 1));
+  ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.2f, 0.7f, 0.4f, 1));
+  if (ImGui::Button("  GO  ", {80, 30})) e.go();
+  ImGui::PopStyleColor(2);
+  ImGui::SetItemTooltip("Dispara a próxima coluna (Espaço)");
+  ImGui::SameLine();
+  if (ImGui::Button("<", {30, 30})) e.back();
+  ImGui::SetItemTooltip("Coluna anterior (Shift+Espaço)");
+  ImGui::SameLine();
+  if (ImGui::Button("Parar", {60, 30})) e.stopAll();
+  ImGui::SetItemTooltip("Para tudo com fade (Esc)");
+  ImGui::SameLine();
+  if (e.blackout) {
+    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.75f, 0.15f, 0.15f, 1));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.9f, 0.2f, 0.2f, 1));
+  }
+  if (ImGui::Button("Blackout", {80, 30})) e.blackout = !e.blackout;
+  if (e.blackout) ImGui::PopStyleColor(2);
+  ImGui::SetItemTooltip("Escurece todas as saídas (B)");
+
+  ImGui::SameLine(0, 20);
+  ImGui::SetNextItemWidth(120);
+  ImGui::SetCursorPosY(ImGui::GetCursorPosY() + 5);
+  ImGui::SliderFloat("Master", &e.masterOpacity, 0, 1, "%.2f");
+
+  ImGui::SameLine(0, 20);
+  ImGui::SetNextItemWidth(110);
+  if (ImGui::DragFloat("Fade padrão", &e.project.defaultTransition, 0.05f, 0, 30, "%.2f s"))
+    app.edited();
+
+  ImGui::SameLine(0, 24);
+  const char *tools[] = {"Selecionar (V)", "Perspectiva (M)", "Malha (G)", "Máscara (K)"};
+  for (int i = 0; i < 4; ++i) {
+    bool active = int(workspace.tool) == i;
+    if (active) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.98f, 0.62f, 0.18f, 0.7f));
+    if (ImGui::Button(tools[i], {0, 30})) workspace.tool = Tool(i);
+    if (active) ImGui::PopStyleColor();
+    ImGui::SameLine();
+  }
+
+  ImGui::SameLine(0, 20);
+  ImGui::SetCursorPosY(ImGui::GetCursorPosY() + 6);
+  int col = e.activeColumn();
+  if (col >= 0 && col < int(e.project.columns.size()))
+    ImGui::TextColored(kAccent, "No ar: %d · %s", col + 1, e.project.columns[size_t(col)].name.c_str());
+  else
+    ImGui::TextDisabled("Nada no ar");
+}
+
+void Ui::library(App &app) {
+  Project &p = app.engine.project;
+  if (ImGui::Button("Importar...")) app.importDialog();
+  ImGui::SameLine();
+  if (ImGui::Button("+ Gerador")) ImGui::OpenPopup("gen");
+  if (ImGui::BeginPopup("gen")) {
+    for (int k = 0; k < int(GeneratorKind::COUNT); ++k)
+      if (ImGui::MenuItem(generatorName(GeneratorKind(k)))) {
+        MediaItem &m = p.addGenerator(GeneratorKind(k));
+        app.sel.mediaId = m.id;
+        app.sel.inspector = Inspector::Media;
+        app.edited();
+      }
+    ImGui::EndPopup();
+  }
+  ImGui::SetNextItemWidth(-1);
+  ImGui::InputTextWithHint("##filter", "Buscar mídia...", filterText_, sizeof(filterText_));
+  ImGui::Separator();
+
+  ImGui::BeginChild("##items");
+  std::string filter = filterText_;
+  std::transform(filter.begin(), filter.end(), filter.begin(), [](unsigned char ch) { return char(std::tolower(ch)); });
+  int removeId = -1;
+  for (auto &m : p.library) {
+    std::string lname = m.name;
+    std::transform(lname.begin(), lname.end(), lname.begin(), [](unsigned char ch) { return char(std::tolower(ch)); });
+    if (!filter.empty() && lname.find(filter) == std::string::npos) continue;
+
+    ImGui::PushID(m.id);
+    bool selected = app.sel.mediaId == m.id && app.sel.inspector == Inspector::Media;
+    ImVec2 start = ImGui::GetCursorScreenPos();
+    if (ImGui::Selectable("##item", selected, 0, {0, 48})) {
+      app.sel.mediaId = m.id;
+      app.sel.inspector = Inspector::Media;
+    }
+    if (ImGui::BeginDragDropSource()) {
+      ImGui::SetDragDropPayload("LUMEN_MEDIA", &m.id, sizeof(int));
+      ImGui::Text("%s", m.name.c_str());
+      ImGui::EndDragDropSource();
+    }
+    if (ImGui::BeginPopupContextItem()) {
+      if (ImGui::MenuItem("Remover da biblioteca")) removeId = m.id;
+      ImGui::EndPopup();
+    }
+    const Texture *thumb = app.engine.cache.thumbnail(m, app.engine.generators, app.engine.mesh);
+    ImDrawList *dl = ImGui::GetWindowDrawList();
+    ImVec2 tl{start.x + 2, start.y + 2}, br{start.x + 78, start.y + 46};
+    dl->AddRectFilled(tl, br, IM_COL32(15, 15, 15, 255));
+    if (thumb && !thumb->empty()) dl->AddImage(texId(*thumb), tl, br);
+    else dl->AddText({tl.x + 6, tl.y + 14}, IM_COL32(200, 80, 80, 255), "erro");
+    dl->AddText({start.x + 86, start.y + 6}, IM_COL32(230, 230, 230, 255), m.name.c_str());
+    dl->AddText({start.x + 86, start.y + 25}, IM_COL32(140, 140, 140, 255), mediaTypeLabel(m.type));
+    ImGui::PopID();
+  }
+  if (p.library.empty())
+    ImGui::TextWrapped("Arraste vídeos ou imagens para esta janela, ou clique em Importar. "
+                       "Geradores (test card, grade...) ajudam a alinhar projetores.");
+  ImGui::EndChild();
+
+  if (removeId >= 0) {
+    p.removeMedia(removeId);
+    app.engine.cache.invalidate(removeId);
+    if (app.sel.mediaId == removeId) app.sel.mediaId = -1;
+    app.edited();
+  }
+}
+
+void Ui::dashboard(App &app) {
+  Engine &e = app.engine;
+  Project &p = e.project;
+
+  if (ImGui::Button("+ Layer")) {
+    Layer &l = p.addLayer();
+    app.sel.layerId = l.id;
+    app.sel.slice = 0;
+    app.edited();
+  }
+  ImGui::SameLine();
+  if (ImGui::Button("+ Coluna")) {
+    p.addColumn();
+    app.edited();
+  }
+  ImGui::SameLine();
+  ImGui::TextDisabled("Arraste mídias da biblioteca para as células. Clique numa célula para disparar.");
+
+  const float cellW = 116, cellH = 74, nameW = 150;
+  int ncols = int(p.columns.size());
+  ImGuiTableFlags flags = ImGuiTableFlags_ScrollX | ImGuiTableFlags_ScrollY |
+                          ImGuiTableFlags_BordersInner | ImGuiTableFlags_RowBg;
+  if (!ImGui::BeginTable("##dash", ncols + 1, flags)) return;
+  ImGui::TableSetupScrollFreeze(1, 1);
+  ImGui::TableSetupColumn("##layers", ImGuiTableColumnFlags_WidthFixed, nameW);
+  for (int c = 0; c < ncols; ++c)
+    ImGui::TableSetupColumn(p.columns[size_t(c)].name.c_str(), ImGuiTableColumnFlags_WidthFixed, cellW);
+
+  // Header row: one launch button per column.
+  ImGui::TableNextRow(ImGuiTableRowFlags_Headers);
+  ImGui::TableSetColumnIndex(0);
+  ImGui::TextDisabled("Layers \\ Cues");
+  int removeColumn = -1, moveColumn = -1, moveDir = 0;
+  for (int c = 0; c < ncols; ++c) {
+    ImGui::TableSetColumnIndex(c + 1);
+    ImGui::PushID(p.columns[size_t(c)].id);
+    bool active = e.activeColumn() == c;
+    if (active) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.98f, 0.62f, 0.18f, 0.85f));
+    char label[96];
+    std::snprintf(label, sizeof(label), "%d  %s", c + 1, p.columns[size_t(c)].name.c_str());
+    if (ImGui::Button(label, {cellW - 4, 0})) e.launchColumn(c);
+    if (active) ImGui::PopStyleColor();
+    if (ImGui::BeginPopupContextItem()) {
+      ImGui::SetNextItemWidth(160);
+      if (inputText("Nome", p.columns[size_t(c)].name)) app.edited();
+      ImGui::SetNextItemWidth(160);
+      float &tr = p.columns[size_t(c)].transition;
+      bool custom = tr >= 0;
+      if (ImGui::Checkbox("Fade próprio", &custom)) {
+        tr = custom ? p.defaultTransition : -1;
+        app.edited();
+      }
+      if (custom) {
+        ImGui::SetNextItemWidth(160);
+        if (ImGui::DragFloat("Fade (s)", &tr, 0.05f, 0, 60)) app.edited();
+      }
+      if (ImGui::MenuItem("Mover para a esquerda", nullptr, false, c > 0)) { moveColumn = c; moveDir = -1; }
+      if (ImGui::MenuItem("Mover para a direita", nullptr, false, c + 1 < ncols)) { moveColumn = c; moveDir = 1; }
+      if (ImGui::MenuItem("Remover coluna")) removeColumn = c;
+      ImGui::EndPopup();
+    }
+    ImGui::SetItemTooltip("Clique: disparar. Botão direito: opções.");
+    ImGui::PopID();
+  }
+
+  int removeLayer = -1, moveLayer = -1, moveLayerDir = 0;
+  for (size_t li = 0; li < p.layers.size(); ++li) {
+    Layer &l = p.layers[li];
+    ImGui::TableNextRow(0, cellH);
+    ImGui::TableSetColumnIndex(0);
+    ImGui::PushID(l.id);
+    bool selected = app.sel.layerId == l.id;
+    if (ImGui::Checkbox("##vis", &l.visible)) app.edited();
+    ImGui::SetItemTooltip("Visível");
+    ImGui::SameLine();
+    if (ImGui::Selectable(l.name.c_str(), selected, 0, {nameW - 36, 0})) {
+      app.sel.layerId = l.id;
+      app.sel.slice = 0;
+      app.sel.inspector = Inspector::Layer;
+    }
+    if (ImGui::BeginPopupContextItem()) {
+      ImGui::SetNextItemWidth(160);
+      if (inputText("Nome", l.name)) app.edited();
+      if (ImGui::MenuItem("Subir", nullptr, false, li > 0)) { moveLayer = int(li); moveLayerDir = -1; }
+      if (ImGui::MenuItem("Descer", nullptr, false, li + 1 < p.layers.size())) { moveLayer = int(li); moveLayerDir = 1; }
+      if (ImGui::MenuItem("Parar layer")) e.stopLayer(l.id);
+      if (ImGui::MenuItem("Remover layer")) removeLayer = l.id;
+      ImGui::EndPopup();
+    }
+    ImGui::SetNextItemWidth(nameW - 12);
+    if (ImGui::SliderFloat("##op", &l.opacity, 0, 1, "%.2f")) app.edited();
+    const LayerState *st = e.layerState(l.id);
+
+    for (int c = 0; c < ncols; ++c) {
+      ImGui::TableSetColumnIndex(c + 1);
+      Column &col = p.columns[size_t(c)];
+      ImGui::PushID(col.id);
+      auto it = col.cells.find(l.id);
+      Cell *cell = (it != col.cells.end() && it->second.mediaId >= 0) ? &it->second : nullptr;
+      MediaItem *m = cell ? p.media(cell->mediaId) : nullptr;
+
+      ImVec2 pos = ImGui::GetCursorScreenPos();
+      ImVec2 size{cellW - 6, cellH - 6};
+      ImGui::InvisibleButton("##cell", size);
+      bool hovered = ImGui::IsItemHovered();
+      if (ImGui::IsItemClicked(ImGuiMouseButton_Left)) {
+        app.sel.cellColumn = c;
+        app.sel.cellLayer = l.id;
+        app.sel.layerId = l.id;
+        if (m) app.sel.inspector = Inspector::Cell;
+        e.launchCell(c, l.id);
+      }
+      if (cell && ImGui::BeginDragDropSource()) {
+        int payload[2] = {c, l.id};
+        ImGui::SetDragDropPayload("LUMEN_CELL", payload, sizeof(payload));
+        ImGui::Text("%s  (Ctrl = copiar)", m ? m->name.c_str() : "");
+        ImGui::EndDragDropSource();
+      }
+      if (ImGui::BeginDragDropTarget()) {
+        if (const ImGuiPayload *pl = ImGui::AcceptDragDropPayload("LUMEN_MEDIA")) {
+          Cell nc;
+          nc.mediaId = *static_cast<const int *>(pl->Data);
+          col.cells[l.id] = nc;
+          app.edited();
+        }
+        if (const ImGuiPayload *pl = ImGui::AcceptDragDropPayload("LUMEN_CELL")) {
+          const int *src = static_cast<const int *>(pl->Data);
+          if (src[0] != c || src[1] != l.id) {
+            Column &sc = p.columns[size_t(src[0])];
+            Cell copy = sc.cells[src[1]];
+            col.cells[l.id] = copy;
+            if (!ImGui::GetIO().KeyCtrl) sc.cells.erase(src[1]);
+            app.edited();
+          }
+        }
+        ImGui::EndDragDropTarget();
+      }
+      if (cell && ImGui::BeginPopupContextItem("##cellctx")) {
+        if (ImGui::MenuItem("Loop", nullptr, &cell->loop)) app.edited();
+        if (ImGui::MenuItem("Limpar célula")) {
+          col.cells.erase(l.id);
+          cell = nullptr;
+          m = nullptr;
+          app.edited();
+        }
+        ImGui::EndPopup();
+      }
+
+      ImDrawList *dl = ImGui::GetWindowDrawList();
+      ImVec2 br{pos.x + size.x, pos.y + size.y};
+      bool playing = st && st->current && st->columnId == col.id && m && st->current->mediaId() == m->id;
+      dl->AddRectFilled(pos, br, hovered ? IM_COL32(48, 48, 52, 255) : IM_COL32(30, 30, 33, 255), 4);
+      if (m) {
+        const Texture *thumb = e.cache.thumbnail(*m, e.generators, e.mesh);
+        if (thumb && !thumb->empty()) {
+          ImVec2 ttl{pos.x + 3, pos.y + 3}, tbr{br.x - 3, br.y - 20};
+          dl->AddImage(texId(*thumb), ttl, tbr);
+        }
+        dl->PushClipRect(pos, br, true);
+        dl->AddText({pos.x + 5, br.y - 18}, IM_COL32(220, 220, 220, 255), m->name.c_str());
+        dl->PopClipRect();
+        if (!cell->loop) dl->AddText({br.x - 16, br.y - 18}, IM_COL32(160, 160, 160, 255), "1x");
+      } else {
+        dl->AddText({pos.x + size.x * 0.5f - 4, pos.y + size.y * 0.5f - 8},
+                    IM_COL32(70, 70, 75, 255), "+");
+      }
+      if (playing) {
+        dl->AddRect(pos, br, kPlayingU32, 4, 0, 2.5f);
+        double dur = st->current->duration();
+        if (dur > 0) {
+          float t = float(std::fmod(st->current->time(), dur) / dur);
+          dl->AddRectFilled({pos.x + 3, br.y - 3}, {pos.x + 3 + (size.x - 6) * t, br.y - 1}, kPlayingU32);
+        }
+      } else if (app.sel.cellColumn == c && app.sel.cellLayer == l.id) {
+        dl->AddRect(pos, br, kAccentU32, 4, 0, 1.5f);
+      }
+      ImGui::PopID();
+    }
+    ImGui::PopID();
+  }
+  ImGui::EndTable();
+
+  if (removeColumn >= 0) {
+    p.columns.erase(p.columns.begin() + removeColumn);
+    app.edited();
+  }
+  if (moveColumn >= 0) {
+    std::swap(p.columns[size_t(moveColumn)], p.columns[size_t(moveColumn + moveDir)]);
+    app.edited();
+  }
+  if (removeLayer >= 0) {
+    p.removeLayer(removeLayer);
+    if (app.sel.layerId == removeLayer) app.sel.layerId = -1;
+    app.edited();
+  }
+  if (moveLayer >= 0) {
+    std::swap(p.layers[size_t(moveLayer)], p.layers[size_t(moveLayer + moveLayerDir)]);
+    app.edited();
+  }
+}
+
+void Ui::inspector(App &app) {
+  struct Tab { const char *name; Inspector id; };
+  const Tab tabs[] = {{"Layer", Inspector::Layer},   {"Célula", Inspector::Cell},
+                      {"Mídia", Inspector::Media},   {"Saídas", Inspector::Output},
+                      {"Interação", Inspector::Interaction}, {"Projeto", Inspector::Project}};
+  static Inspector shown = Inspector::Layer;
+  bool forced = shown != app.sel.inspector;
+  if (ImGui::BeginTabBar("##insp")) {
+    for (auto &t : tabs) {
+      ImGuiTabItemFlags f = (forced && app.sel.inspector == t.id) ? ImGuiTabItemFlags_SetSelected : 0;
+      if (ImGui::BeginTabItem(t.name, nullptr, f)) {
+        if (!forced) app.sel.inspector = t.id;
+        ImGui::BeginChild("##inspbody");
+        switch (t.id) {
+        case Inspector::Layer: layerInspector(app); break;
+        case Inspector::Cell: cellInspector(app); break;
+        case Inspector::Media: mediaInspector(app); break;
+        case Inspector::Output: outputInspector(app); break;
+        case Inspector::Interaction: interactionInspector(app); break;
+        case Inspector::Project: projectInspector(app); break;
+        }
+        ImGui::EndChild();
+        ImGui::EndTabItem();
+      }
+    }
+    ImGui::EndTabBar();
+  }
+  shown = app.sel.inspector;
+}
+
+void Ui::layerInspector(App &app) {
+  Project &p = app.engine.project;
+  Layer *l = p.layer(app.sel.layerId);
+  if (!l) {
+    ImGui::TextWrapped("Selecione uma layer no dashboard.");
+    return;
+  }
+  ImGui::PushID(l->id);
+  if (inputText("Nome", l->name)) app.edited();
+  if (ImGui::Checkbox("Visível", &l->visible)) app.edited();
+  if (ImGui::SliderFloat("Opacidade", &l->opacity, 0, 1)) app.edited();
+  int blend = int(l->blend);
+  if (ImGui::Combo("Blend", &blend, "Normal\0Adição\0Multiplicar\0Tela (screen)\0")) {
+    l->blend = BlendMode(blend);
+    app.edited();
+  }
+
+  if (ImGui::CollapsingHeader("Transformação", ImGuiTreeNodeFlags_DefaultOpen)) {
+    float pos[2] = {l->transform.position.x, l->transform.position.y};
+    if (ImGui::DragFloat2("Posição (px)", pos, 1.0f)) {
+      l->transform.position = {pos[0], pos[1]};
+      app.edited();
+    }
+    if (ImGui::DragFloat("Escala", &l->transform.scale, 0.005f, 0.01f, 20)) app.edited();
+    if (ImGui::DragFloat("Rotação (°)", &l->transform.rotation, 0.25f, -360, 360)) app.edited();
+    if (ImGui::Button("Zerar transformação")) {
+      l->transform = {};
+      app.edited();
+    }
+    helpMarker("A transformação move todas as fatias juntas. Útil para animar via OSC "
+               "sem perder o mapeamento.");
+  }
+
+  if (ImGui::CollapsingHeader("Cor / efeitos", ImGuiTreeNodeFlags_DefaultOpen)) {
+    if (ImGui::SliderFloat("Brilho", &l->fx.brightness, -1, 1)) app.edited();
+    if (ImGui::SliderFloat("Contraste", &l->fx.contrast, 0, 2)) app.edited();
+    if (ImGui::SliderFloat("Saturação", &l->fx.saturation, 0, 2)) app.edited();
+    if (ImGui::SliderFloat("Matiz (°)", &l->fx.hue, -180, 180)) app.edited();
+    if (ImGui::Checkbox("Inverter", &l->fx.invert)) app.edited();
+    if (colorEdit("Tinta", l->fx.tint)) app.edited();
+    if (ImGui::Button("Zerar efeitos")) {
+      l->fx = {};
+      app.edited();
+    }
+  }
+
+  if (ImGui::CollapsingHeader("Fatias (slices) / mapping", ImGuiTreeNodeFlags_DefaultOpen)) {
+    ImGui::TextWrapped("Cada fatia recorta uma parte da mídia e a projeta numa superfície. "
+                       "Use as ferramentas Perspectiva (M) e Malha (G) no workspace.");
+    int &si = app.sel.slice;
+    si = std::clamp(si, 0, int(l->slices.size()) - 1);
+    for (size_t i = 0; i < l->slices.size(); ++i) {
+      ImGui::PushID(int(i));
+      if (ImGui::Checkbox("##en", &l->slices[i].enabled)) app.edited();
+      ImGui::SameLine();
+      if (ImGui::Selectable(l->slices[i].name.c_str(), si == int(i))) si = int(i);
+      ImGui::PopID();
+    }
+    if (ImGui::Button("+ Fatia")) {
+      Slice s;
+      s.name = "Fatia " + std::to_string(l->slices.size() + 1);
+      float w = float(p.canvasW) * 0.3f, h = float(p.canvasH) * 0.3f;
+      s.warp.setRect({float(p.canvasW) * 0.35f, float(p.canvasH) * 0.35f}, {w, h});
+      l->slices.push_back(s);
+      si = int(l->slices.size()) - 1;
+      app.edited();
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Duplicar") && si < int(l->slices.size())) {
+      Slice s = l->slices[size_t(si)];
+      s.name += " cópia";
+      s.warp.translate({30, 30});
+      l->slices.push_back(s);
+      si = int(l->slices.size()) - 1;
+      app.edited();
+    }
+    ImGui::SameLine();
+    ImGui::BeginDisabled(l->slices.size() <= 1);
+    if (ImGui::Button("Remover")) {
+      l->slices.erase(l->slices.begin() + si);
+      si = std::max(0, si - 1);
+      app.edited();
+    }
+    ImGui::EndDisabled();
+
+    if (si < int(l->slices.size())) {
+      Slice &s = l->slices[size_t(si)];
+      ImGui::SeparatorText(s.name.c_str());
+      if (inputText("Nome da fatia", s.name)) app.edited();
+      float crop[4] = {s.u0, s.v0, s.u1, s.v1};
+      if (ImGui::DragFloat4("Recorte UV", crop, 0.002f, 0, 1)) {
+        s.u0 = crop[0]; s.v0 = crop[1]; s.u1 = crop[2]; s.v1 = crop[3];
+        app.edited();
+      }
+      helpMarker("Parte da mídia usada por esta fatia: u0 v0 u1 v1 (0 a 1).");
+      for (int c = 0; c < 4; ++c) {
+        const char *names[] = {"Canto sup. esq.", "Canto sup. dir.", "Canto inf. dir.", "Canto inf. esq."};
+        float v[2] = {s.warp.corners[size_t(c)].x, s.warp.corners[size_t(c)].y};
+        if (ImGui::DragFloat2(names[c], v, 0.5f)) {
+          s.warp.corners[size_t(c)] = {v[0], v[1]};
+          app.edited();
+        }
+      }
+      int grid[2] = {s.warp.meshCols, s.warp.meshRows};
+      if (ImGui::InputInt2("Malha (col × lin)", grid)) {
+        grid[0] = std::clamp(grid[0], 2, 33);
+        grid[1] = std::clamp(grid[1], 2, 33);
+        s.warp.resetMesh(grid[0], grid[1]);
+        app.edited();
+      }
+      if (ImGui::Button("Retângulo da mídia")) {
+        // Fit the slice to the media aspect ratio, centred on the canvas.
+        float aspect = 16.0f / 9.0f;
+        if (const LayerState *st = app.engine.layerState(l->id); st && st->currentTex)
+          aspect = float(st->currentTex->width()) / float(std::max(1, st->currentTex->height()));
+        aspect *= (s.u1 - s.u0) / std::max(1e-3f, s.v1 - s.v0);
+        float h = float(p.canvasH) * 0.8f, w = h * aspect;
+        if (w > float(p.canvasW) * 0.95f) { w = float(p.canvasW) * 0.95f; h = w / aspect; }
+        s.warp.setRect({(float(p.canvasW) - w) * 0.5f, (float(p.canvasH) - h) * 0.5f}, {w, h});
+        app.edited();
+      }
+      ImGui::SameLine();
+      if (ImGui::Button("Tela cheia")) {
+        s.warp.setRect({0, 0}, {float(p.canvasW), float(p.canvasH)});
+        app.edited();
+      }
+      ImGui::SameLine();
+      if (ImGui::Button("Zerar malha")) {
+        s.warp.resetMesh(s.warp.meshCols, s.warp.meshRows);
+        app.edited();
+      }
+    }
+  }
+
+  if (ImGui::CollapsingHeader("Máscaras", ImGuiTreeNodeFlags_DefaultOpen)) {
+    ImGui::TextWrapped("Ferramenta Máscara (K): clique no workspace para adicionar pontos.");
+    int &mi = app.sel.mask;
+    for (size_t i = 0; i < l->masks.size(); ++i) {
+      ImGui::PushID(1000 + int(i));
+      if (ImGui::Checkbox("##en", &l->masks[i].enabled)) app.edited();
+      ImGui::SameLine();
+      if (ImGui::Selectable(l->masks[i].name.c_str(), mi == int(i))) {
+        mi = int(i);
+        app.sel.maskPoint = -1;
+      }
+      ImGui::PopID();
+    }
+    if (ImGui::Button("+ Máscara")) {
+      Mask m;
+      m.name = "Máscara " + std::to_string(l->masks.size() + 1);
+      l->masks.push_back(m);
+      mi = int(l->masks.size()) - 1;
+      app.sel.maskPoint = -1;
+      workspace.tool = Tool::Mask;
+      app.edited();
+    }
+    if (mi >= 0 && mi < int(l->masks.size())) {
+      Mask &m = l->masks[size_t(mi)];
+      ImGui::SameLine();
+      if (ImGui::Button("Remover máscara")) {
+        l->masks.erase(l->masks.begin() + mi);
+        mi = -1;
+        app.edited();
+      } else {
+        ImGui::SeparatorText(m.name.c_str());
+        if (inputText("Nome da máscara", m.name)) app.edited();
+        int mode = m.subtract ? 1 : 0;
+        if (ImGui::Combo("Modo", &mode, "Revelar dentro\0Esconder dentro\0")) {
+          m.subtract = mode == 1;
+          app.edited();
+        }
+        if (ImGui::SliderFloat("Suavizar borda (px)", &m.feather, 0, 200)) app.edited();
+        ImGui::Text("%zu pontos", m.points.size());
+        ImGui::SameLine();
+        if (ImGui::SmallButton("Limpar pontos")) {
+          m.points.clear();
+          app.edited();
+        }
+      }
+    }
+  }
+  ImGui::PopID();
+}
+
+void Ui::cellInspector(App &app) {
+  Project &p = app.engine.project;
+  int c = app.sel.cellColumn;
+  if (c < 0 || c >= int(p.columns.size())) {
+    ImGui::TextWrapped("Clique numa célula do dashboard.");
+    return;
+  }
+  Column &col = p.columns[size_t(c)];
+  auto it = col.cells.find(app.sel.cellLayer);
+  Layer *l = p.layer(app.sel.cellLayer);
+  if (it == col.cells.end() || it->second.mediaId < 0 || !l) {
+    ImGui::TextWrapped("Célula vazia. Arraste uma mídia da biblioteca para ela.");
+    return;
+  }
+  Cell &cell = it->second;
+  MediaItem *m = p.media(cell.mediaId);
+  ImGui::Text("Coluna %d · %s", c + 1, col.name.c_str());
+  ImGui::Text("Layer: %s", l->name.c_str());
+  ImGui::Text("Mídia: %s", m ? m->name.c_str() : "(removida)");
+  ImGui::Separator();
+  if (ImGui::Checkbox("Loop", &cell.loop)) app.edited();
+  helpMarker("Sem loop, o vídeo para no último quadro.");
+  if (ImGui::DragFloat("Velocidade", &cell.speed, 0.01f, 0, 8, "%.2fx")) app.edited();
+  if (ImGui::Button("Disparar")) app.engine.launchCell(c, l->id);
+  ImGui::SameLine();
+  if (ImGui::Button("Parar layer")) app.engine.stopLayer(l->id);
+  ImGui::SameLine();
+  if (ImGui::Button("Limpar célula")) {
+    col.cells.erase(it);
+    app.edited();
+  }
+}
+
+void Ui::mediaInspector(App &app) {
+  Project &p = app.engine.project;
+  MediaItem *m = p.media(app.sel.mediaId);
+  if (!m) {
+    ImGui::TextWrapped("Selecione um item da biblioteca.");
+    return;
+  }
+  ImGui::PushID(m->id);
+  const Texture *thumb = app.engine.cache.thumbnail(*m, app.engine.generators, app.engine.mesh);
+  float w = ImGui::GetContentRegionAvail().x;
+  fittedImage(thumb, {w, w * 9.0f / 16.0f});
+  if (inputText("Nome", m->name)) app.edited();
+  ImGui::Text("Tipo: %s", mediaTypeLabel(m->type));
+
+  if (m->type == MediaType::Generator) {
+    int kind = int(m->generator);
+    std::string items;
+    for (int k = 0; k < int(GeneratorKind::COUNT); ++k) {
+      items += generatorName(GeneratorKind(k));
+      items.push_back('\0');
+    }
+    if (ImGui::Combo("Gerador", &kind, items.c_str())) {
+      m->generator = GeneratorKind(kind);
+      app.edited();
+    }
+    int size[2] = {m->width, m->height};
+    if (ImGui::InputInt2("Resolução", size)) {
+      m->width = std::clamp(size[0], 16, 8192);
+      m->height = std::clamp(size[1], 16, 8192);
+      app.edited();
+    }
+    if (colorEdit("Cor 1", m->color1)) app.edited();
+    if (colorEdit("Cor 2", m->color2)) app.edited();
+    const char *p1 = "Parâmetro 1", *p2 = "Parâmetro 2";
+    float lo1 = 0, hi1 = 10, lo2 = 0, hi2 = 10;
+    switch (m->generator) {
+    case GeneratorKind::Gradient: p1 = "Ângulo (°)"; lo1 = -180; hi1 = 180; break;
+    case GeneratorKind::Grid: p1 = "Tamanho da célula"; lo1 = 4; hi1 = 512; p2 = "Espessura"; lo2 = 0.5f; hi2 = 32; break;
+    case GeneratorKind::Plasma: p1 = "Velocidade"; p2 = "Escala"; lo2 = 0.1f; hi2 = 20; break;
+    case GeneratorKind::Stripes: p1 = "Velocidade"; lo1 = -5; hi1 = 5; p2 = "Quantidade"; lo2 = 1; hi2 = 100; break;
+    default: break;
+    }
+    if (ImGui::SliderFloat(p1, &m->param1, lo1, hi1)) app.edited();
+    if (ImGui::SliderFloat(p2, &m->param2, lo2, hi2)) app.edited();
+  } else {
+    ImGui::TextWrapped("Arquivo: %s", m->path.c_str());
+    if (const MediaInfo *info = app.engine.cache.info(*m)) {
+      ImGui::Text("Resolução: %d × %d", info->width, info->height);
+      if (m->type == MediaType::Video) {
+        ImGui::Text("Duração: %.2f s   ·   %.2f fps", info->duration, info->fps);
+        ImGui::Text("Codec: %s%s", info->codec.c_str(), info->hasAudio ? "   (tem áudio)" : "");
+        if (info->hasAudio)
+          ImGui::TextDisabled("Reprodução de áudio chega na próxima etapa.");
+      }
+    } else {
+      ImGui::TextColored({1, 0.4f, 0.4f, 1}, "Não foi possível abrir este arquivo.");
+    }
+    if (ImGui::Button("Trocar arquivo...")) {
+      auto files = platform::openFileDialog("Trocar arquivo", "Mídia|*.mp4;*.mov;*.mkv;*.avi;*.webm;*.png;*.jpg;*.jpeg|Todos|*.*", false);
+      if (!files.empty()) {
+        m->path = files[0];
+        m->type = isImagePath(m->path) ? MediaType::Image : MediaType::Video;
+        app.engine.cache.invalidate(m->id);
+        app.edited();
+      }
+    }
+  }
+  ImGui::PopID();
+}
+
+void Ui::outputInspector(App &app) {
+  Project &p = app.engine.project;
+  for (auto &o : p.outputs) {
+    ImGui::PushID(o.id);
+    if (ImGui::Selectable(o.name.c_str(), app.sel.outputId == o.id)) app.sel.outputId = o.id;
+    ImGui::PopID();
+  }
+  if (ImGui::Button("+ Saída")) {
+    OutputConfig &o = p.addOutput();
+    app.sel.outputId = o.id;
+    app.edited();
+  }
+  OutputConfig *o = p.output(app.sel.outputId);
+  if (!o && !p.outputs.empty()) {
+    o = &p.outputs.front();
+    app.sel.outputId = o->id;
+  }
+  if (!o) return;
+  ImGui::SameLine();
+  if (ImGui::Button("Remover saída")) {
+    int id = o->id;
+    p.outputs.erase(std::remove_if(p.outputs.begin(), p.outputs.end(), [&](auto &x) { return x.id == id; }),
+                    p.outputs.end());
+    if (workspace.viewOutputId == id) workspace.viewOutputId = -1;
+    app.sel.outputId = -1;
+    app.edited();
+    return;
+  }
+
+  ImGui::PushID(o->id);
+  ImGui::SeparatorText(o->name.c_str());
+  if (inputText("Nome", o->name)) app.edited();
+  if (ImGui::Checkbox("Ativa", &o->enabled)) app.edited();
+  ImGui::SameLine();
+  if (ImGui::Checkbox("Test card", &o->testCard)) app.edited();
+  helpMarker("Mostra um padrão de teste nesta saída para focar e alinhar o projetor.");
+
+  auto mons = OutputManager::monitors();
+  std::string current = o->monitor < 0 ? "Janela (teste)" : "Monitor " + std::to_string(o->monitor + 1);
+  if (ImGui::BeginCombo("Destino", current.c_str())) {
+    if (ImGui::Selectable("Janela (teste)", o->monitor < 0)) { o->monitor = -1; app.edited(); }
+    for (size_t i = 0; i < mons.size(); ++i) {
+      char label[200];
+      std::snprintf(label, sizeof(label), "Monitor %zu: %s (%dx%d)", i + 1, mons[i].name.c_str(), mons[i].w, mons[i].h);
+      if (ImGui::Selectable(label, o->monitor == int(i))) { o->monitor = int(i); app.edited(); }
+    }
+    ImGui::EndCombo();
+  }
+  helpMarker("Em um monitor a saída ocupa a tela inteira, sem bordas. Desative o espelhamento "
+             "de telas no Windows (Win+P → Estender).");
+  if (o->monitor < 0) {
+    int sz[2] = {o->winW, o->winH};
+    if (ImGui::InputInt2("Tamanho da janela", sz)) {
+      o->winW = std::max(64, sz[0]);
+      o->winH = std::max(64, sz[1]);
+      app.edited();
+    }
+  }
+
+  ImGui::SeparatorText("Região do canvas");
+  float src[4] = {o->srcX, o->srcY, o->srcW, o->srcH};
+  if (ImGui::DragFloat4("x y larg alt", src, 1.0f)) {
+    o->srcX = src[0]; o->srcY = src[1];
+    o->srcW = std::max(1.0f, src[2]); o->srcH = std::max(1.0f, src[3]);
+    app.edited();
+  }
+  if (ImGui::Button("Canvas inteiro")) {
+    o->srcX = o->srcY = 0;
+    o->srcW = float(p.canvasW);
+    o->srcH = float(p.canvasH);
+    app.edited();
+  }
+  ImGui::SameLine();
+  if (ImGui::Button("Metade esq.")) {
+    o->srcX = 0; o->srcY = 0; o->srcW = float(p.canvasW) * 0.5f; o->srcH = float(p.canvasH);
+    app.edited();
+  }
+  ImGui::SameLine();
+  if (ImGui::Button("Metade dir.")) {
+    o->srcX = float(p.canvasW) * 0.5f; o->srcY = 0; o->srcW = float(p.canvasW) * 0.5f; o->srcH = float(p.canvasH);
+    app.edited();
+  }
+
+  ImGui::SeparatorText("Warp da saída");
+  bool viewing = workspace.viewOutputId == o->id;
+  if (ImGui::Checkbox("Editar no workspace", &viewing)) workspace.viewOutputId = viewing ? o->id : -1;
+  helpMarker("Mostra esta saída no workspace. Use Perspectiva (M) ou Malha (G) para corrigir "
+             "a geometria do projetor inteiro (keystone / superfícies curvas).");
+  int grid[2] = {o->warp.meshCols, o->warp.meshRows};
+  if (ImGui::InputInt2("Malha (col × lin)", grid)) {
+    o->warp.resetMesh(std::clamp(grid[0], 2, 33), std::clamp(grid[1], 2, 33));
+    app.edited();
+  }
+  if (ImGui::Button("Zerar warp")) {
+    o->warp.setRect({0, 0}, {1, 1});
+    o->warp.resetMesh(2, 2);
+    app.edited();
+  }
+
+  ImGui::SeparatorText("Soft edge (blend entre projetores)");
+  bool se = false;
+  se |= ImGui::SliderFloat("Esquerda", &o->softEdge.left, 0, 0.5f);
+  se |= ImGui::SliderFloat("Direita", &o->softEdge.right, 0, 0.5f);
+  se |= ImGui::SliderFloat("Topo", &o->softEdge.top, 0, 0.5f);
+  se |= ImGui::SliderFloat("Base", &o->softEdge.bottom, 0, 0.5f);
+  se |= ImGui::SliderFloat("Gamma", &o->softEdge.gamma, 0.5f, 4);
+  se |= ImGui::SliderFloat("Curva", &o->softEdge.power, 0.5f, 6);
+  if (se) app.edited();
+  helpMarker("Para dois projetores lado a lado com sobreposição: cada um mostra uma região do "
+             "canvas que inclui a faixa sobreposta, e a borda é suavizada com a mesma largura.");
+  ImGui::PopID();
+}
+
+void Ui::interactionInspector(App &app) {
+  Engine &e = app.engine;
+  Project &p = e.project;
+  ImGui::SeparatorText("Entrada OSC");
+  bool changed = ImGui::Checkbox("Ativar OSC", &p.oscEnabled);
+  ImGui::SetNextItemWidth(120);
+  changed |= ImGui::InputInt("Porta UDP", &p.oscPort);
+  if (changed) {
+    p.oscPort = std::clamp(p.oscPort, 1, 65535);
+    e.restartOsc();
+    app.edited();
+  }
+  if (e.oscServer().running())
+    ImGui::TextColored({0.4f, 0.9f, 0.5f, 1}, "Escutando na porta %d", e.oscServer().port());
+  else if (!e.oscError().empty())
+    ImGui::TextColored({1, 0.4f, 0.4f, 1}, "Erro: %s", e.oscError().c_str());
+  else
+    ImGui::TextDisabled("Desativado");
+
+  ImGui::SeparatorText("Mapeamentos (sensor → parâmetro)");
+  ImGui::TextWrapped("Ligue qualquer mensagem OSC (TouchOSC, TouchDesigner, Arduino, sensores...) "
+                     "a um parâmetro. Clique em \"Aprender\" e envie a mensagem.");
+  int remove = -1;
+  for (size_t i = 0; i < p.mappings.size(); ++i) {
+    InputMapping &m = p.mappings[i];
+    ImGui::PushID(int(i));
+    char header[256];
+    std::snprintf(header, sizeof(header), "%s → %s###map", m.address.c_str(), mappingTargetName(m.target));
+    if (ImGui::CollapsingHeader(header, ImGuiTreeNodeFlags_DefaultOpen)) {
+      if (ImGui::Checkbox("Ativo", &m.enabled)) app.edited();
+      ImGui::SameLine();
+      bool learning = e.learnMapping == int(i);
+      if (learning) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.9f, 0.3f, 0.3f, 1));
+      if (ImGui::Button(learning ? "Aguardando mensagem..." : "Aprender"))
+        e.learnMapping = learning ? -1 : int(i);
+      if (learning) ImGui::PopStyleColor();
+      ImGui::SameLine();
+      if (ImGui::Button("Remover")) remove = int(i);
+      if (inputText("Endereço", m.address)) app.edited();
+      helpMarker("Aceita curingas OSC: /sensor/* , /pad/[1-4]");
+      if (ImGui::InputInt("Argumento #", &m.argIndex)) { m.argIndex = std::max(0, m.argIndex); app.edited(); }
+      float in[2] = {m.inMin, m.inMax};
+      if (ImGui::DragFloat2("Entrada min/max", in, 0.01f)) { m.inMin = in[0]; m.inMax = in[1]; app.edited(); }
+      int t = int(m.target);
+      std::string items;
+      for (int k = 0; k < int(MappingTarget::COUNT); ++k) {
+        items += mappingTargetName(MappingTarget(k));
+        items.push_back('\0');
+      }
+      if (ImGui::Combo("Alvo", &t, items.c_str())) { m.target = MappingTarget(t); app.edited(); }
+      if (mappingTargetNeedsLayer(m.target)) {
+        Layer *l = p.layer(m.layerId);
+        if (ImGui::BeginCombo("Layer", l ? l->name.c_str() : "(escolha)")) {
+          for (auto &ly : p.layers)
+            if (ImGui::Selectable(ly.name.c_str(), ly.id == m.layerId)) { m.layerId = ly.id; app.edited(); }
+          ImGui::EndCombo();
+        }
+        float out[2] = {m.outMin, m.outMax};
+        if (ImGui::DragFloat2("Saída min/max", out, 0.01f)) { m.outMin = out[0]; m.outMax = out[1]; app.edited(); }
+        if (ImGui::SliderFloat("Suavização", &m.smoothing, 0, 0.99f)) app.edited();
+      } else if (m.target == MappingTarget::LaunchColumn) {
+        int colN = int(m.outMin);
+        if (ImGui::InputInt("Coluna (1..n)", &colN)) { m.outMin = float(std::max(1, colN)); app.edited(); }
+        ImGui::TextDisabled("Dispara quando o valor passa da metade da faixa.");
+      } else {
+        ImGui::TextDisabled("Dispara quando o valor passa da metade da faixa.");
+      }
+    }
+    ImGui::PopID();
+  }
+  if (remove >= 0) {
+    p.mappings.erase(p.mappings.begin() + remove);
+    if (e.learnMapping == remove) e.learnMapping = -1;
+    app.edited();
+  }
+  if (ImGui::Button("+ Mapeamento")) {
+    InputMapping m;
+    m.layerId = app.sel.layerId >= 0 ? app.sel.layerId : (p.layers.empty() ? -1 : p.layers.front().id);
+    p.mappings.push_back(m);
+    app.edited();
+  }
+
+  ImGui::SeparatorText("Monitor OSC");
+  if (ImGui::SmallButton("Limpar")) e.oscLog.clear();
+  ImGui::BeginChild("##osclog", {0, 180}, ImGuiChildFlags_Borders);
+  for (auto &line : e.oscLog) ImGui::TextUnformatted(line.c_str());
+  if (ImGui::GetScrollY() >= ImGui::GetScrollMaxY() - 4) ImGui::SetScrollHereY(1.0f);
+  ImGui::EndChild();
+  ImGui::TextDisabled("Linhas com \"?\" não correspondem a comandos /lumen/...");
+}
+
+void Ui::projectInspector(App &app) {
+  Project &p = app.engine.project;
+  ImGui::SeparatorText("Canvas");
+  int size[2] = {p.canvasW, p.canvasH};
+  if (ImGui::InputInt2("Resolução", size, ImGuiInputTextFlags_EnterReturnsTrue)) {
+    p.canvasW = std::clamp(size[0], 16, 16384);
+    p.canvasH = std::clamp(size[1], 16, 16384);
+    app.edited();
+  }
+  helpMarker("Espaço de trabalho onde as layers são compostas. As saídas recortam regiões dele. "
+             "Pressione Enter para aplicar.");
+  const char *presets[] = {"1280×720", "1920×1080", "2560×1440", "3840×1080 (2 proj.)", "3840×2160"};
+  const int pw[] = {1280, 1920, 2560, 3840, 3840}, ph[] = {720, 1080, 1440, 1080, 2160};
+  for (int i = 0; i < 5; ++i) {
+    if (i) ImGui::SameLine();
+    if (ImGui::SmallButton(presets[i])) {
+      p.canvasW = pw[i];
+      p.canvasH = ph[i];
+      app.edited();
+    }
+  }
+  if (colorEdit("Fundo", p.background)) app.edited();
+  ImGui::SeparatorText("Show");
+  if (ImGui::DragFloat("Fade padrão (s)", &p.defaultTransition, 0.05f, 0, 60)) app.edited();
+  ImGui::SeparatorText("Arquivo");
+  ImGui::TextWrapped("%s", p.filePath.empty() ? "(projeto não salvo)" : p.filePath.c_str());
+  ImGui::Text("%zu mídias · %zu layers · %zu colunas · %zu saídas", p.library.size(),
+              p.layers.size(), p.columns.size(), p.outputs.size());
+}
+
+void Ui::statusBar(App &app) {
+  ImGui::Text("%.0f fps", app.fps());
+  ImGui::SameLine(0, 20);
+  const Project &p = app.engine.project;
+  ImGui::TextDisabled("Canvas %d×%d", p.canvasW, p.canvasH);
+  ImGui::SameLine(0, 20);
+  ImGui::TextDisabled("Saídas abertas: %d", app.outputs.openCount());
+  ImGui::SameLine(0, 20);
+  if (app.engine.oscServer().running()) ImGui::TextDisabled("OSC :%d", app.engine.oscServer().port());
+  else ImGui::TextDisabled("OSC desligado");
+  if (!app.statusText().empty() && app.statusAge() < 6) {
+    ImGui::SameLine(0, 30);
+    if (app.statusIsError()) ImGui::TextColored({1, 0.45f, 0.45f, 1}, "%s", app.statusText().c_str());
+    else ImGui::TextColored(kAccent, "%s", app.statusText().c_str());
+  }
+}
+
+} // namespace lumen

@@ -1,0 +1,544 @@
+// Interactive canvas / output view with the videomapping tools.
+#include "app.h"
+#include "engine/compositor.h"
+#include "ui/ui.h"
+
+#include <imgui.h>
+
+#include <algorithm>
+#include <cmath>
+
+namespace lumen {
+
+namespace {
+
+constexpr float kHandle = 7.0f;   // handle half-size (screen px)
+constexpr float kPick = 10.0f;    // pick radius (screen px)
+
+float dist(ImVec2 a, ImVec2 b) { return std::hypot(a.x - b.x, a.y - b.y); }
+
+std::vector<Vec2> warpOutline(const Warp &w, int perEdge = 12) {
+  std::vector<Vec2> pts;
+  for (int i = 0; i < perEdge; ++i) pts.push_back(w.map(float(i) / float(perEdge), 0));
+  for (int i = 0; i < perEdge; ++i) pts.push_back(w.map(1, float(i) / float(perEdge)));
+  for (int i = 0; i < perEdge; ++i) pts.push_back(w.map(1 - float(i) / float(perEdge), 1));
+  for (int i = 0; i < perEdge; ++i) pts.push_back(w.map(0, 1 - float(i) / float(perEdge)));
+  return pts;
+}
+
+// Inverse of the layer transform (position / rotation / scale around the pivot).
+Vec2 untransform(const Layer &l, Vec2 p) {
+  const LayerTransform &t = l.transform;
+  if (t.scale == 1 && t.rotation == 0 && t.position.x == 0 && t.position.y == 0) return p;
+  Vec2 pivot = layerPivot(l);
+  p = p - t.position;
+  float a = -t.rotation * 3.14159265f / 180.0f;
+  Vec2 d = p - pivot;
+  d = {d.x * std::cos(a) - d.y * std::sin(a), d.x * std::sin(a) + d.y * std::cos(a)};
+  float s = std::fabs(t.scale) < 1e-4f ? 1e-4f : t.scale;
+  return pivot + d * (1.0f / s);
+}
+
+float distToSegment(Vec2 p, Vec2 a, Vec2 b) {
+  Vec2 ab = b - a, ap = p - a;
+  float len2 = ab.x * ab.x + ab.y * ab.y;
+  float t = len2 > 0 ? std::clamp((ap.x * ab.x + ap.y * ab.y) / len2, 0.0f, 1.0f) : 0.0f;
+  return (p - (a + ab * t)).length();
+}
+
+void handle(ImDrawList *dl, ImVec2 p, ImU32 col, bool selected, bool round = false) {
+  float r = selected ? kHandle + 2 : kHandle;
+  if (round) {
+    dl->AddCircleFilled(p, r * 0.7f, selected ? IM_COL32(255, 255, 255, 255) : IM_COL32(20, 20, 20, 220));
+    dl->AddCircle(p, r * 0.7f, col, 0, 2);
+  } else {
+    dl->AddRectFilled({p.x - r, p.y - r}, {p.x + r, p.y + r},
+                      selected ? IM_COL32(255, 255, 255, 255) : IM_COL32(20, 20, 20, 220));
+    dl->AddRect({p.x - r, p.y - r}, {p.x + r, p.y + r}, col, 0, 0, 2);
+  }
+}
+
+} // namespace
+
+void Workspace::fit(ImVec2 avail, float cw, float ch) {
+  zoom_ = std::min(avail.x / cw, avail.y / ch) * 0.94f;
+  pan_ = {(avail.x - cw * zoom_) * 0.5f, (avail.y - ch * zoom_) * 0.5f};
+}
+
+void Workspace::draw(App &app, ImVec2 size) {
+  Engine &e = app.engine;
+  Project &p = e.project;
+  OutputConfig *viewOut = viewOutputId >= 0 ? p.output(viewOutputId) : nullptr;
+  if (!viewOut) viewOutputId = -1;
+
+  // ---- header: view selector
+  ImGui::SetNextItemWidth(200);
+  std::string viewName = viewOut ? "Saída: " + viewOut->name : "Canvas";
+  bool refit = false;
+  if (ImGui::BeginCombo("##view", viewName.c_str())) {
+    if (ImGui::Selectable("Canvas", !viewOut)) { viewOutputId = -1; refit = true; }
+    for (auto &o : p.outputs)
+      if (ImGui::Selectable(("Saída: " + o.name).c_str(), viewOutputId == o.id)) {
+        viewOutputId = o.id;
+        app.sel.outputId = o.id;
+        refit = true;
+      }
+    ImGui::EndCombo();
+  }
+  ImGui::SameLine();
+  if (ImGui::Button("Enquadrar (F)")) refit = true;
+  ImGui::SameLine();
+  ImGui::TextDisabled("%.0f%%", zoom_ * 100);
+  ImGui::SameLine();
+  const char *hints[] = {"Clique para selecionar · arraste para mover a fatia (Shift: layer inteira)",
+                         "Arraste os cantos para encaixar a imagem na superfície",
+                         "Arraste os pontos da malha para curvar a imagem",
+                         "Clique para adicionar pontos · arraste para mover · botão direito apaga"};
+  ImGui::TextDisabled("%s", hints[int(tool)]);
+  viewOut = viewOutputId >= 0 ? p.output(viewOutputId) : nullptr;
+
+  ImVec2 avail = ImGui::GetContentRegionAvail();
+  if (avail.x < 50 || avail.y < 50) return;
+
+  float cw = float(p.canvasW), ch = float(p.canvasH);
+  if (viewOut) {
+    auto mons = OutputManager::monitors();
+    if (viewOut->monitor >= 0 && viewOut->monitor < int(mons.size())) {
+      cw = float(mons[size_t(viewOut->monitor)].w);
+      ch = float(mons[size_t(viewOut->monitor)].h);
+    } else {
+      cw = float(viewOut->winW);
+      ch = float(viewOut->winH);
+    }
+  }
+  if (!fitted_ || refit || fitRequested) {
+    fit(avail, cw, ch);
+    fitted_ = true;
+    fitRequested = false;
+  }
+
+  ImVec2 base = ImGui::GetCursorScreenPos();
+  ImGui::InvisibleButton("##ws", avail, ImGuiButtonFlags_MouseButtonLeft |
+                                            ImGuiButtonFlags_MouseButtonRight |
+                                            ImGuiButtonFlags_MouseButtonMiddle);
+  bool hovered = ImGui::IsItemHovered();
+  ImGuiIO &io = ImGui::GetIO();
+  ImDrawList *dl = ImGui::GetWindowDrawList();
+  dl->PushClipRect(base, {base.x + avail.x, base.y + avail.y}, true);
+  dl->AddRectFilled(base, {base.x + avail.x, base.y + avail.y}, IM_COL32(14, 14, 16, 255));
+
+  // ---- zoom & pan
+  if (hovered && io.MouseWheel != 0) {
+    ImVec2 m{io.MousePos.x - base.x, io.MousePos.y - base.y};
+    float old = zoom_;
+    zoom_ = std::clamp(zoom_ * std::pow(1.15f, io.MouseWheel), 0.02f, 20.0f);
+    pan_.x = m.x - (m.x - pan_.x) * (zoom_ / old);
+    pan_.y = m.y - (m.y - pan_.y) * (zoom_ / old);
+  }
+  bool panning = ImGui::IsMouseDragging(ImGuiMouseButton_Middle) ||
+                 (io.KeyAlt && ImGui::IsMouseDragging(ImGuiMouseButton_Left));
+  if (ImGui::IsItemActive() && panning) {
+    pan_.x += io.MouseDelta.x;
+    pan_.y += io.MouseDelta.y;
+  }
+
+  ImVec2 origin{base.x + pan_.x, base.y + pan_.y};
+  ImVec2 contentMax{origin.x + cw * zoom_, origin.y + ch * zoom_};
+
+  if (!viewOut) {
+    dl->AddImage(ImTextureID(intptr_t(e.canvas().texture().id())), origin, contentMax, {0, 1}, {1, 0});
+    dl->AddRect(origin, contentMax, IM_COL32(90, 90, 95, 255));
+    drawCanvasOverlay(app, dl, origin, zoom_);
+  } else {
+    int pw = std::clamp(int(cw), 16, 3840), ph = std::clamp(int(ch), 16, 2160);
+    preview_.resize(pw, ph);
+    int index = 0;
+    for (size_t i = 0; i < p.outputs.size(); ++i)
+      if (p.outputs[i].id == viewOut->id) index = int(i);
+    app.outputs.renderPreview(p, *viewOut, index, e.canvas().texture(), preview_, e.mesh, e.time(), false);
+    dl->AddImage(ImTextureID(intptr_t(preview_.texture().id())), origin, contentMax, {0, 1}, {1, 0});
+    dl->AddRect(origin, contentMax, IM_COL32(90, 90, 95, 255));
+    drawOutputOverlay(app, dl, origin, {cw * zoom_, ch * zoom_});
+  }
+  dl->PopClipRect();
+}
+
+void Workspace::drawCanvasOverlay(App &app, ImDrawList *dl, ImVec2 origin, float scale) {
+  Project &p = app.engine.project;
+  ImGuiIO &io = ImGui::GetIO();
+  auto toScreen = [&](Vec2 v) { return ImVec2{origin.x + v.x * scale, origin.y + v.y * scale}; };
+  auto toCanvas = [&](ImVec2 s) { return Vec2{(s.x - origin.x) / scale, (s.y - origin.y) / scale}; };
+  bool hovered = ImGui::IsItemHovered();
+  bool clicked = hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !io.KeyAlt;
+  bool rclicked = hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Right);
+  ImVec2 mouse = io.MousePos;
+  Vec2 mc = toCanvas(mouse);
+
+  // Output regions (useful for multi-projector layouts).
+  for (auto &o : p.outputs) {
+    if (!o.enabled) continue;
+    ImVec2 a = toScreen({o.srcX, o.srcY}), b = toScreen({o.srcX + o.srcW, o.srcY + o.srcH});
+    dl->AddRect(a, b, IM_COL32(90, 160, 255, 110), 0, 0, 1.0f);
+    dl->AddText({a.x + 4, a.y + 2}, IM_COL32(90, 160, 255, 160), o.name.c_str());
+  }
+
+  // Outlines of every slice; selected layer drawn on top.
+  Layer *sel = p.layer(app.sel.layerId);
+  for (auto it = p.layers.rbegin(); it != p.layers.rend(); ++it) {
+    if (&*it == sel || !it->visible) continue;
+    for (auto &s : it->slices) {
+      auto pts = warpOutline(transformedWarp(*it, s));
+      std::vector<ImVec2> sp;
+      for (auto &v : pts) sp.push_back(toScreen(v));
+      dl->AddPolyline(sp.data(), int(sp.size()), IM_COL32(255, 255, 255, 40), ImDrawFlags_Closed, 1);
+    }
+  }
+
+  // ---- end of drag
+  if (dragging_ && !ImGui::IsMouseDown(ImGuiMouseButton_Left)) dragging_ = false;
+
+  // ---- selection by click (Select tool, or clicking outside the current layer)
+  auto pickLayer = [&](Vec2 c, int &sliceOut) -> Layer * {
+    for (auto &l : p.layers) { // front-most first
+      if (!l.visible) continue;
+      for (size_t si = 0; si < l.slices.size(); ++si)
+        if (pointInPolygon(c, warpOutline(transformedWarp(l, l.slices[si])))) {
+          sliceOut = int(si);
+          return &l;
+        }
+    }
+    return nullptr;
+  };
+
+  if (sel) {
+    app.sel.slice = std::clamp(app.sel.slice, 0, int(sel->slices.size()) - 1);
+    Slice &slice = sel->slices[size_t(app.sel.slice)];
+    Warp tw = transformedWarp(*sel, slice);
+
+    // Selected layer outlines.
+    for (size_t si = 0; si < sel->slices.size(); ++si) {
+      auto pts = warpOutline(transformedWarp(*sel, sel->slices[si]));
+      std::vector<ImVec2> sp;
+      for (auto &v : pts) sp.push_back(toScreen(v));
+      bool active = int(si) == app.sel.slice;
+      dl->AddPolyline(sp.data(), int(sp.size()), active ? IM_COL32(250, 158, 46, 255) : IM_COL32(250, 158, 46, 110),
+                      ImDrawFlags_Closed, active ? 2.0f : 1.0f);
+    }
+    // Masks of the selected layer.
+    for (size_t mi = 0; mi < sel->masks.size(); ++mi) {
+      const Mask &m = sel->masks[mi];
+      if (m.points.empty()) continue;
+      std::vector<ImVec2> sp;
+      for (auto &v : m.points) sp.push_back(toScreen(v));
+      bool active = int(mi) == app.sel.mask && tool == Tool::Mask;
+      ImU32 col = m.subtract ? IM_COL32(255, 90, 90, active ? 255 : 120) : IM_COL32(80, 220, 255, active ? 255 : 120);
+      dl->AddPolyline(sp.data(), int(sp.size()), col, ImDrawFlags_Closed, active ? 2.0f : 1.0f);
+    }
+
+    switch (tool) {
+    case Tool::Select: {
+      if (clicked) {
+        int si = 0;
+        if (Layer *hit = pickLayer(mc, si)) {
+          app.sel.layerId = hit->id;
+          app.sel.slice = si;
+          app.sel.inspector = Inspector::Layer;
+          dragging_ = true;
+          dragKind_ = 3;
+        }
+      }
+      if (dragging_ && dragKind_ == 3 && ImGui::IsMouseDragging(ImGuiMouseButton_Left, 0)) {
+        Layer *l = p.layer(app.sel.layerId);
+        if (l && (io.MouseDelta.x != 0 || io.MouseDelta.y != 0)) {
+          float s = std::fabs(l->transform.scale) < 1e-4f ? 1.0f : l->transform.scale;
+          Vec2 d{io.MouseDelta.x / scale / s, io.MouseDelta.y / scale / s};
+          if (io.KeyShift)
+            for (auto &sl : l->slices) sl.warp.translate(d);
+          else
+            l->slices[size_t(std::clamp(app.sel.slice, 0, int(l->slices.size()) - 1))].warp.translate(d);
+          app.edited();
+        }
+      }
+      break;
+    }
+    case Tool::Perspective: {
+      for (int c = 0; c < 4; ++c) handle(dl, toScreen(tw.corners[size_t(c)]), IM_COL32(250, 158, 46, 255), app.sel.corner == c);
+      if (clicked) {
+        int best = -1;
+        float bestD = kPick;
+        for (int c = 0; c < 4; ++c) {
+          float d = dist(mouse, toScreen(tw.corners[size_t(c)]));
+          if (d < bestD) { bestD = d; best = c; }
+        }
+        if (best >= 0) {
+          app.sel.corner = best;
+          dragging_ = true;
+          dragKind_ = 1;
+        } else if (pointInPolygon(mc, warpOutline(tw))) {
+          dragging_ = true;
+          dragKind_ = 3;
+        } else {
+          int si = 0;
+          if (Layer *hit = pickLayer(mc, si)) {
+            app.sel.layerId = hit->id;
+            app.sel.slice = si;
+          }
+        }
+      }
+      if (dragging_ && dragKind_ == 1 && app.sel.corner >= 0) {
+        slice.warp.corners[size_t(app.sel.corner)] = untransform(*sel, mc);
+        app.edited();
+      } else if (dragging_ && dragKind_ == 3 && (io.MouseDelta.x != 0 || io.MouseDelta.y != 0)) {
+        slice.warp.translate({io.MouseDelta.x / scale, io.MouseDelta.y / scale});
+        app.edited();
+      }
+      break;
+    }
+    case Tool::Mesh: {
+      Warp &w = slice.warp;
+      // Grid lines through the control points.
+      for (int r = 0; r < w.meshRows; ++r)
+        for (int c = 0; c + 1 < w.meshCols; ++c)
+          dl->AddLine(toScreen(transformedWarp(*sel, slice).meshPointDest(c, r)),
+                      toScreen(transformedWarp(*sel, slice).meshPointDest(c + 1, r)), IM_COL32(250, 158, 46, 90));
+      for (int c = 0; c < w.meshCols; ++c)
+        for (int r = 0; r + 1 < w.meshRows; ++r)
+          dl->AddLine(toScreen(transformedWarp(*sel, slice).meshPointDest(c, r)),
+                      toScreen(transformedWarp(*sel, slice).meshPointDest(c, r + 1)), IM_COL32(250, 158, 46, 90));
+      for (int r = 0; r < w.meshRows; ++r)
+        for (int c = 0; c < w.meshCols; ++c)
+          handle(dl, toScreen(tw.meshPointDest(c, r)), IM_COL32(250, 158, 46, 255),
+                 app.sel.meshPoint == r * w.meshCols + c, true);
+      if (clicked) {
+        int best = -1;
+        float bestD = kPick;
+        for (int r = 0; r < w.meshRows; ++r)
+          for (int c = 0; c < w.meshCols; ++c) {
+            float d = dist(mouse, toScreen(tw.meshPointDest(c, r)));
+            if (d < bestD) { bestD = d; best = r * w.meshCols + c; }
+          }
+        if (best >= 0) {
+          app.sel.meshPoint = best;
+          dragging_ = true;
+          dragKind_ = 2;
+        }
+      }
+      if (dragging_ && dragKind_ == 2 && app.sel.meshPoint >= 0 && app.sel.meshPoint < int(w.mesh.size())) {
+        w.mesh[size_t(app.sel.meshPoint)] = w.unmapPerspective(untransform(*sel, mc));
+        app.edited();
+      }
+      if (w.meshCols == 2 && w.meshRows == 2)
+        dl->AddText({origin.x + 8, origin.y + 8}, IM_COL32(255, 255, 255, 200),
+                    "Aumente a malha em Propriedades > Fatias (ex.: 5 × 5)");
+      break;
+    }
+    case Tool::Mask: {
+      if (app.sel.mask < 0 || app.sel.mask >= int(sel->masks.size())) {
+        if (clicked) { // first click creates a mask
+          Mask m;
+          m.name = "Máscara " + std::to_string(sel->masks.size() + 1);
+          sel->masks.push_back(m);
+          app.sel.mask = int(sel->masks.size()) - 1;
+        } else {
+          break;
+        }
+      }
+      Mask &m = sel->masks[size_t(app.sel.mask)];
+      for (size_t i = 0; i < m.points.size(); ++i)
+        handle(dl, toScreen(m.points[i]), IM_COL32(80, 220, 255, 255), app.sel.maskPoint == int(i), true);
+
+      int near = -1;
+      float bestD = kPick;
+      for (size_t i = 0; i < m.points.size(); ++i) {
+        float d = dist(mouse, toScreen(m.points[i]));
+        if (d < bestD) { bestD = d; near = int(i); }
+      }
+      if (rclicked && near >= 0) {
+        m.points.erase(m.points.begin() + near);
+        app.sel.maskPoint = -1;
+        app.edited();
+      } else if (clicked) {
+        if (near >= 0) {
+          app.sel.maskPoint = near;
+          dragging_ = true;
+          dragKind_ = 4;
+        } else if (io.KeyShift && pointInPolygon(mc, m.points)) {
+          dragging_ = true;
+          dragKind_ = 5;
+        } else {
+          // Insert on the closest edge if the click is near one, else append.
+          int insertAt = int(m.points.size());
+          if (m.points.size() >= 3) {
+            float best = kPick / scale;
+            for (size_t i = 0; i < m.points.size(); ++i) {
+              float d = distToSegment(mc, m.points[i], m.points[(i + 1) % m.points.size()]);
+              if (d < best) { best = d; insertAt = int(i) + 1; }
+            }
+          }
+          m.points.insert(m.points.begin() + insertAt, mc);
+          app.sel.maskPoint = insertAt;
+          dragging_ = true;
+          dragKind_ = 4;
+          app.edited();
+        }
+      }
+      if (dragging_ && dragKind_ == 4 && app.sel.maskPoint >= 0 && app.sel.maskPoint < int(m.points.size())) {
+        m.points[size_t(app.sel.maskPoint)] = mc;
+        app.edited();
+      } else if (dragging_ && dragKind_ == 5 && (io.MouseDelta.x != 0 || io.MouseDelta.y != 0)) {
+        for (auto &pt : m.points) pt += Vec2{io.MouseDelta.x / scale, io.MouseDelta.y / scale};
+        app.edited();
+      }
+      break;
+    }
+    }
+  } else if (clicked) {
+    int si = 0;
+    if (Layer *hit = pickLayer(mc, si)) {
+      app.sel.layerId = hit->id;
+      app.sel.slice = si;
+      app.sel.inspector = Inspector::Layer;
+    }
+  }
+
+  // Cursor position readout.
+  if (hovered) {
+    char buf[64];
+    std::snprintf(buf, sizeof(buf), "%.0f, %.0f", mc.x, mc.y);
+    ImVec2 br = ImGui::GetItemRectMax();
+    dl->AddText({br.x - 90, br.y - 20}, IM_COL32(180, 180, 180, 200), buf);
+  }
+}
+
+void Workspace::drawOutputOverlay(App &app, ImDrawList *dl, ImVec2 origin, ImVec2 size) {
+  OutputConfig *o = app.engine.project.output(viewOutputId);
+  if (!o) return;
+  ImGuiIO &io = ImGui::GetIO();
+  auto toScreen = [&](Vec2 v) { return ImVec2{origin.x + v.x * size.x, origin.y + v.y * size.y}; };
+  Vec2 mn{(io.MousePos.x - origin.x) / size.x, (io.MousePos.y - origin.y) / size.y};
+  bool clicked = ImGui::IsItemHovered() && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !io.KeyAlt;
+  if (dragging_ && !ImGui::IsMouseDown(ImGuiMouseButton_Left)) dragging_ = false;
+  Warp &w = o->warp;
+
+  auto pts = warpOutline(w);
+  std::vector<ImVec2> sp;
+  for (auto &v : pts) sp.push_back(toScreen(v));
+  dl->AddPolyline(sp.data(), int(sp.size()), IM_COL32(90, 160, 255, 255), ImDrawFlags_Closed, 2);
+
+  if (tool == Tool::Mesh) {
+    for (int r = 0; r < w.meshRows; ++r)
+      for (int c = 0; c < w.meshCols; ++c)
+        handle(dl, toScreen(w.meshPointDest(c, r)), IM_COL32(90, 160, 255, 255),
+               app.sel.meshPoint == r * w.meshCols + c, true);
+    if (clicked) {
+      int best = -1;
+      float bestD = kPick;
+      for (int r = 0; r < w.meshRows; ++r)
+        for (int c = 0; c < w.meshCols; ++c) {
+          float d = dist(io.MousePos, toScreen(w.meshPointDest(c, r)));
+          if (d < bestD) { bestD = d; best = r * w.meshCols + c; }
+        }
+      if (best >= 0) { app.sel.meshPoint = best; dragging_ = true; dragKind_ = 7; }
+    }
+    if (dragging_ && dragKind_ == 7 && app.sel.meshPoint >= 0 && app.sel.meshPoint < int(w.mesh.size())) {
+      w.mesh[size_t(app.sel.meshPoint)] = w.unmapPerspective(mn);
+      app.edited();
+    }
+  } else {
+    for (int c = 0; c < 4; ++c) handle(dl, toScreen(w.corners[size_t(c)]), IM_COL32(90, 160, 255, 255), app.sel.corner == c);
+    if (clicked) {
+      int best = -1;
+      float bestD = kPick;
+      for (int c = 0; c < 4; ++c) {
+        float d = dist(io.MousePos, toScreen(w.corners[size_t(c)]));
+        if (d < bestD) { bestD = d; best = c; }
+      }
+      if (best >= 0) { app.sel.corner = best; dragging_ = true; dragKind_ = 6; }
+    }
+    if (dragging_ && dragKind_ == 6 && app.sel.corner >= 0) {
+      w.corners[size_t(app.sel.corner)] = mn;
+      app.edited();
+    }
+  }
+  dl->AddText({origin.x + 8, origin.y + 8}, IM_COL32(255, 255, 255, 220),
+              "Warp da saída: cantos (M) ou malha (G). Ajusta a projeção inteira.");
+}
+
+void Workspace::handleShortcuts(App &app) {
+  ImGuiIO &io = ImGui::GetIO();
+  if (io.WantTextInput || io.KeyCtrl) return;
+  if (ImGui::IsKeyPressed(ImGuiKey_V, false)) tool = Tool::Select;
+  if (ImGui::IsKeyPressed(ImGuiKey_M, false)) tool = Tool::Perspective;
+  if (ImGui::IsKeyPressed(ImGuiKey_G, false)) tool = Tool::Mesh;
+  if (ImGui::IsKeyPressed(ImGuiKey_K, false)) tool = Tool::Mask;
+  if (ImGui::IsKeyPressed(ImGuiKey_F, false)) fitRequested = true;
+
+  Project &p = app.engine.project;
+  OutputConfig *o = viewOutputId >= 0 ? p.output(viewOutputId) : nullptr;
+  Layer *l = p.layer(app.sel.layerId);
+
+  if (ImGui::IsKeyPressed(ImGuiKey_Tab)) {
+    if (tool == Tool::Perspective) app.sel.corner = (std::max(app.sel.corner, -1) + 1) % 4;
+    if (tool == Tool::Mesh) {
+      int n = 0;
+      if (o) n = int(o->warp.mesh.size());
+      else if (l) n = int(l->slices[size_t(std::clamp(app.sel.slice, 0, int(l->slices.size()) - 1))].warp.mesh.size());
+      if (n) app.sel.meshPoint = (std::max(app.sel.meshPoint, -1) + 1) % n;
+    }
+    if (tool == Tool::Mask && l && app.sel.mask >= 0 && app.sel.mask < int(l->masks.size())) {
+      int n = int(l->masks[size_t(app.sel.mask)].points.size());
+      if (n) app.sel.maskPoint = (std::max(app.sel.maskPoint, -1) + 1) % n;
+    }
+  }
+
+  // Arrow keys nudge the selected handle.
+  Vec2 d;
+  float step = io.KeyShift ? 10.0f : 1.0f;
+  if (ImGui::IsKeyPressed(ImGuiKey_LeftArrow)) d.x -= step;
+  if (ImGui::IsKeyPressed(ImGuiKey_RightArrow)) d.x += step;
+  if (ImGui::IsKeyPressed(ImGuiKey_UpArrow)) d.y -= step;
+  if (ImGui::IsKeyPressed(ImGuiKey_DownArrow)) d.y += step;
+  bool del = ImGui::IsKeyPressed(ImGuiKey_Delete) || ImGui::IsKeyPressed(ImGuiKey_Backspace);
+  if (d.x == 0 && d.y == 0 && !del) return;
+
+  if (o) {
+    Vec2 nd{d.x * 0.001f, d.y * 0.001f};
+    if (tool == Tool::Perspective && app.sel.corner >= 0) o->warp.corners[size_t(app.sel.corner)] += nd;
+    else if (tool == Tool::Mesh && app.sel.meshPoint >= 0 && app.sel.meshPoint < int(o->warp.mesh.size()))
+      o->warp.mesh[size_t(app.sel.meshPoint)] += nd;
+    else return;
+    app.edited();
+    return;
+  }
+  if (!l) return;
+  Slice &s = l->slices[size_t(std::clamp(app.sel.slice, 0, int(l->slices.size()) - 1))];
+  switch (tool) {
+  case Tool::Select: s.warp.translate(d); break;
+  case Tool::Perspective:
+    if (app.sel.corner < 0) return;
+    s.warp.corners[size_t(app.sel.corner)] += d;
+    break;
+  case Tool::Mesh: {
+    if (app.sel.meshPoint < 0 || app.sel.meshPoint >= int(s.warp.mesh.size())) return;
+    // Nudge in canvas pixels, converted back to the mesh's unit space.
+    Vec2 cur = s.warp.meshPointDest(app.sel.meshPoint % s.warp.meshCols, app.sel.meshPoint / s.warp.meshCols);
+    s.warp.mesh[size_t(app.sel.meshPoint)] = s.warp.unmapPerspective(cur + d);
+    break;
+  }
+  case Tool::Mask: {
+    if (app.sel.mask < 0 || app.sel.mask >= int(l->masks.size())) return;
+    Mask &m = l->masks[size_t(app.sel.mask)];
+    if (app.sel.maskPoint < 0 || app.sel.maskPoint >= int(m.points.size())) return;
+    if (del) {
+      m.points.erase(m.points.begin() + app.sel.maskPoint);
+      app.sel.maskPoint = -1;
+    } else {
+      m.points[size_t(app.sel.maskPoint)] += d;
+    }
+    break;
+  }
+  }
+  app.edited();
+}
+
+} // namespace lumen

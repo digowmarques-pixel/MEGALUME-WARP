@@ -1,0 +1,8 @@
+build/
+build-*/
+out/
+vcpkg_installed/
+.vs/
+.vscode/
+*.ppm
+*.lumen.tmp

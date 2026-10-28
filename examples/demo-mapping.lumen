@@ -1,0 +1,644 @@
+{
+  "format": "lumen",
+  "version": 1,
+  "canvas": {
+    "width": 1920,
+    "height": 1080,
+    "background": [
+      0,
+      0,
+      0,
+      1
+    ]
+  },
+  "defaultTransition": 1.5,
+  "osc": {
+    "enabled": true,
+    "port": 8000
+  },
+  "library": [
+    {
+      "id": 1,
+      "name": "Test card",
+      "type": 2,
+      "generator": 0,
+      "color1": [
+        1,
+        1,
+        1,
+        1
+      ],
+      "color2": [
+        0,
+        0,
+        0,
+        1
+      ],
+      "param1": 1,
+      "param2": 0.5,
+      "size": [
+        1920,
+        1080
+      ]
+    },
+    {
+      "id": 2,
+      "name": "Plasma",
+      "type": 2,
+      "generator": 4,
+      "color1": [
+        0.1,
+        0.4,
+        1,
+        1
+      ],
+      "color2": [
+        1,
+        0.2,
+        0.5,
+        1
+      ],
+      "param1": 0.8,
+      "param2": 3,
+      "size": [
+        1280,
+        720
+      ]
+    },
+    {
+      "id": 3,
+      "name": "Listras",
+      "type": 2,
+      "generator": 5,
+      "color1": [
+        1,
+        1,
+        1,
+        1
+      ],
+      "color2": [
+        0,
+        0,
+        0,
+        1
+      ],
+      "param1": 0.4,
+      "param2": 10,
+      "size": [
+        1280,
+        720
+      ]
+    },
+    {
+      "id": 4,
+      "name": "Degradê",
+      "type": 2,
+      "generator": 2,
+      "color1": [
+        0.02,
+        0.02,
+        0.08,
+        1
+      ],
+      "color2": [
+        0.15,
+        0.05,
+        0.2,
+        1
+      ],
+      "param1": 90,
+      "param2": 0.5,
+      "size": [
+        1280,
+        720
+      ]
+    },
+    {
+      "id": 5,
+      "name": "Grade",
+      "type": 2,
+      "generator": 3,
+      "color1": [
+        1,
+        1,
+        1,
+        1
+      ],
+      "color2": [
+        0,
+        0,
+        0,
+        1
+      ],
+      "param1": 60,
+      "param2": 2,
+      "size": [
+        1920,
+        1080
+      ]
+    }
+  ],
+  "layers": [
+    {
+      "id": 10,
+      "name": "Contorno",
+      "visible": true,
+      "opacity": 0.45,
+      "blend": 1,
+      "fx": {
+        "brightness": 0,
+        "contrast": 1,
+        "saturation": 1,
+        "hue": 0,
+        "invert": false,
+        "tint": [
+          1,
+          1,
+          1,
+          1
+        ]
+      },
+      "transform": {
+        "position": [
+          0,
+          0
+        ],
+        "scale": 1,
+        "rotation": 0
+      },
+      "slices": [
+        {
+          "name": "Topo",
+          "enabled": true,
+          "crop": [
+            0,
+            0,
+            1,
+            0.5
+          ],
+          "warp": {
+            "corners": [
+              [
+                960,
+                200
+              ],
+              [
+                1360,
+                380
+              ],
+              [
+                960,
+                560
+              ],
+              [
+                560,
+                380
+              ]
+            ]
+          }
+        },
+        {
+          "name": "Face esquerda",
+          "enabled": true,
+          "crop": [
+            0,
+            0.5,
+            0.5,
+            1
+          ],
+          "warp": {
+            "corners": [
+              [
+                560,
+                380
+              ],
+              [
+                960,
+                560
+              ],
+              [
+                960,
+                980
+              ],
+              [
+                560,
+                800
+              ]
+            ]
+          }
+        },
+        {
+          "name": "Face direita",
+          "enabled": true,
+          "crop": [
+            0.5,
+            0.5,
+            1,
+            1
+          ],
+          "warp": {
+            "corners": [
+              [
+                960,
+                560
+              ],
+              [
+                1360,
+                380
+              ],
+              [
+                1360,
+                800
+              ],
+              [
+                960,
+                980
+              ]
+            ]
+          }
+        }
+      ],
+      "masks": []
+    },
+    {
+      "id": 11,
+      "name": "Cubo",
+      "visible": true,
+      "opacity": 1,
+      "blend": 0,
+      "fx": {
+        "brightness": 0,
+        "contrast": 1,
+        "saturation": 1,
+        "hue": 0,
+        "invert": false,
+        "tint": [
+          1,
+          1,
+          1,
+          1
+        ]
+      },
+      "transform": {
+        "position": [
+          0,
+          0
+        ],
+        "scale": 1,
+        "rotation": 0
+      },
+      "slices": [
+        {
+          "name": "Topo",
+          "enabled": true,
+          "crop": [
+            0,
+            0,
+            1,
+            0.5
+          ],
+          "warp": {
+            "corners": [
+              [
+                960,
+                200
+              ],
+              [
+                1360,
+                380
+              ],
+              [
+                960,
+                560
+              ],
+              [
+                560,
+                380
+              ]
+            ]
+          }
+        },
+        {
+          "name": "Face esquerda",
+          "enabled": true,
+          "crop": [
+            0,
+            0.5,
+            0.5,
+            1
+          ],
+          "warp": {
+            "corners": [
+              [
+                560,
+                380
+              ],
+              [
+                960,
+                560
+              ],
+              [
+                960,
+                980
+              ],
+              [
+                560,
+                800
+              ]
+            ]
+          }
+        },
+        {
+          "name": "Face direita",
+          "enabled": true,
+          "crop": [
+            0.5,
+            0.5,
+            1,
+            1
+          ],
+          "warp": {
+            "corners": [
+              [
+                960,
+                560
+              ],
+              [
+                1360,
+                380
+              ],
+              [
+                1360,
+                800
+              ],
+              [
+                960,
+                980
+              ]
+            ]
+          }
+        }
+      ],
+      "masks": []
+    },
+    {
+      "id": 12,
+      "name": "Fundo",
+      "visible": true,
+      "opacity": 1,
+      "blend": 0,
+      "fx": {
+        "brightness": 0,
+        "contrast": 1,
+        "saturation": 1,
+        "hue": 0,
+        "invert": false,
+        "tint": [
+          1,
+          1,
+          1,
+          1
+        ]
+      },
+      "transform": {
+        "position": [
+          0,
+          0
+        ],
+        "scale": 1,
+        "rotation": 0
+      },
+      "slices": [
+        {
+          "name": "Parede",
+          "enabled": true,
+          "crop": [
+            0,
+            0,
+            1,
+            1
+          ],
+          "warp": {
+            "corners": [
+              [
+                0,
+                0
+              ],
+              [
+                1920,
+                0
+              ],
+              [
+                1920,
+                1080
+              ],
+              [
+                0,
+                1080
+              ]
+            ]
+          }
+        }
+      ],
+      "masks": [
+        {
+          "name": "Sem cubo",
+          "enabled": true,
+          "subtract": true,
+          "feather": 24,
+          "points": [
+            [
+              960,
+              200
+            ],
+            [
+              1360,
+              380
+            ],
+            [
+              1360,
+              800
+            ],
+            [
+              960,
+              980
+            ],
+            [
+              560,
+              800
+            ],
+            [
+              560,
+              380
+            ]
+          ]
+        }
+      ]
+    }
+  ],
+  "columns": [
+    {
+      "id": 20,
+      "name": "Alinhamento",
+      "transition": 0,
+      "cells": [
+        {
+          "layer": 11,
+          "media": 1,
+          "loop": true,
+          "speed": 1
+        },
+        {
+          "layer": 12,
+          "media": 5,
+          "loop": true,
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "id": 21,
+      "name": "Plasma",
+      "transition": -1,
+      "cells": [
+        {
+          "layer": 10,
+          "media": 3,
+          "loop": true,
+          "speed": 1
+        },
+        {
+          "layer": 11,
+          "media": 2,
+          "loop": true,
+          "speed": 1
+        },
+        {
+          "layer": 12,
+          "media": 4,
+          "loop": true,
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "id": 22,
+      "name": "Só o cubo",
+      "transition": -1,
+      "cells": [
+        {
+          "layer": 11,
+          "media": 2,
+          "loop": true,
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "id": 23,
+      "name": "Fim",
+      "transition": 3,
+      "cells": []
+    }
+  ],
+  "outputs": [
+    {
+      "id": 30,
+      "name": "Projetor 1",
+      "enabled": true,
+      "monitor": -1,
+      "window": [
+        80,
+        80,
+        960,
+        540
+      ],
+      "source": [
+        0,
+        0,
+        1920,
+        1080
+      ],
+      "warp": {
+        "corners": [
+          [
+            0,
+            0
+          ],
+          [
+            1,
+            0
+          ],
+          [
+            1,
+            1
+          ],
+          [
+            0,
+            1
+          ]
+        ]
+      },
+      "softEdge": {
+        "left": 0,
+        "right": 0,
+        "top": 0,
+        "bottom": 0,
+        "gamma": 2.2,
+        "power": 2
+      },
+      "testCard": false
+    }
+  ],
+  "mappings": [
+    {
+      "enabled": true,
+      "address": "/sensor/1",
+      "arg": 0,
+      "in": [
+        0,
+        1
+      ],
+      "target": 8,
+      "layer": 11,
+      "out": [
+        -180,
+        180
+      ],
+      "smoothing": 0.85
+    },
+    {
+      "enabled": true,
+      "address": "/sensor/2",
+      "arg": 0,
+      "in": [
+        0,
+        1
+      ],
+      "target": 0,
+      "layer": 10,
+      "out": [
+        0,
+        1
+      ],
+      "smoothing": 0.5
+    },
+    {
+      "enabled": true,
+      "address": "/botao",
+      "arg": 0,
+      "in": [
+        0,
+        1
+      ],
+      "target": 11,
+      "layer": -1,
+      "out": [
+        0,
+        1
+      ],
+      "smoothing": 0
+    }
+  ],
+  "nextId": 100
+}

@@ -1,0 +1,67 @@
+name: build
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    env:
+      VCPKG_DEFAULT_BINARY_CACHE: ${{ github.workspace }}\vcpkg-cache
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Restore vcpkg binary cache
+        uses: actions/cache@v4
+        with:
+          path: vcpkg-cache
+          key: vcpkg-${{ runner.os }}-${{ hashFiles('vcpkg.json') }}
+          restore-keys: vcpkg-${{ runner.os }}-
+
+      - name: Create cache dir
+        run: New-Item -ItemType Directory -Force -Path vcpkg-cache | Out-Null
+
+      - name: Configure
+        run: >
+          cmake -S . -B build -G "Visual Studio 17 2022" -A x64
+          -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT\scripts\buildsystems\vcpkg.cmake"
+          -DVCPKG_TARGET_TRIPLET=x64-windows
+
+      - name: Build
+        run: cmake --build build --config Release --parallel
+
+      - name: Unit tests
+        run: ctest --test-dir build -C Release --output-on-failure
+
+      - name: Package
+        run: |
+          New-Item -ItemType Directory -Force -Path dist/Lumen | Out-Null
+          Copy-Item build/Release/*.exe dist/Lumen/
+          Copy-Item build/Release/*.dll dist/Lumen/
+          Copy-Item -Recurse examples dist/Lumen/examples
+          Copy-Item README.md, docs -Recurse -Destination dist/Lumen/
+          Remove-Item dist/Lumen/lumen_tests.exe
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Lumen-windows-x64
+          path: dist/Lumen
+
+  linux:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libglfw3-dev libavcodec-dev libavformat-dev libswscale-dev libavutil-dev libgl1-mesa-dev xvfb
+      - name: Build
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+          cmake --build build --parallel
+      - name: Unit tests
+        run: ctest --test-dir build --output-on-failure
+      - name: Smoke test (renders the demo project headless)
+        run: xvfb-run -a ./build/lumen examples/demo-mapping.lumen --frames 10 --launch 1 --no-outputs --screenshot-canvas canvas.ppm && test -s canvas.ppm

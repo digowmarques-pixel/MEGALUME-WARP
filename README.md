@@ -1,0 +1,139 @@
+# Lumen
+
+Media server para **videomapping** e **instalações interativas**, inspirado no
+Millumin, feito para **Windows** (também compila no Linux).
+
+## O que já funciona (v0.1)
+
+| Área | Recursos |
+|---|---|
+| **Show** | Dashboard em colunas (cues) × layers, GO pela barra de espaço, crossfade por coluna, disparo de célula individual, blackout, master |
+| **Mídia** | Vídeo via FFmpeg (H.264, HEVC, ProRes, HAP, VP9...) decodificado em thread separada, imagens (PNG, JPG, TIFF, WebP...), geradores: test card, cor sólida, degradê, grade, plasma, listras |
+| **Videomapping** | Fatias (slices) com recorte UV, perspectiva de 4 cantos (homografia), malha deformável (mesh warp) até 33×33, máscaras poligonais com borda suave, bordas com anti-aliasing |
+| **Composição** | Blend normal / adição / multiplicar / tela, opacidade, brilho, contraste, saturação, matiz, inverter, tinta, transformação (posição, escala, rotação) por layer |
+| **Saídas** | Várias saídas, cada uma num monitor (sem bordas) ou em janela; recorte de região do canvas, warp por saída (keystone e malha), **soft edge** para blend entre projetores, test card por saída |
+| **Interação** | Servidor **OSC** (UDP) com comandos `/lumen/...`, **mapeamentos** sensor → parâmetro com faixa de entrada/saída, suavização e botão **Aprender**, monitor de mensagens |
+| **Projeto** | Arquivo `.lumen` (JSON legível), caminhos relativos, desfazer/refazer, arrastar arquivos do Explorer |
+
+## Baixar pronto (sem compilar)
+
+Cada envio para o GitHub dispara o workflow [`build`](.github/workflows/build.yml),
+que compila no Windows e publica o artefato **Lumen-windows-x64**
+(aba *Actions* → execução mais recente → *Artifacts*). Descompacte e rode `lumen.exe`.
+
+## Compilar no Windows
+
+Requisitos:
+
+- **Visual Studio 2022** com a carga de trabalho *Desenvolvimento para desktop com C++*
+- **CMake 3.20+** (já vem com o Visual Studio)
+- **vcpkg**, que instala FFmpeg e GLFW automaticamente:
+
+```bash
+git clone https://github.com/microsoft/vcpkg C:\vcpkg
+```
+
+```bash
+C:\vcpkg\bootstrap-vcpkg.bat
+```
+
+Na pasta do projeto (*Developer PowerShell for VS 2022*):
+
+```bash
+cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake
+```
+
+```bash
+cmake --build build --config Release
+```
+
+```bash
+build\Release\lumen.exe examples\demo-mapping.lumen
+```
+
+A primeira compilação demora (o vcpkg compila o FFmpeg); as seguintes são rápidas.
+As DLLs necessárias são copiadas para `build\Release` automaticamente.
+
+Também dá para abrir a pasta direto no Visual Studio (*Arquivo → Abrir → Pasta*),
+desde que a variável `VCPKG_ROOT` aponte para o vcpkg.
+
+## Compilar no Linux (desenvolvimento)
+
+```bash
+sudo apt install build-essential cmake libglfw3-dev libavcodec-dev libavformat-dev libswscale-dev libavutil-dev libgl1-mesa-dev
+```
+
+```bash
+cmake -S . -B build && cmake --build build -j
+```
+
+```bash
+./build/lumen examples/demo-mapping.lumen
+```
+
+## Primeiros passos
+
+1. Abra `examples/demo-mapping.lumen`: um cubo mapeado com 3 faces.
+2. Pressione **Espaço** para avançar as colunas (Alinhamento → Plasma → Só o cubo → Fim).
+3. Selecione a layer **Cubo**, pressione **M** (Perspectiva) e arraste os cantos no workspace.
+4. Pressione **G** (Malha), aumente a malha em *Propriedades → Fatias* (ex.: 5 × 5) e curve a imagem.
+5. Em *Saídas*, escolha o **monitor** do projetor. Desative o espelhamento (Win+P → *Estender*).
+6. Em *Interação*, envie OSC para a porta 8000 (ex.: `/sensor/1 0.5` gira o matiz do cubo).
+
+### Atalhos
+
+| Tecla | Ação |
+|---|---|
+| Espaço / Shift+Espaço | GO (próxima coluna) / coluna anterior |
+| Esc | Para tudo com fade |
+| B | Blackout |
+| V / M / G / K | Ferramentas: selecionar, perspectiva, malha, máscara |
+| Tab | Próximo canto / ponto |
+| Setas (Shift = ×10) | Ajuste fino do ponto selecionado |
+| F | Enquadrar a vista |
+| Roda / botão do meio / Alt+arrastar | Zoom e mover a vista |
+| Ctrl+Z / Ctrl+Y | Desfazer / refazer |
+| Ctrl+S / Ctrl+Shift+S / Ctrl+O / Ctrl+N / Ctrl+I | Salvar / salvar como / abrir / novo / importar |
+
+## Controle por OSC
+
+Veja [docs/OSC.md](docs/OSC.md). Exemplos:
+
+```
+/lumen/go
+/lumen/column/launch 2
+/lumen/layer/1/opacity 0.5
+/lumen/layer/Cubo/position 120 -40
+/lumen/blackout 1
+```
+
+## Estrutura do código
+
+```
+src/
+  app.*            janela principal, loop, arquivos, desfazer
+  core/            modelo do projeto (JSON) e geometria do warp (homografia + malha)
+  media/           decodificação FFmpeg (thread), geradores em shader, cache de miniaturas
+  engine/          motor do show (colunas, transições), compositor, janelas de saída
+  control/         OSC (UDP) e mapeamentos sensor → parâmetro
+  ui/              interface (Dear ImGui): biblioteca, dashboard, workspace, propriedades
+  gl/ render/      carregador OpenGL 3.3 e wrappers (shader, textura, framebuffer)
+tests/             testes unitários (warp, OSC, projeto)
+```
+
+Mais detalhes em [docs/ARQUITETURA.md](docs/ARQUITETURA.md). Próximos passos em
+[docs/ROADMAP.md](docs/ROADMAP.md).
+
+## Linha de comando
+
+```
+lumen [projeto.lumen] [--launch N] [--no-outputs] [--size LxA]
+      [--frames N --screenshot-canvas F.ppm --screenshot-ui F.ppm --screenshot-output F.ppm]
+```
+
+As opções `--frames`/`--screenshot-*` servem para testes automáticos (o CI usa).
+
+## Licenças de terceiros
+
+Dear ImGui (MIT), nlohmann/json (MIT), cabeçalhos Khronos (MIT/Apache-2.0),
+GLFW (zlib) e FFmpeg (LGPL 2.1+, via vcpkg, link dinâmico).
