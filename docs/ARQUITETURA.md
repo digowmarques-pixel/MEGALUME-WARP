@@ -47,8 +47,21 @@
 - **Máscaras** em coordenadas do canvas (ficam presas à superfície física,
   mesmo quando a layer é movida por OSC).
 - **Cores pré-multiplicadas** no compositor; blend modes via `glBlendFunc`.
-- **Vídeo**: decodificado em RGBA numa thread com fila de 6 quadros. O relógio de
-  cada reprodução é independente, e os quadros atrasados são descartados.
+- **Vídeo**: decodificado numa thread com fila de 6 quadros, mantendo o formato
+  nativo (planos YUV, NV12, P010 ou blocos HAP). `FrameUploader` envia os planos para a
+  GPU e um shader converte para RGBA (matriz BT.601/709/2020, faixa limitada/total). Com
+  decodificação por hardware, o quadro vem da GPU como NV12/P010.
+- **HAP**: o pacote é lido direto (`media/hap.cpp`, com Snappy próprio) e enviado como
+  textura DXT1/DXT5/BC4 com `glCompressedTexImage2D`. A CPU não decodifica nada.
+- **Áudio**: cada vídeo com som tem um `AudioDecoder` (thread, FFmpeg + swresample →
+  float 48 kHz estéreo) que escreve num `AudioVoice` (buffer circular). O callback do
+  miniaudio mistura as vozes com rampa de ganho. O número de amostras tocadas é o
+  **relógio mestre** do vídeo, e o loop do áudio tem exatamente a duração do loop do
+  vídeo (corta ou completa com silêncio), por isso não há deriva.
+- **Ao vivo**: `LiveInput` (câmera/stream/Spout) fica no `MediaCache` e é compartilhado
+  por todas as layers. É fechado quando nenhuma layer usa.
+- **MIDI**: RtMidi converte as mensagens em endereços `/midi/...` que passam pelo mesmo
+  sistema de mapeamentos do OSC.
 - **Projeto em JSON** com caminhos relativos ao arquivo `.lumen`.
 
 ## Onde mexer para...
@@ -58,6 +71,8 @@
 | novo gerador | `media/source.cpp` (`kGenBodies`) + `GeneratorKind` em `core/project.h` |
 | novo parâmetro controlável | `MappingTarget` (`core/project.h`) + `Engine::setParam` (`control/mapping.cpp`) |
 | novo comando OSC | `Engine::handleOsc` (`control/mapping.cpp`) |
+| novo tipo de entrada ao vivo | `LiveInput` (`media/source.cpp`) |
+| novo formato de pixel | `Pipeline::toNative` (`media/decoder.cpp`) + shader em `media/upload.cpp` |
 | novo efeito de cor | shader `kLayerFS` em `engine/compositor.cpp` + `LayerFx` |
 | novo painel | `ui/ui.cpp` |
 | nova ferramenta de mapping | `ui/workspace.cpp` |

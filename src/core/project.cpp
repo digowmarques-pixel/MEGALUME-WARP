@@ -19,7 +19,8 @@ static const char *kBlendNames[] = {"Normal", "Add", "Multiply", "Screen"};
 static const char *kTargetNames[] = {"Opacity",    "Position X", "Position Y",   "Scale",
                                      "Rotation",   "Brightness", "Contrast",     "Saturation",
                                      "Hue",        "Speed",      "Launch column", "Go (next)",
-                                     "Stop all"};
+                                     "Stop all",   "Volume",     "Master opacity", "Master volume",
+                                     "Blackout"};
 
 const char *generatorName(GeneratorKind k) { return kGeneratorNames[int(k)]; }
 const char *blendName(BlendMode b) { return kBlendNames[int(b)]; }
@@ -114,6 +115,29 @@ MediaItem &Project::addGenerator(GeneratorKind kind) {
   case GeneratorKind::Stripes: m.param1 = 0.5f; m.param2 = 12; break;
   default: break;
   }
+  library.push_back(m);
+  return library.back();
+}
+
+MediaItem &Project::addLive(const std::string &name, const std::string &url,
+                             const std::string &format, const std::string &options) {
+  MediaItem m;
+  m.id = newId();
+  m.type = MediaType::Live;
+  m.name = name.empty() ? url : name;
+  m.path = url;
+  m.liveFormat = format;
+  m.liveOptions = options;
+  library.push_back(m);
+  return library.back();
+}
+
+MediaItem &Project::addSpout(const std::string &sender) {
+  MediaItem m;
+  m.id = newId();
+  m.type = MediaType::Spout;
+  m.name = sender.empty() ? "Spout (ativo)" : "Spout: " + sender;
+  m.path = sender;
   library.push_back(m);
   return library.back();
 }
@@ -235,7 +259,14 @@ std::string serializeProject(const Project &p, const std::string &baseDir) {
   j["version"] = 1;
   j["canvas"] = {{"width", p.canvasW}, {"height", p.canvasH}, {"background", toJson(p.background)}};
   j["defaultTransition"] = p.defaultTransition;
-  j["osc"] = {{"enabled", p.oscEnabled}, {"port", p.oscPort}};
+  j["osc"] = {{"enabled", p.oscEnabled}, {"port", p.oscPort}, {"targets", json::array()}};
+  for (auto &t : p.oscTargets)
+    j["osc"]["targets"].push_back({{"enabled", t.enabled}, {"host", t.host}, {"port", t.port},
+                                   {"feedback", t.feedback}});
+  j["midi"] = {{"enabled", p.midiEnabled}};
+  j["audio"] = {{"device", p.audioDevice}, {"master", p.masterVolume}};
+  j["video"] = {{"hardwareDecode", p.hardwareDecode}};
+  j["spout"] = {{"send", p.spoutSend}, {"name", p.spoutName}};
   j["nextId"] = p.nextId;
 
   for (auto &m : p.library) {
@@ -247,6 +278,12 @@ std::string serializeProject(const Project &p, const std::string &baseDir) {
       jm["param1"] = m.param1;
       jm["param2"] = m.param2;
       jm["size"] = {m.width, m.height};
+    } else if (m.type == MediaType::Live) {
+      jm["path"] = m.path;
+      jm["format"] = m.liveFormat;
+      jm["options"] = m.liveOptions;
+    } else if (m.type == MediaType::Spout) {
+      jm["path"] = m.path;
     } else {
       jm["path"] = makeRelative(m.path, baseDir);
     }
@@ -255,7 +292,7 @@ std::string serializeProject(const Project &p, const std::string &baseDir) {
 
   for (auto &l : p.layers) {
     json jl = {{"id", l.id}, {"name", l.name}, {"visible", l.visible}, {"opacity", l.opacity},
-               {"blend", int(l.blend)}};
+               {"blend", int(l.blend)}, {"volume", l.volume}, {"mute", l.mute}};
     jl["fx"] = {{"brightness", l.fx.brightness}, {"contrast", l.fx.contrast},
                 {"saturation", l.fx.saturation}, {"hue", l.fx.hue},
                 {"invert", l.fx.invert}, {"tint", toJson(l.fx.tint)}};
@@ -276,6 +313,7 @@ std::string serializeProject(const Project &p, const std::string &baseDir) {
 
   for (auto &c : p.columns) {
     json jc = {{"id", c.id}, {"name", c.name}, {"transition", c.transition}, {"cells", json::array()}};
+    if (!c.oscActions.empty()) jc["oscActions"] = c.oscActions;
     for (auto &[lid, cell] : c.cells)
       if (cell.mediaId >= 0)
         jc["cells"].push_back({{"layer", lid}, {"media", cell.mediaId}, {"loop", cell.loop},
@@ -323,13 +361,31 @@ bool deserializeProject(const std::string &text, const std::string &baseDir, Pro
     if (j.contains("osc")) {
       p.oscEnabled = j["osc"].value("enabled", true);
       p.oscPort = j["osc"].value("port", 8000);
+      for (auto &jt : j["osc"].value("targets", json::array())) {
+        OscTarget t;
+        t.enabled = jt.value("enabled", true);
+        t.host = jt.value("host", "127.0.0.1");
+        t.port = jt.value("port", 9000);
+        t.feedback = jt.value("feedback", true);
+        p.oscTargets.push_back(t);
+      }
+    }
+    if (j.contains("midi")) p.midiEnabled = j["midi"].value("enabled", true);
+    if (j.contains("audio")) {
+      p.audioDevice = j["audio"].value("device", "");
+      p.masterVolume = j["audio"].value("master", 1.0f);
+    }
+    if (j.contains("video")) p.hardwareDecode = j["video"].value("hardwareDecode", true);
+    if (j.contains("spout")) {
+      p.spoutSend = j["spout"].value("send", false);
+      p.spoutName = j["spout"].value("name", "Lumen");
     }
 
     for (auto &jm : j.value("library", json::array())) {
       MediaItem m;
       m.id = jm.value("id", 0);
       m.name = jm.value("name", "");
-      m.type = enumFrom(jm, "type", MediaType::Video, 3);
+      m.type = enumFrom(jm, "type", MediaType::Video, 5);
       if (m.type == MediaType::Generator) {
         m.generator = enumFrom(jm, "generator", GeneratorKind::TestCard, int(GeneratorKind::COUNT));
         if (jm.contains("color1")) fromJson(jm["color1"], m.color1);
@@ -337,6 +393,12 @@ bool deserializeProject(const std::string &text, const std::string &baseDir, Pro
         m.param1 = jm.value("param1", 1.0f);
         m.param2 = jm.value("param2", 0.5f);
         if (jm.contains("size")) { m.width = jm["size"][0]; m.height = jm["size"][1]; }
+      } else if (m.type == MediaType::Live) {
+        m.path = jm.value("path", "");
+        m.liveFormat = jm.value("format", "");
+        m.liveOptions = jm.value("options", "");
+      } else if (m.type == MediaType::Spout) {
+        m.path = jm.value("path", "");
       } else {
         m.path = makeAbsolute(jm.value("path", ""), baseDir);
       }
@@ -350,6 +412,8 @@ bool deserializeProject(const std::string &text, const std::string &baseDir, Pro
       l.visible = jl.value("visible", true);
       l.opacity = jl.value("opacity", 1.0f);
       l.blend = enumFrom(jl, "blend", BlendMode::Normal, 4);
+      l.volume = jl.value("volume", 1.0f);
+      l.mute = jl.value("mute", false);
       if (jl.contains("fx")) {
         auto &f = jl["fx"];
         l.fx.brightness = f.value("brightness", 0.0f);
@@ -398,6 +462,8 @@ bool deserializeProject(const std::string &text, const std::string &baseDir, Pro
       c.id = jc.value("id", 0);
       c.name = jc.value("name", "");
       c.transition = jc.value("transition", -1.0f);
+      for (auto &a : jc.value("oscActions", json::array()))
+        if (a.is_string()) c.oscActions.push_back(a.get<std::string>());
       for (auto &cell : jc.value("cells", json::array())) {
         Cell ce;
         ce.mediaId = cell.value("media", -1);

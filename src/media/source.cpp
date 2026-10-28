@@ -1,5 +1,7 @@
 #include "media/source.h"
 
+#include "io/spout.h"
+
 #include <algorithm>
 #include <cstdio>
 
@@ -127,6 +129,41 @@ void Generators::render(const MediaItem &m, double time, Framebuffer &fb, Dynami
   Framebuffer::unbind();
 }
 
+// ------------------------------------------------------------------ live
+
+LiveInput::LiveInput(const MediaItem &m, const DecoderSettings &s) : type_(m.type), url_(m.path) {
+  if (type_ == MediaType::Spout) {
+    spout_ = std::make_unique<SpoutIn>(m.path);
+    return;
+  }
+  MediaSource src{m.path, m.liveFormat, m.liveOptions, true};
+  std::string err;
+  opened_ = decoder_.open(src, false, s, &err);
+  if (!opened_) std::fprintf(stderr, "[live] %s: %s\n", m.path.c_str(), err.c_str());
+}
+
+LiveInput::~LiveInput() = default;
+
+const Texture *LiveInput::update(uint64_t frame, DynamicMesh &mesh) {
+  if (frame == lastFrame_) return tex_; // several layers share one input
+  lastFrame_ = frame;
+  if (spout_) {
+    if (spout_->receive() || (spout_->connected() && spout_->texture())) {
+      wrapped_.wrap(spout_->texture(), spout_->width(), spout_->height());
+      tex_ = &wrapped_;
+    }
+    return tex_;
+  }
+  if (decoder_.fetch(0, frame_, true)) tex_ = uploader_.upload(frame_, mesh);
+  return tex_;
+}
+
+std::string LiveInput::status() const {
+  if (spout_) return spout_->connected() ? "Spout: " + spout_->senderName() : "Spout: aguardando sender";
+  if (!opened_) return "não abriu";
+  return tex_ ? "ao vivo" : "aguardando sinal";
+}
+
 // ------------------------------------------------------------------ cache
 
 MediaCache::Entry &MediaCache::entry(const MediaItem &m) {
@@ -139,7 +176,7 @@ MediaCache::Entry &MediaCache::entry(const MediaItem &m) {
 }
 
 const MediaInfo *MediaCache::info(const MediaItem &m) {
-  if (m.type == MediaType::Generator) return nullptr;
+  if (m.type != MediaType::Video && m.type != MediaType::Image) return nullptr;
   Entry &e = entry(m);
   if (!e.probed) {
     e.probed = true;
@@ -164,8 +201,27 @@ const Texture *MediaCache::still(const MediaItem &m) {
     return nullptr;
   }
   e.still = std::make_unique<Texture>();
-  e.still->upload(f.rgba.data(), f.width, f.height);
+  e.still->upload(f.rgba().data(), f.width, f.height);
   return e.still.get();
+}
+
+std::shared_ptr<LiveInput> MediaCache::live(const MediaItem &m, const DecoderSettings &s) {
+  Entry &e = entry(m);
+  if (!e.live) e.live = std::make_shared<LiveInput>(m, s);
+  return e.live;
+}
+
+void MediaCache::setLiveTexture(int id, const Texture *t) {
+  auto it = entries_.find(id);
+  if (it != entries_.end()) it->second.liveTex = t;
+}
+
+void MediaCache::pruneLive() {
+  for (auto &[id, e] : entries_)
+    if (e.live && e.live.use_count() == 1) {
+      e.live.reset(); // nobody shows it: release the camera
+      e.liveTex = nullptr;
+    }
 }
 
 const Texture *MediaCache::thumbnail(const MediaItem &m, Generators &gen, DynamicMesh &mesh) {
@@ -179,6 +235,7 @@ const Texture *MediaCache::thumbnail(const MediaItem &m, Generators &gen, Dynami
     gen.render(small, 1.0, *e.thumbFb, mesh);
     return &e.thumbFb->texture();
   }
+  if (m.type == MediaType::Live || m.type == MediaType::Spout) return e.liveTex;
   if (e.thumb) return e.thumb.get();
   if (e.failed) return nullptr;
   VideoFrame f;
@@ -192,7 +249,7 @@ const Texture *MediaCache::thumbnail(const MediaItem &m, Generators &gen, Dynami
   for (int y = 0; y < th; ++y)
     for (int x = 0; x < tw; ++x) {
       int sx = x * f.width / tw, sy = y * f.height / th;
-      std::copy_n(&f.rgba[size_t((sy * f.width + sx) * 4)], 4, &small[size_t((y * tw + x) * 4)]);
+      std::copy_n(&f.rgba()[size_t((sy * f.width + sx) * 4)], 4, &small[size_t((y * tw + x) * 4)]);
     }
   e.thumb = std::make_unique<Texture>();
   e.thumb->upload(small.data(), tw, th);
@@ -204,22 +261,48 @@ void MediaCache::clear() { entries_.clear(); }
 
 // ------------------------------------------------------------------ playback
 
-Playback::Playback(const MediaItem &m, const Cell &cell)
-    : speed(cell.speed), loop(cell.loop), mediaId_(m.id), type_(m.type) {
-  if (type_ == MediaType::Video) {
-    decoder_ = std::make_unique<VideoDecoder>();
-    std::string err;
-    if (!decoder_->open(m.path, loop, &err)) {
-      std::fprintf(stderr, "[playback] %s: %s\n", m.path.c_str(), err.c_str());
-      decoder_.reset();
-    }
+Playback::Playback(const MediaItem &m, const Cell &cell, MediaContext &ctx)
+    : speed(cell.speed), loop(cell.loop), mediaId_(m.id), type_(m.type), audio_(ctx.audio) {
+  if (type_ == MediaType::Live || type_ == MediaType::Spout) {
+    live_ = ctx.cache.live(m, ctx.decoder);
+    return;
   }
+  if (type_ != MediaType::Video) return;
+  decoder_ = std::make_unique<VideoDecoder>();
+  std::string err;
+  if (!decoder_->open(MediaSource{m.path, "", "", false}, loop, ctx.decoder, &err)) {
+    std::fprintf(stderr, "[playback] %s: %s\n", m.path.c_str(), err.c_str());
+    decoder_.reset();
+    return;
+  }
+  // Sound: only at normal speed (no time-stretching yet).
+  if (audio_ && audio_->running() && decoder_->info().hasAudio && speed == 1.0f) {
+    voice_ = audio_->createVoice();
+    voice_->gain = 0; // the engine sets the real gain on the first update
+    audioDecoder_ = std::make_unique<AudioDecoder>();
+    audioDecoder_->open(m.path, voice_, loop, decoder_->info().duration);
+    audioClock_ = true;
+  }
+}
+
+Playback::~Playback() {
+  audioDecoder_.reset();
+  if (voice_ && audio_) audio_->removeVoice(voice_);
+}
+
+void Playback::setGain(float g) {
+  if (voice_) voice_->gain = g;
 }
 
 void Playback::restart() {
   clock_ = 0;
   hasFrame_ = false;
   if (decoder_) decoder_->restart();
+  if (voice_) voice_->reset(); // the clock must jump back immediately
+  if (audioDecoder_) {
+    audioDecoder_->restart();
+    audioClock_ = true;
+  }
 }
 
 bool Playback::finished() {
@@ -232,26 +315,51 @@ double Playback::duration() const {
   return decoder_ ? decoder_->info().duration : 0.0;
 }
 
-const Texture *Playback::update(double dt, const MediaItem &m, MediaCache &cache,
-                                Generators &gen, DynamicMesh &mesh) {
-  if (started_) clock_ += dt * double(speed);
-  started_ = true;
+const Texture *Playback::update(double dt, const MediaItem &m, MediaContext &ctx) {
   switch (type_) {
-  case MediaType::Image: return cache.still(m);
+  case MediaType::Image:
+    if (started_) clock_ += dt * double(speed);
+    started_ = true;
+    return ctx.cache.still(m);
   case MediaType::Generator:
+    if (started_) clock_ += dt * double(speed);
+    started_ = true;
     if (!genFb_) genFb_ = std::make_unique<Framebuffer>();
-    gen.render(m, clock_, *genFb_, mesh);
+    ctx.generators.render(m, clock_, *genFb_, ctx.mesh);
     return &genFb_->texture();
-  case MediaType::Video:
+  case MediaType::Live:
+  case MediaType::Spout: {
+    clock_ += dt;
+    const Texture *t = live_ ? live_->update(ctx.frame, ctx.mesh) : nullptr;
+    ctx.cache.setLiveTexture(mediaId_, t);
+    return t;
+  }
+  case MediaType::Video: {
     if (!decoder_) return nullptr;
     decoder_->setLoop(loop);
-    if (decoder_->fetch(clock_, frame_, !hasFrame_)) {
-      videoTex_.upload(frame_.rgba.data(), frame_.width, frame_.height);
-      hasFrame_ = true;
-      // If decoding fell far behind (e.g. after a stall), resync the clock.
-      if (clock_ - frame_.pts > 0.5) clock_ = frame_.pts;
+    if (audioDecoder_) audioDecoder_->setLoop(loop);
+    if (voice_ && speed != 1.0f && audioClock_) {
+      voice_->active = false; // changed speed: picture continues on its own clock
+      audioClock_ = false;
     }
-    return hasFrame_ ? &videoTex_ : nullptr;
+    if (audioClock_) {
+      // The sound card paces the picture. If the audio track ends early (or
+      // never starts), fall back to the frame clock.
+      double a = voice_->playedSeconds();
+      if (audioDecoder_->finished() && voice_->starving()) audioClock_ = false;
+      else clock_ = std::max(clock_, a);
+    } else {
+      if (started_) clock_ += dt * double(speed);
+      started_ = true;
+    }
+    if (decoder_->fetch(clock_, frame_, !hasFrame_)) {
+      videoTex_ = uploader_.upload(frame_, ctx.mesh);
+      hasFrame_ = videoTex_ != nullptr;
+      // If decoding fell far behind (e.g. after a stall), resync the clock.
+      if (!audioClock_ && clock_ - frame_.pts > 0.5) clock_ = frame_.pts;
+    }
+    return hasFrame_ ? videoTex_ : nullptr;
+  }
   }
   return nullptr;
 }

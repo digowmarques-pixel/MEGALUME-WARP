@@ -1,7 +1,11 @@
 // Control window user interface (Dear ImGui).
 #pragma once
 
+#include "media/decoder.h"
 #include "render/gpu.h"
+
+#include <string>
+#include <vector>
 
 #include <imgui.h>
 
@@ -57,6 +61,9 @@ private:
   bool showDemo_ = false;
   bool showHelp_ = false;
   char filterText_[128] = "";
+  char liveUrl_[512] = "";
+  std::vector<CaptureDevice> captureDevices_;
+  std::vector<std::string> spoutSenders_;
 };
 
 } // namespace lumen

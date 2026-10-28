@@ -1,13 +1,20 @@
 {
   "name": "lumen",
-  "version-string": "0.1.0",
+  "version-string": "0.2.0",
   "description": "Media server para videomapping e instalações interativas",
   "dependencies": [
     "glfw3",
     {
       "name": "ffmpeg",
       "default-features": false,
-      "features": ["avcodec", "avformat", "swscale", "snappy"]
+      "features": [
+        "avcodec",
+        "avformat",
+        "avdevice",
+        "swscale",
+        "swresample",
+        "snappy"
+      ]
     }
   ]
 }

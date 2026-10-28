@@ -19,6 +19,7 @@ Layers são endereçadas pela **posição a partir do topo (1, 2, 3...)** ou pel
 | `/lumen/stop` | `[fade]` | Para tudo (fade em segundos, opcional) |
 | `/lumen/blackout` | `0/1` | Liga/desliga o blackout |
 | `/lumen/master` | `0..1` | Opacidade master |
+| `/lumen/volume` | `0..2` | Volume master do áudio |
 | `/lumen/column/launch` | `n` | Dispara a coluna `n` |
 | `/lumen/column/<n>/launch` | `[1]` | Dispara a coluna `n` (bom para botões) |
 | `/lumen/layer/<l>/opacity` | `0..1` | Opacidade |
@@ -32,10 +33,37 @@ Layers são endereçadas pela **posição a partir do topo (1, 2, 3...)** ou pel
 | `/lumen/layer/<l>/saturation` | `0..2` | Saturação |
 | `/lumen/layer/<l>/hue` | `graus` | Matiz |
 | `/lumen/layer/<l>/tint` | `r g b` | Tinta (0..1) |
-| `/lumen/layer/<l>/speed` | `x` | Velocidade do vídeo em reprodução |
+| `/lumen/layer/<l>/speed` | `x` | Velocidade do vídeo em reprodução (≠ 1 desliga o som) |
+| `/lumen/layer/<l>/volume` | `0..2` | Volume da layer |
+| `/lumen/layer/<l>/mute` | `0/1` | Mudo |
 | `/lumen/layer/<l>/launch` | `n` | Dispara a célula da coluna `n` nesta layer |
 | `/lumen/layer/<l>/stop` | `[fade]` | Para a layer |
 | `/lumen/layer/<l>/restart` | | Reinicia a mídia da layer |
+
+## MIDI
+
+Controladores MIDI conectados são abertos automaticamente (e reconectados se forem
+plugados depois). As mensagens entram como endereços OSC e podem ser usadas nos
+mapeamentos e no **Aprender**:
+
+| MIDI | Endereço | Valor |
+|---|---|---|
+| Control Change | `/midi/cc/<canal>/<número>` | 0..127 |
+| Note On / Off | `/midi/note/<canal>/<nota>` | velocidade (off = 0) |
+| Program Change | `/midi/pc/<canal>` | programa |
+| Pitch Bend | `/midi/bend/<canal>` | 0..16383 |
+
+Exemplo: o fader 1 de um controlador costuma ser `/midi/cc/1/7`; com um mapeamento
+*Opacidade* (entrada 0–127, saída 0–1) ele vira o fader de uma layer.
+
+## Saída OSC
+
+Em *Interação → Saída OSC* adicione destinos (IP e porta). Eles recebem:
+
+- `/lumen/status/column <n> "<nome>"` a cada cue (0 quando tudo para). Útil para
+  mostrar o cue atual no TouchOSC ou no Companion (Stream Deck).
+- As **ações OSC da coluna**: botão direito no cabeçalho da coluna, uma mensagem por
+  linha, ex.: `/luz/cena 3` ou `/som/play "abertura" 0.8`.
 
 ## Mapeamentos (sensor → parâmetro)
 
@@ -46,8 +74,9 @@ um **mapeamento** em *Interação*:
 - **Argumento #**: qual argumento usar (0 = primeiro)
 - **Entrada min/max**: faixa do sensor (ex.: 0–1023 para um Arduino)
 - **Alvo**: opacidade, posição X/Y, escala, rotação, brilho, contraste, saturação,
-  matiz ou velocidade de uma layer; ou um gatilho (**Disparar coluna**, **GO**,
-  **Parar tudo**), que dispara quando o valor cruza a metade da faixa
+  matiz, velocidade ou volume de uma layer; opacidade/volume master; ou um gatilho
+  (**Disparar coluna**, **GO**, **Parar tudo**, **Blackout**), que dispara quando o
+  valor cruza a metade da faixa
 - **Saída min/max**: faixa do parâmetro
 - **Suavização**: 0 = imediato; perto de 1 = movimento lento e suave (filtra ruído)
 

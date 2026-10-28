@@ -56,12 +56,16 @@ jobs:
       - name: Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libglfw3-dev libavcodec-dev libavformat-dev libswscale-dev libavutil-dev libgl1-mesa-dev xvfb
+          sudo apt-get install -y libglfw3-dev libavcodec-dev libavformat-dev libswscale-dev libswresample-dev libavdevice-dev libavutil-dev libasound2-dev libgl1-mesa-dev xvfb
       - name: Build
         run: |
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
           cmake --build build --parallel
       - name: Unit tests
         run: ctest --test-dir build --output-on-failure
+      - name: Windows cross-compile syntax check (MinGW)
+        run: |
+          sudo apt-get install -y mingw-w64
+          ./scripts/check-windows-mingw.sh
       - name: Smoke test (renders the demo project headless)
         run: xvfb-run -a ./build/lumen examples/demo-mapping.lumen --frames 10 --launch 1 --no-outputs --screenshot-canvas canvas.ppm && test -s canvas.ppm

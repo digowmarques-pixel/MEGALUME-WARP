@@ -6,3 +6,5 @@ vcpkg_installed/
 .vscode/
 *.ppm
 *.lumen.tmp
+build-mingw-check/
+build-mingw/

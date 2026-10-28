@@ -48,6 +48,7 @@ void Engine::setParam(Layer &l, MappingTarget t, float v) {
   case MappingTarget::Contrast: l.fx.contrast = v; break;
   case MappingTarget::Saturation: l.fx.saturation = v; break;
   case MappingTarget::Hue: l.fx.hue = v; break;
+  case MappingTarget::Volume: l.volume = std::clamp(v, 0.0f, 2.0f); break;
   case MappingTarget::Speed: {
     auto it = states_.find(l.id);
     if (it != states_.end() && it->second.current) it->second.current->speed = v;
@@ -70,6 +71,7 @@ bool Engine::handleOsc(const OscMessage &m) {
     if (cmd == "stop") { stopAll(hasArg ? a0 : -1); return true; }
     if (cmd == "blackout") { blackout = !hasArg || a0 > 0.5f; return true; }
     if (cmd == "master") { masterOpacity = std::clamp(a0, 0.0f, 1.0f); return true; }
+    if (cmd == "volume") { project.masterVolume = std::clamp(a0, 0.0f, 2.0f); return true; }
     return false;
   }
 
@@ -93,7 +95,8 @@ bool Engine::handleOsc(const OscMessage &m) {
         {"y", MappingTarget::PositionY},           {"scale", MappingTarget::Scale},
         {"rotation", MappingTarget::Rotation},     {"brightness", MappingTarget::Brightness},
         {"contrast", MappingTarget::Contrast},     {"saturation", MappingTarget::Saturation},
-        {"hue", MappingTarget::Hue},               {"speed", MappingTarget::Speed}};
+        {"hue", MappingTarget::Hue},               {"speed", MappingTarget::Speed},
+        {"volume", MappingTarget::Volume}};
     for (auto &[name, target] : params)
       if (prop == name && hasArg) { setParam(*l, target, a0); return true; }
     if (prop == "position" && m.args.size() >= 2) {
@@ -101,6 +104,7 @@ bool Engine::handleOsc(const OscMessage &m) {
       return true;
     }
     if (prop == "visible") { l->visible = !hasArg || a0 > 0.5f; return true; }
+    if (prop == "mute") { l->mute = !hasArg || a0 > 0.5f; return true; }
     if (prop == "launch" && hasArg) { launchCell(int(a0) - 1, l->id); return true; }
     if (prop == "stop") { stopLayer(l->id, m.args.size() > 0 ? a0 : -1); return true; }
     if (prop == "restart") {
@@ -122,7 +126,10 @@ void Engine::applyMappings(const OscMessage &m) {
     im.address = m.address;
     // Guess a sensible input range from the first value.
     float v = m.number(size_t(im.argIndex));
-    if (v > 1.0f) im.inMax = v > 127.0f ? (v > 1023.0f ? 4095.0f : 1023.0f) : 127.0f;
+    // MIDI is always 0..127 (pitch bend 0..16383); guess common sensor ranges otherwise.
+    if (m.address.rfind("/midi/bend", 0) == 0) im.inMax = 16383.0f;
+    else if (m.address.rfind("/midi/", 0) == 0) im.inMax = 127.0f;
+    else if (v > 1.0f) im.inMax = v > 127.0f ? (v > 1023.0f ? 4095.0f : 1023.0f) : 127.0f;
     learnMapping = -1;
   }
   mappingStates_.resize(project.mappings.size());
@@ -135,12 +142,13 @@ void Engine::applyMappings(const OscMessage &m) {
     t = std::clamp(t, 0.0f, 1.0f);
     MappingState &st = mappingStates_[i];
 
-    if (!mappingTargetNeedsLayer(im.target)) {
+    if (mappingTargetIsTrigger(im.target)) {
       bool high = t >= 0.5f;
       if (high && !st.triggered) { // rising edge
         if (im.target == MappingTarget::Go) go();
         else if (im.target == MappingTarget::StopAll) stopAll();
         else if (im.target == MappingTarget::LaunchColumn) launchColumn(int(im.outMin) - 1);
+        else if (im.target == MappingTarget::Blackout) blackout = !blackout;
       }
       st.triggered = high;
       continue;
@@ -157,13 +165,15 @@ void Engine::updateMappings(double dt) {
   for (size_t i = 0; i < project.mappings.size(); ++i) {
     InputMapping &im = project.mappings[i];
     MappingState &st = mappingStates_[i];
-    if (!im.enabled || !st.active || !mappingTargetNeedsLayer(im.target)) continue;
+    if (!im.enabled || !st.active || mappingTargetIsTrigger(im.target)) continue;
     if (im.smoothing > 0) {
       // Frame-rate independent exponential smoothing.
       float k = 1.0f - std::pow(std::clamp(im.smoothing, 0.0f, 0.999f), float(dt) * 60.0f);
       st.value += (st.target - st.value) * k;
     }
-    if (Layer *l = project.layer(im.layerId)) setParam(*l, im.target, st.value);
+    if (im.target == MappingTarget::MasterOpacity) masterOpacity = std::clamp(st.value, 0.0f, 1.0f);
+    else if (im.target == MappingTarget::MasterVolume) project.masterVolume = std::clamp(st.value, 0.0f, 2.0f);
+    else if (Layer *l = project.layer(im.layerId)) setParam(*l, im.target, st.value);
     // Once settled, stop writing so the parameter can still be edited by hand.
     if (std::fabs(st.value - st.target) < 1e-4f) st.active = false;
   }

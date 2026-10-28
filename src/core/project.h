@@ -14,7 +14,8 @@ struct Color {
   float r = 0, g = 0, b = 0, a = 1;
 };
 
-enum class MediaType { Video, Image, Generator };
+// Values are stored in project files: only append.
+enum class MediaType { Video, Image, Generator, Live, Spout };
 enum class GeneratorKind { TestCard, Solid, Gradient, Grid, Plasma, Stripes, COUNT };
 const char *generatorName(GeneratorKind k);
 
@@ -30,6 +31,10 @@ struct MediaItem {
   float param1 = 1.0f; // speed / angle / cell size depending on generator
   float param2 = 0.5f;
   int width = 1920, height = 1080; // generator render size
+  // Live input (camera, capture card, network stream): `path` is the URL / device.
+  std::string liveFormat;  // "dshow", "v4l2", "lavfi", "" (network URL)...
+  std::string liveOptions; // "video_size=1280x720:framerate=30"
+  // Spout receiver: `path` is the sender name ("" = active sender).
 };
 
 enum class BlendMode { Normal, Add, Multiply, Screen };
@@ -71,6 +76,8 @@ struct Layer {
   std::string name = "Layer";
   bool visible = true;
   float opacity = 1;
+  float volume = 1; // audio of the media playing in this layer
+  bool mute = false;
   BlendMode blend = BlendMode::Normal;
   LayerFx fx;
   LayerTransform transform;
@@ -89,6 +96,16 @@ struct Column {
   std::string name;
   float transition = -1; // seconds, <0 = project default
   std::map<int, Cell> cells; // by layer id
+  // OSC messages sent to every OSC output target when the column is launched,
+  // one per line: "/address arg1 arg2" (numbers or "quoted strings").
+  std::vector<std::string> oscActions;
+};
+
+struct OscTarget {
+  bool enabled = true;
+  std::string host = "127.0.0.1";
+  int port = 9000;
+  bool feedback = true; // also send /lumen/status/... messages
 };
 
 struct SoftEdge {
@@ -109,12 +126,21 @@ struct OutputConfig {
   bool testCard = false;
 };
 
+// Values are stored in project files: only append.
 enum class MappingTarget {
   Opacity, PositionX, PositionY, Scale, Rotation, Brightness, Contrast, Saturation, Hue,
-  Speed, LaunchColumn, Go, StopAll, COUNT
+  Speed, LaunchColumn, Go, StopAll, Volume, MasterOpacity, MasterVolume, Blackout, COUNT
 };
 const char *mappingTargetName(MappingTarget t);
-inline bool mappingTargetNeedsLayer(MappingTarget t) { return t < MappingTarget::LaunchColumn; }
+// Continuous parameter of a layer (needs a layer, uses the output range).
+inline bool mappingTargetNeedsLayer(MappingTarget t) {
+  return t < MappingTarget::LaunchColumn || t == MappingTarget::Volume;
+}
+// Trigger fired when the value crosses the middle of the input range.
+inline bool mappingTargetIsTrigger(MappingTarget t) {
+  return t == MappingTarget::LaunchColumn || t == MappingTarget::Go ||
+         t == MappingTarget::StopAll || t == MappingTarget::Blackout;
+}
 
 // Maps an incoming OSC value onto a parameter (like "MIDI learn").
 struct InputMapping {
@@ -135,6 +161,13 @@ struct Project {
   float defaultTransition = 1.0f;
   int oscPort = 8000;
   bool oscEnabled = true;
+  std::vector<OscTarget> oscTargets;
+  bool midiEnabled = true;
+  std::string audioDevice; // "" = system default
+  float masterVolume = 1;
+  bool hardwareDecode = true;
+  bool spoutSend = false;       // publish the canvas as a Spout sender (Windows)
+  std::string spoutName = "Lumen";
   int nextId = 1;
 
   std::vector<MediaItem> library;
@@ -154,6 +187,9 @@ struct Project {
   OutputConfig &addOutput();
   MediaItem &addMedia(const std::string &path);
   MediaItem &addGenerator(GeneratorKind kind);
+  MediaItem &addLive(const std::string &name, const std::string &url, const std::string &format,
+                     const std::string &options);
+  MediaItem &addSpout(const std::string &senderName);
   void removeLayer(int id);
   void removeMedia(int id);
 

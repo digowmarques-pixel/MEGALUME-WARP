@@ -356,6 +356,13 @@ int App::run(const Options &opts) {
     ++frame;
     bool lastFrame = opts.frames > 0 && frame >= opts.frames;
     if (lastFrame) {
+      // Summary for automated tests.
+      std::printf("[test] audio device: %s\n", engine.audio.deviceName().c_str());
+      for (auto &l : engine.project.layers)
+        if (const LayerState *st = engine.layerState(l.id); st && st->current)
+          std::printf("[test] layer %s: t=%.3f audio=%d hw=%s\n", l.name.c_str(), st->current->time(),
+                      st->current->hasAudio() ? 1 : 0, st->current->hwaccel().c_str());
+      std::fflush(stdout);
       std::vector<unsigned char> px;
       if (!opts.screenshotCanvas.empty()) {
         engine.canvas().readPixels(px);

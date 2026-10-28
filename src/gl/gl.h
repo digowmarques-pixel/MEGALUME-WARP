@@ -79,7 +79,9 @@
   X(PFNGLFENCESYNCPROC, glFenceSync)                                             \
   X(PFNGLWAITSYNCPROC, glWaitSync)                                               \
   X(PFNGLDELETESYNCPROC, glDeleteSync)                                           \
-  X(PFNGLFLUSHPROC, glFlush)
+  X(PFNGLFLUSHPROC, glFlush)                                                     \
+  X(PFNGLCOMPRESSEDTEXIMAGE2DPROC, glCompressedTexImage2D)                       \
+  X(PFNGLGETSTRINGIPROC, glGetStringi)
 
 #define LUMEN_GL_DECLARE(type, name) extern type lumen_##name;
 LUMEN_GL_FUNCS(LUMEN_GL_DECLARE)
@@ -157,8 +159,19 @@ LUMEN_GL_FUNCS(LUMEN_GL_DECLARE)
 #define glWaitSync lumen_glWaitSync
 #define glDeleteSync lumen_glDeleteSync
 #define glFlush lumen_glFlush
+#define glCompressedTexImage2D lumen_glCompressedTexImage2D
+#define glGetStringi lumen_glGetStringi
+
+#ifndef GL_COMPRESSED_RGB_S3TC_DXT1_EXT
+#define GL_COMPRESSED_RGB_S3TC_DXT1_EXT 0x83F0
+#endif
+#ifndef GL_COMPRESSED_RGBA_S3TC_DXT5_EXT
+#define GL_COMPRESSED_RGBA_S3TC_DXT5_EXT 0x83F3
+#endif
 
 namespace gl {
 // Must be called with a current context. Returns false if a function is missing.
 bool load();
+// True if the driver exposes the named extension (e.g. "GL_EXT_texture_compression_s3tc").
+bool hasExtension(const char *name);
 } // namespace gl

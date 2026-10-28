@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(Lumen VERSION 0.1.0 LANGUAGES C CXX)
+project(Lumen VERSION 0.2.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -28,7 +28,7 @@ if(FFMPEG_FOUND)
   target_link_libraries(lumen_ffmpeg INTERFACE ${FFMPEG_LIBRARIES})
 else()
   find_package(PkgConfig REQUIRED)
-  pkg_check_modules(FFMPEG_PC REQUIRED IMPORTED_TARGET libavformat libavcodec libswscale libavutil)
+  pkg_check_modules(FFMPEG_PC REQUIRED IMPORTED_TARGET libavformat libavcodec libswscale libswresample libavdevice libavutil)
   add_library(lumen_ffmpeg INTERFACE)
   target_link_libraries(lumen_ffmpeg INTERFACE PkgConfig::FFMPEG_PC)
 endif()
@@ -47,6 +47,42 @@ target_include_directories(imgui PUBLIC ${IMGUI_DIR} ${IMGUI_DIR}/backends)
 target_link_libraries(imgui PUBLIC glfw OpenGL::GL)
 target_compile_definitions(imgui PUBLIC GLFW_INCLUDE_NONE)
 
+# ---------------------------------------------------------------- RtMidi (MIDI input)
+add_library(rtmidi STATIC third_party/rtmidi/RtMidi.cpp)
+target_include_directories(rtmidi PUBLIC third_party)
+if(WIN32)
+  target_compile_definitions(rtmidi PUBLIC __WINDOWS_MM__)
+  target_link_libraries(rtmidi PUBLIC winmm)
+elseif(APPLE)
+  target_compile_definitions(rtmidi PUBLIC __MACOSX_CORE__)
+  target_link_libraries(rtmidi PUBLIC "-framework CoreMIDI" "-framework CoreAudio" "-framework CoreFoundation")
+else()
+  find_package(ALSA QUIET)
+  if(ALSA_FOUND)
+    target_compile_definitions(rtmidi PUBLIC __LINUX_ALSA__)
+    target_link_libraries(rtmidi PUBLIC ALSA::ALSA)
+  else()
+    message(STATUS "ALSA not found: MIDI disabled")
+    target_compile_definitions(rtmidi PUBLIC __RTMIDI_DUMMY__)
+  endif()
+  find_package(Threads REQUIRED)
+  target_link_libraries(rtmidi PUBLIC Threads::Threads)
+endif()
+
+# ---------------------------------------------------------------- Spout (Windows only)
+if(WIN32)
+  file(GLOB SPOUT_SOURCES third_party/spout/*.cpp)
+  add_library(spout STATIC ${SPOUT_SOURCES})
+  target_include_directories(spout PUBLIC third_party/spout)
+  target_compile_definitions(spout PUBLIC SPOUT_BUILD_STATIC PRIVATE NOMINMAX)
+  target_link_libraries(spout PUBLIC opengl32 d3d11 dxgi d3d9 winmm version comctl32 shlwapi)
+  if(MSVC)
+    target_compile_options(spout PRIVATE /W0 /utf-8)
+  else()
+    target_compile_options(spout PRIVATE -msse4.1 -w) # SpoutCopy uses SSE intrinsics
+  endif()
+endif()
+
 # ---------------------------------------------------------------- Lumen
 add_executable(lumen
   src/main.cpp
@@ -54,7 +90,12 @@ add_executable(lumen
   src/gl/gl.cpp
   src/render/gpu.cpp
   src/media/decoder.cpp
+  src/media/hap.cpp
+  src/media/upload.cpp
+  src/media/audio.cpp
   src/media/source.cpp
+  src/io/spout.cpp
+  src/control/midi.cpp
   src/core/warp.cpp
   src/core/project.cpp
   src/engine/engine.cpp
@@ -70,7 +111,12 @@ target_include_directories(lumen PRIVATE
   src
   third_party/khr
   third_party)
-target_link_libraries(lumen PRIVATE imgui glfw OpenGL::GL lumen_ffmpeg)
+target_link_libraries(lumen PRIVATE imgui glfw OpenGL::GL lumen_ffmpeg rtmidi)
+if(WIN32)
+  target_link_libraries(lumen PRIVATE spout)
+elseif(NOT APPLE)
+  target_link_libraries(lumen PRIVATE ${CMAKE_DL_LIBS} m) # miniaudio loads backends at runtime
+endif()
 target_compile_definitions(lumen PRIVATE GLFW_INCLUDE_NONE LUMEN_VERSION="${PROJECT_VERSION}")
 
 if(WIN32)
@@ -98,11 +144,14 @@ if(LUMEN_BUILD_TESTS)
   enable_testing()
   add_executable(lumen_tests
     tests/test_core.cpp
+    src/media/hap.cpp
+    src/control/midi.cpp
     src/core/warp.cpp
     src/core/project.cpp
     src/control/osc.cpp
     src/platform/platform.cpp)
   target_include_directories(lumen_tests PRIVATE src third_party)
+  target_link_libraries(lumen_tests PRIVATE rtmidi)
   if(WIN32)
     target_link_libraries(lumen_tests PRIVATE ws2_32 comdlg32 shell32)
     target_compile_definitions(lumen_tests PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN _CRT_SECURE_NO_WARNINGS)
@@ -114,4 +163,9 @@ if(LUMEN_BUILD_TESTS)
     target_link_libraries(lumen_tests PRIVATE Threads::Threads)
   endif()
   add_test(NAME core COMMAND lumen_tests)
+endif()
+
+# miniaudio is third-party code compiled inside audio.cpp: keep its warnings quiet.
+if(NOT MSVC)
+  set_source_files_properties(src/media/audio.cpp PROPERTIES COMPILE_OPTIONS "-Wno-unused-result;-Wno-unused-function")
 endif()

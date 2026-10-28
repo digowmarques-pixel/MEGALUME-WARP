@@ -39,16 +39,24 @@ public:
 
   void allocate(int w, int h, GLenum internalFormat = GL_RGBA8);
   void upload(const void *rgba, int w, int h, int strideBytes = 0);
+  // One plane of a video frame: GL_R8 / GL_RG8 / GL_R16 / GL_RG16 / GL_RGBA8.
+  void uploadPlane(const void *data, int w, int h, int strideBytes, GLenum internalFormat);
+  // Block-compressed data (BC1 / BC3 / BC4), dimensions padded to multiples of 4.
+  void uploadCompressed(const void *data, int w, int h, size_t bytes, GLenum internalFormat);
   void bind(int unit = 0) const;
+  // Refers to a texture owned elsewhere (e.g. Spout); never deleted by this object.
+  void wrap(GLuint id, int w, int h) { if (owned_ && id_) release(); id_ = id; w_ = w; h_ = h; owned_ = false; }
   GLuint id() const { return id_; }
   int width() const { return w_; }
   int height() const { return h_; }
   bool empty() const { return id_ == 0 || w_ == 0; }
 
 private:
+  void release();
   GLuint id_ = 0;
   int w_ = 0, h_ = 0;
   GLenum fmt_ = GL_RGBA8;
+  bool owned_ = true;
 };
 
 // Framebuffer with a colour texture and optional stencil buffer.

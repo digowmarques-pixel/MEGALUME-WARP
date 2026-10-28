@@ -2,43 +2,40 @@
 
 Ordem pensada para **videomapping** e **instalações interativas**.
 
-## ✅ Etapa 1 — Motor básico
-- Janela de controle + janelas de saída (monitor sem bordas ou janela)
-- Vídeo via FFmpeg em thread, imagens, geradores em shader
-- Projeto em JSON, desfazer/refazer
+## ✅ v0.1
+- Motor OpenGL, janelas de saída, vídeo/imagem/geradores, projeto JSON, desfazer
+- Dashboard colunas × layers, GO, crossfade
+- Mapping: fatias, perspectiva, malha, máscaras com feather
+- Saídas: região do canvas, warp por saída, soft edge, test card
+- OSC de entrada e mapeamentos com "Aprender"
 
-## ✅ Etapa 2 — Layers e dashboard
-- Grade colunas × layers, GO, crossfade, disparo por célula, arrastar e soltar
+## ✅ v0.2
+- **Áudio**: som dos vídeos, volume/mudo por layer, fade junto com a imagem,
+  escolha da placa de som, relógio do áudio sincronizando o vídeo
+- **Desempenho**: conversão YUV → RGB na GPU (8–16 bits), decodificação por
+  hardware (D3D11VA/DXVA2), HAP / HAP Alpha / HAP Q / HAP Q Alpha direto na GPU
+- **Ao vivo**: câmeras e placas de captura (DirectShow), RTSP/SRT/UDP/HTTP,
+  receptor **Spout**, entrada compartilhada entre layers e reconexão automática
+- **MIDI** de entrada com "Aprender" (via mapeamentos)
+- **OSC de saída**: status do cue e ações OSC por coluna
+- **Spout de saída** do canvas
+- Build para Windows a partir do Linux (MinGW) e verificação no CI
 
-## ✅ Etapa 3 — Mapping
-- Fatias com recorte, perspectiva de 4 cantos, malha (mesh warp), máscaras com feather
-
-## ✅ Etapa 4 (base) — Várias saídas
-- Região do canvas por saída, warp por saída, soft edge, test card
-
-## ✅ Etapa 6 (base) — Interação
-- OSC de entrada, mapeamentos sensor → parâmetro com "Aprender" e suavização
+## ⚠️ Pendente de teste em Windows real
+Tudo foi compilado para Windows, mas **ainda não rodou numa máquina Windows**:
+Spout, WASAPI, DirectShow, D3D11VA e WinMM precisam de um teste de verdade.
 
 ## 🔜 Próximas tarefas (por prioridade)
 
-1. **Áudio dos vídeos** (miniaudio, WASAPI/ASIO, volume por layer, saída multicanal)
-2. **HAP nativo na GPU** (DXT/BC direto para a textura) e decodificação por
-   hardware (D3D11VA/NVDEC), para vários vídeos 4K simultâneos
-3. **Spout** (receber/enviar textura de/para TouchDesigner, Resolume, Unreal, Notch)
-   e **NDI** (vídeo pela rede)
-4. **Entrada de câmera / placa de captura** (Media Foundation) como mídia
-5. **MIDI** de entrada (controladores) com "MIDI learn" usando o mesmo sistema de mapeamentos
-6. **Timeline** com keyframes (opacidade, posição, efeitos) e cues com tempo
-7. **OSC de saída** (feedback para TouchOSC; disparar luz/som em outros sistemas)
-8. **DMX / Art-Net / sACN** de entrada (mesas de luz) e de saída (pixel mapping de LED)
-9. **Efeitos em shader** carregados de arquivo (GLSL estilo ISF/Shadertoy) com parâmetros
-10. **Kinect / câmera de profundidade / MediaPipe** para detecção de pessoas
-11. **Scripts** (Lua ou JavaScript) para lógica de instalações
-12. Autosave, modo "show" travado, monitor de desempenho, relink de mídias ausentes
-13. Instalador (.msi) e auto-atualização
-
-## Ideias de arquitetura para depois
-- Trocar OpenGL por Direct3D 11 no Windows se for preciso zero-cópia com
-  Spout/NDI/captura (o OpenGL atende bem via `WGL_NV_DX_interop`).
-- Separar o renderizador num processo "nó" (como o MilluNode) para controlar
-  vários computadores pela rede.
+1. **Teste no Windows** com projetor, placa de vídeo dedicada, câmera, Spout e controlador MIDI
+2. **NDI** (vídeo pela rede): receber e enviar
+3. **Timeline** com keyframes (opacidade, posição, efeitos) e cues com tempo
+4. **Efeitos em shader** carregados de arquivo (GLSL estilo ISF/Shadertoy) com parâmetros
+5. **DMX / Art-Net / sACN** de entrada (mesas de luz) e de saída (pixel mapping de LED)
+6. Áudio: roteamento multicanal por layer, ASIO, áudio das câmeras/streams,
+   time-stretch para velocidade ≠ 1
+7. Upload assíncrono de textura (PBO) e decodificação D3D11 sem cópia para 8K
+8. **Kinect / câmera de profundidade / MediaPipe** para detecção de pessoas
+9. **Scripts** (Lua ou JavaScript) para lógica de instalações
+10. Autosave, modo "show" travado, monitor de desempenho, relink de mídias ausentes
+11. Instalador (.msi) e auto-atualização

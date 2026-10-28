@@ -2,6 +2,9 @@
 
 #include "app.h"
 #include "engine/outputs.h"
+#include "io/spout.h"
+#include "media/decoder.h"
+#include "media/upload.h"
 #include "platform/platform.h"
 
 #include <GLFW/glfw3.h>
@@ -74,6 +77,8 @@ const char *mediaTypeLabel(MediaType t) {
   case MediaType::Video: return "Vídeo";
   case MediaType::Image: return "Imagem";
   case MediaType::Generator: return "Gerador";
+  case MediaType::Live: return "Ao vivo";
+  case MediaType::Spout: return "Spout";
   }
   return "";
 }
@@ -334,6 +339,41 @@ void Ui::library(App &app) {
       }
     ImGui::EndPopup();
   }
+  ImGui::SameLine();
+  if (ImGui::Button("+ Ao vivo")) {
+    captureDevices_ = listCaptureDevices();
+    spoutSenders_ = spoutSenders();
+    ImGui::OpenPopup("live");
+  }
+  if (ImGui::BeginPopup("live")) {
+    auto add = [&](MediaItem &m) {
+      app.sel.mediaId = m.id;
+      app.sel.inspector = Inspector::Media;
+      app.edited();
+      ImGui::CloseCurrentPopup();
+    };
+    ImGui::SeparatorText("Câmeras e placas de captura");
+    if (captureDevices_.empty()) ImGui::TextDisabled("Nenhum dispositivo encontrado");
+    for (auto &d : captureDevices_)
+      if (ImGui::MenuItem(d.name.c_str())) add(p.addLive(d.name, d.url, d.format, ""));
+    if (ImGui::SmallButton("Procurar de novo")) captureDevices_ = listCaptureDevices();
+    ImGui::SeparatorText("Stream de rede");
+    ImGui::SetNextItemWidth(300);
+    ImGui::InputTextWithHint("##url", "rtsp://, srt://, udp://, http://...", liveUrl_, sizeof(liveUrl_));
+    ImGui::SameLine();
+    if (ImGui::Button("Adicionar") && liveUrl_[0]) add(p.addLive("", liveUrl_, "", ""));
+    ImGui::SeparatorText("Spout (Windows)");
+    if (!spoutAvailable()) ImGui::TextDisabled("Disponível só no Windows");
+    else {
+      if (ImGui::MenuItem("Sender ativo (qualquer um)")) add(p.addSpout(""));
+      for (auto &n : spoutSenders_)
+        if (ImGui::MenuItem(n.c_str())) add(p.addSpout(n));
+    }
+    ImGui::SeparatorText("Teste");
+    if (ImGui::MenuItem("Sinal de teste ao vivo (lavfi)"))
+      add(p.addLive("Sinal de teste", "testsrc2=size=1280x720:rate=30", "lavfi", ""));
+    ImGui::EndPopup();
+  }
   ImGui::SetNextItemWidth(-1);
   ImGui::InputTextWithHint("##filter", "Buscar mídia...", filterText_, sizeof(filterText_));
   ImGui::Separator();
@@ -444,6 +484,25 @@ void Ui::dashboard(App &app) {
       }
       if (ImGui::MenuItem("Mover para a esquerda", nullptr, false, c > 0)) { moveColumn = c; moveDir = -1; }
       if (ImGui::MenuItem("Mover para a direita", nullptr, false, c + 1 < ncols)) { moveColumn = c; moveDir = 1; }
+      ImGui::SeparatorText("Ações OSC ao disparar");
+      {
+        std::string text;
+        for (auto &line : p.columns[size_t(c)].oscActions) text += line + "\n";
+        char buf[2048];
+        std::snprintf(buf, sizeof(buf), "%s", text.c_str());
+        if (ImGui::InputTextMultiline("##osc", buf, sizeof(buf), {320, 80})) {
+          auto &acts = p.columns[size_t(c)].oscActions;
+          acts.clear();
+          std::string cur;
+          for (const char *q = buf; *q; ++q) {
+            if (*q == '\n') { if (!cur.empty()) acts.push_back(cur); cur.clear(); }
+            else cur += *q;
+          }
+          if (!cur.empty()) acts.push_back(cur);
+          app.edited();
+        }
+        ImGui::TextDisabled("Uma por linha, ex.: /luz/cena 3   (vai para as saídas OSC)");
+      }
       if (ImGui::MenuItem("Remover coluna")) removeColumn = c;
       ImGui::EndPopup();
     }
@@ -628,6 +687,18 @@ void Ui::layerInspector(App &app) {
   if (inputText("Nome", l->name)) app.edited();
   if (ImGui::Checkbox("Visível", &l->visible)) app.edited();
   if (ImGui::SliderFloat("Opacidade", &l->opacity, 0, 1)) app.edited();
+  if (ImGui::SliderFloat("Volume", &l->volume, 0, 2, "%.2f")) app.edited();
+  ImGui::SameLine();
+  if (ImGui::Checkbox("Mudo", &l->mute)) app.edited();
+  if (const LayerState *st = app.engine.layerState(l->id); st && st->current) {
+    if (st->current->hasAudio()) {
+      ImGui::ProgressBar(std::min(1.0f, st->current->audioPeak()), {-1, 6}, "");
+    } else if (st->current->speed != 1.0f) {
+      ImGui::TextDisabled("Áudio desligado: velocidade diferente de 1x");
+    }
+    std::string hw = st->current->hwaccel();
+    if (!hw.empty()) ImGui::TextDisabled("Decodificação por hardware: %s", hw.c_str());
+  }
   int blend = int(l->blend);
   if (ImGui::Combo("Blend", &blend, "Normal\0Adição\0Multiplicar\0Tela (screen)\0")) {
     l->blend = BlendMode(blend);
@@ -878,15 +949,34 @@ void Ui::mediaInspector(App &app) {
     }
     if (ImGui::SliderFloat(p1, &m->param1, lo1, hi1)) app.edited();
     if (ImGui::SliderFloat(p2, &m->param2, lo2, hi2)) app.edited();
+  } else if (m->type == MediaType::Live) {
+    bool changed = inputText("URL / dispositivo", m->path);
+    changed |= inputText("Formato", m->liveFormat);
+    helpMarker("dshow (Windows), v4l2 (Linux), lavfi (teste) ou vazio para streams de rede.");
+    changed |= inputText("Opções", m->liveOptions);
+    helpMarker("Opções do FFmpeg separadas por ':', ex.: video_size=1920x1080:framerate=30 "
+               "ou rtsp_transport=tcp");
+    if (changed) {
+      app.engine.cache.invalidate(m->id);
+      app.edited();
+    }
+    ImGui::TextDisabled("A entrada abre quando alguma layer a dispara e fecha quando ninguém a usa.");
+  } else if (m->type == MediaType::Spout) {
+    if (inputText("Sender", m->path)) {
+      app.engine.cache.invalidate(m->id);
+      app.edited();
+    }
+    helpMarker("Nome do sender Spout. Vazio = o sender ativo.");
+    if (!spoutAvailable()) ImGui::TextColored({1, 0.6f, 0.3f, 1}, "Spout só funciona no Windows.");
   } else {
     ImGui::TextWrapped("Arquivo: %s", m->path.c_str());
     if (const MediaInfo *info = app.engine.cache.info(*m)) {
       ImGui::Text("Resolução: %d × %d", info->width, info->height);
       if (m->type == MediaType::Video) {
         ImGui::Text("Duração: %.2f s   ·   %.2f fps", info->duration, info->fps);
-        ImGui::Text("Codec: %s%s", info->codec.c_str(), info->hasAudio ? "   (tem áudio)" : "");
-        if (info->hasAudio)
-          ImGui::TextDisabled("Reprodução de áudio chega na próxima etapa.");
+        ImGui::Text("Codec: %s%s", info->codec.c_str(), info->hasAudio ? "   (com áudio)" : "");
+        if (info->codec == "hap" && !FrameUploader::supportsS3tc())
+          ImGui::TextDisabled("Esta GPU não aceita HAP comprimido: decodificando na CPU.");
       }
     } else {
       ImGui::TextColored({1, 0.4f, 0.4f, 1}, "Não foi possível abrir este arquivo.");
@@ -1036,6 +1126,53 @@ void Ui::interactionInspector(App &app) {
   else
     ImGui::TextDisabled("Desativado");
 
+  ImGui::SeparatorText("Saída OSC (feedback e ações)");
+  ImGui::TextWrapped("Destinos que recebem /lumen/status/column ao trocar de cue e as ações OSC das "
+                     "colunas (botão direito no cabeçalho da coluna).");
+  int removeTarget = -1;
+  for (size_t i = 0; i < p.oscTargets.size(); ++i) {
+    OscTarget &t = p.oscTargets[i];
+    ImGui::PushID(5000 + int(i));
+    if (ImGui::Checkbox("##en", &t.enabled)) app.edited();
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(140);
+    if (inputText("##host", t.host)) app.edited();
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(90);
+    if (ImGui::InputInt("##port", &t.port, 0)) { t.port = std::clamp(t.port, 1, 65535); app.edited(); }
+    ImGui::SameLine();
+    if (ImGui::Checkbox("Status", &t.feedback)) app.edited();
+    ImGui::SameLine();
+    if (ImGui::SmallButton("x")) removeTarget = int(i);
+    ImGui::PopID();
+  }
+  if (removeTarget >= 0) {
+    p.oscTargets.erase(p.oscTargets.begin() + removeTarget);
+    app.edited();
+  }
+  if (ImGui::Button("+ Destino OSC")) {
+    p.oscTargets.push_back({});
+    app.edited();
+  }
+  if (e.oscSent() > 0) {
+    ImGui::SameLine();
+    ImGui::TextDisabled("%d mensagens enviadas", e.oscSent());
+  }
+
+  ImGui::SeparatorText("MIDI");
+  if (!e.midi().available()) {
+    ImGui::TextDisabled("Compilado sem suporte a MIDI");
+  } else {
+    if (ImGui::Checkbox("Ativar MIDI", &p.midiEnabled)) {
+      e.restartMidi();
+      app.edited();
+    }
+    auto ports = e.midi().ports();
+    if (ports.empty()) ImGui::TextDisabled("Nenhum controlador conectado (procura a cada 3 s)");
+    for (auto &port : ports) ImGui::BulletText("%s", port.c_str());
+    ImGui::TextDisabled("MIDI chega como /midi/cc/<canal>/<n>, /midi/note/<canal>/<nota>: use \"Aprender\".");
+  }
+
   ImGui::SeparatorText("Mapeamentos (sensor → parâmetro)");
   ImGui::TextWrapped("Ligue qualquer mensagem OSC (TouchOSC, TouchDesigner, Arduino, sensores...) "
                      "a um parâmetro. Clique em \"Aprender\" e envie a mensagem.");
@@ -1074,6 +1211,10 @@ void Ui::interactionInspector(App &app) {
             if (ImGui::Selectable(ly.name.c_str(), ly.id == m.layerId)) { m.layerId = ly.id; app.edited(); }
           ImGui::EndCombo();
         }
+        float out[2] = {m.outMin, m.outMax};
+        if (ImGui::DragFloat2("Saída min/max", out, 0.01f)) { m.outMin = out[0]; m.outMax = out[1]; app.edited(); }
+        if (ImGui::SliderFloat("Suavização", &m.smoothing, 0, 0.99f)) app.edited();
+      } else if (!mappingTargetIsTrigger(m.target)) {
         float out[2] = {m.outMin, m.outMax};
         if (ImGui::DragFloat2("Saída min/max", out, 0.01f)) { m.outMin = out[0]; m.outMax = out[1]; app.edited(); }
         if (ImGui::SliderFloat("Suavização", &m.smoothing, 0, 0.99f)) app.edited();
@@ -1132,6 +1273,35 @@ void Ui::projectInspector(App &app) {
   if (colorEdit("Fundo", p.background)) app.edited();
   ImGui::SeparatorText("Show");
   if (ImGui::DragFloat("Fade padrão (s)", &p.defaultTransition, 0.05f, 0, 60)) app.edited();
+
+  ImGui::SeparatorText("Áudio");
+  Engine &e = app.engine;
+  if (ImGui::BeginCombo("Saída de áudio", p.audioDevice.empty() ? "Padrão do sistema" : p.audioDevice.c_str())) {
+    if (ImGui::Selectable("Padrão do sistema", p.audioDevice.empty())) { p.audioDevice.clear(); app.edited(); }
+    for (auto &d : AudioEngine::devices())
+      if (ImGui::Selectable(d.c_str(), d == p.audioDevice)) { p.audioDevice = d; app.edited(); }
+    ImGui::EndCombo();
+  }
+  ImGui::TextDisabled("Em uso: %s", e.audio.deviceName().c_str());
+  if (!e.audio.error().empty()) ImGui::TextColored({1, 0.5f, 0.4f, 1}, "%s", e.audio.error().c_str());
+  if (ImGui::SliderFloat("Volume master", &p.masterVolume, 0, 2, "%.2f")) app.edited();
+  ImGui::ProgressBar(std::min(1.0f, e.audio.peak(0)), {-1, 5}, "");
+  ImGui::ProgressBar(std::min(1.0f, e.audio.peak(1)), {-1, 5}, "");
+
+  ImGui::SeparatorText("Vídeo");
+  if (ImGui::Checkbox("Decodificação por hardware", &p.hardwareDecode)) app.edited();
+  helpMarker("Usa a GPU (D3D11VA/DXVA2 no Windows) para H.264/HEVC/VP9/AV1. Vale para mídias "
+             "disparadas depois da mudança. HAP sempre vai direto para a GPU.");
+  ImGui::TextDisabled("HAP comprimido na GPU: %s", FrameUploader::supportsS3tc() ? "sim" : "não suportado");
+
+  ImGui::SeparatorText("Spout (enviar o canvas)");
+  if (!spoutAvailable()) {
+    ImGui::TextDisabled("Disponível só no Windows");
+  } else {
+    if (ImGui::Checkbox("Enviar canvas por Spout", &p.spoutSend)) app.edited();
+    if (inputText("Nome do sender", p.spoutName)) app.edited();
+    if (!e.spoutStatus().empty()) ImGui::TextDisabled("%s", e.spoutStatus().c_str());
+  }
   ImGui::SeparatorText("Arquivo");
   ImGui::TextWrapped("%s", p.filePath.empty() ? "(projeto não salvo)" : p.filePath.c_str());
   ImGui::Text("%zu mídias · %zu layers · %zu colunas · %zu saídas", p.library.size(),

@@ -66,7 +66,23 @@ bool Shader::build(const char *vs, const char *fs, std::string *error) {
 }
 
 Texture::~Texture() {
-  if (id_) glDeleteTextures(1, &id_);
+  if (owned_ && id_) release();
+}
+
+void Texture::release() {
+  glDeleteTextures(1, &id_);
+  id_ = 0;
+  w_ = h_ = 0;
+}
+
+static void pixelFormat(GLenum internal, GLenum &format, GLenum &type, int &bytesPerPixel) {
+  switch (internal) {
+  case GL_R8: format = GL_RED; type = GL_UNSIGNED_BYTE; bytesPerPixel = 1; break;
+  case GL_RG8: format = GL_RG; type = GL_UNSIGNED_BYTE; bytesPerPixel = 2; break;
+  case GL_R16: format = GL_RED; type = GL_UNSIGNED_SHORT; bytesPerPixel = 2; break;
+  case GL_RG16: format = GL_RG; type = GL_UNSIGNED_SHORT; bytesPerPixel = 4; break;
+  default: format = GL_RGBA; type = GL_UNSIGNED_BYTE; bytesPerPixel = 4; break;
+  }
 }
 
 void Texture::allocate(int w, int h, GLenum fmt) {
@@ -74,8 +90,10 @@ void Texture::allocate(int w, int h, GLenum fmt) {
   if (!id_) glGenTextures(1, &id_);
   w_ = w; h_ = h; fmt_ = fmt;
   glBindTexture(GL_TEXTURE_2D, id_);
-  GLenum ext = fmt == GL_R8 ? GL_RED : GL_RGBA;
-  glTexImage2D(GL_TEXTURE_2D, 0, GLint(fmt), w, h, 0, ext, GL_UNSIGNED_BYTE, nullptr);
+  GLenum ext, type;
+  int bpp;
+  pixelFormat(fmt, ext, type, bpp);
+  glTexImage2D(GL_TEXTURE_2D, 0, GLint(fmt), w, h, 0, ext, type, nullptr);
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
@@ -89,6 +107,33 @@ void Texture::upload(const void *rgba, int w, int h, int stride) {
   glPixelStorei(GL_UNPACK_ROW_LENGTH, stride ? stride / 4 : 0);
   glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, rgba);
   glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
+}
+
+void Texture::uploadPlane(const void *data, int w, int h, int stride, GLenum internal) {
+  allocate(w, h, internal);
+  GLenum format, type;
+  int bpp;
+  pixelFormat(internal, format, type, bpp);
+  glBindTexture(GL_TEXTURE_2D, id_);
+  glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+  glPixelStorei(GL_UNPACK_ROW_LENGTH, stride ? stride / bpp : 0);
+  glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w, h, format, type, data);
+  glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
+  glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
+}
+
+void Texture::uploadCompressed(const void *data, int w, int h, size_t bytes, GLenum internal) {
+  if (!id_) glGenTextures(1, &id_);
+  glBindTexture(GL_TEXTURE_2D, id_);
+  // Compressed textures are re-specified each frame; drivers handle this well.
+  glCompressedTexImage2D(GL_TEXTURE_2D, 0, internal, w, h, 0, GLsizei(bytes), data);
+  if (w != w_ || h != h_ || fmt_ != internal) {
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+  }
+  w_ = w; h_ = h; fmt_ = internal;
 }
 
 void Texture::bind(int unit) const {

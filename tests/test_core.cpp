@@ -1,5 +1,7 @@
 // Unit tests for the GPU-independent core: warp geometry, OSC, project files.
+#include "control/midi.h"
 #include "control/osc.h"
+#include "media/hap.h"
 #include "core/project.h"
 #include "core/warp.h"
 
@@ -153,10 +155,48 @@ static void testProject() {
   CHECK(p.layers.empty() && p.columns[0].cells.count(lid) == 0);
 }
 
+static void testMidi() {
+  OscMessage m;
+  unsigned char cc[] = {0xB2, 7, 100}; // CC 7 on channel 3
+  CHECK(midiToOsc(cc, 3, m) && m.address == "/midi/cc/3/7" && m.number(0) == 100);
+  unsigned char on[] = {0x90, 60, 127};
+  CHECK(midiToOsc(on, 3, m) && m.address == "/midi/note/1/60" && m.number(0) == 127);
+  unsigned char off[] = {0x80, 60, 64};
+  CHECK(midiToOsc(off, 3, m) && m.number(0) == 0); // note off always reads as 0
+  unsigned char bend[] = {0xE0, 0x00, 0x40};
+  CHECK(midiToOsc(bend, 3, m) && m.address == "/midi/bend/1" && m.number(0) == 8192);
+  unsigned char clock[] = {0xF8};
+  CHECK(!midiToOsc(clock, 1, m));
+  CHECK(oscMatch("/midi/cc/*/7", "/midi/cc/16/7"));
+}
+
+static void testSnappyHap() {
+  // Snappy: literal "abcd" then a copy of 8 bytes at offset 4 -> "abcdabcdabcd".
+  const uint8_t snap[] = {12, (3 << 2) | 0, 'a', 'b', 'c', 'd', uint8_t(((8 - 4) << 2) | 1), 4};
+  std::vector<uint8_t> out;
+  CHECK(snappyDecompress(snap, sizeof(snap), out));
+  CHECK(std::string(out.begin(), out.end()) == "abcdabcdabcd");
+  const uint8_t bad[] = {12, (3 << 2) | 0, 'a', 'b', 'c', 'd', uint8_t((4 << 2) | 1), 9};
+  CHECK(!snappyDecompress(bad, sizeof(bad), out)); // offset before start of output
+
+  // HAP frame: uncompressed DXT1 (type 0xAB), 8 bytes = one 4x4 block.
+  std::vector<uint8_t> frame = {8, 0, 0, 0xAB, 1, 2, 3, 4, 5, 6, 7, 8};
+  HapFrame hf;
+  CHECK(decodeHapFrame(frame.data(), frame.size(), hf));
+  CHECK(hf.format == HapFormat::DXT1 && hf.color.size() == 8 && hf.color[7] == 8);
+  // Same block, snappy-compressed (type 0xBB).
+  std::vector<uint8_t> sframe = {10, 0, 0, 0xBB, 8, (7 << 2), 1, 2, 3, 4, 5, 6, 7, 8};
+  CHECK(decodeHapFrame(sframe.data(), sframe.size(), hf) && hf.color.size() == 8 && hf.color[0] == 1);
+  // Truncated frames are rejected.
+  CHECK(!decodeHapFrame(frame.data(), 6, hf));
+}
+
 int main() {
   testWarp();
   testOsc();
   testProject();
+  testMidi();
+  testSnappyHap();
   std::printf("%d checks, %d failures\n", g_checks, g_failures);
   return g_failures == 0 ? 0 : 1;
 }
