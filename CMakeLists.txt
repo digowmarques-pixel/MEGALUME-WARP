@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(Lumen VERSION 0.8.0 LANGUAGES C CXX)
+project(Lumen VERSION 0.9.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -88,6 +88,7 @@ endif()
 add_executable(lumen
   src/main.cpp
   src/app.cpp
+  src/diagnose.cpp
   src/gl/gl.cpp
   src/render/gpu.cpp
   src/render/mask.cpp
@@ -97,7 +98,9 @@ add_executable(lumen
   src/media/upload.cpp
   src/media/audio.cpp
   src/media/source.cpp
+  src/media/text.cpp
   src/io/spout.cpp
+  src/io/ndi.cpp
   src/control/midi.cpp
   src/core/warp.cpp
   src/core/dmx.cpp
@@ -113,8 +116,13 @@ add_executable(lumen
   src/engine/outputs.cpp
   src/control/osc.cpp
   src/control/dmxin.cpp
+  src/control/devices.cpp
+  src/io/serial.cpp
+  src/core/md5.cpp
+  src/core/timecode.cpp
   src/control/mapping.cpp
   src/ui/ui.cpp
+  src/ui/i18n.cpp
   src/ui/workspace.cpp
   src/ui/outputs_window.cpp
   src/platform/platform.cpp)
@@ -134,10 +142,12 @@ endif()
 target_compile_definitions(lumen PRIVATE GLFW_INCLUDE_NONE LUMEN_VERSION="${PROJECT_VERSION}" LUMEN_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 
 if(WIN32)
-  target_link_libraries(lumen PRIVATE ws2_32 comdlg32 shell32)
+  target_link_libraries(lumen PRIVATE ws2_32 comdlg32 shell32 ole32)
   target_compile_definitions(lumen PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN _CRT_SECURE_NO_WARNINGS)
   # GUI program (no console window); logs go to the terminal when launched from one.
   set_target_properties(lumen PROPERTIES WIN32_EXECUTABLE TRUE)
+  target_sources(lumen PRIVATE src/lumen.rc)
+  set_source_files_properties(src/lumen.rc PROPERTIES INCLUDE_DIRECTORIES "${CMAKE_SOURCE_DIR}/assets")
   if(MSVC)
     target_compile_options(lumen PRIVATE /W3 /utf-8)
     target_link_options(lumen PRIVATE /ENTRY:mainCRTStartup)
@@ -167,13 +177,18 @@ if(LUMEN_BUILD_TESTS)
     src/core/svg.cpp
     src/core/isf.cpp
     src/core/blob.cpp
+    src/core/md5.cpp
+    src/core/timecode.cpp
+    src/control/devices.cpp
+    src/io/serial.cpp
     src/control/osc.cpp
+    src/ui/i18n.cpp
     src/platform/platform.cpp)
   target_include_directories(lumen_tests PRIVATE src third_party)
   target_compile_definitions(lumen_tests PRIVATE LUMEN_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
   target_link_libraries(lumen_tests PRIVATE rtmidi)
   if(WIN32)
-    target_link_libraries(lumen_tests PRIVATE ws2_32 comdlg32 shell32)
+    target_link_libraries(lumen_tests PRIVATE ws2_32 comdlg32 shell32 ole32)
     target_compile_definitions(lumen_tests PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN _CRT_SECURE_NO_WARNINGS)
     if(MSVC)
       target_compile_options(lumen_tests PRIVATE /utf-8)

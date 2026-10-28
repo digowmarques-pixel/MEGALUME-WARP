@@ -4,6 +4,10 @@
 // clock of the same playback so picture and sound stay in sync.
 #pragma once
 
+#include "core/timecode.h"
+
+#include <chrono>
+
 #include "media/decoder.h"
 
 #include <atomic>
@@ -93,6 +97,33 @@ private:
   std::thread thread_;
   std::atomic<bool> running_{false}, restart_{false}, loop_{true}, finished_{false};
   double loopLength_ = 0;
+};
+
+// Reads LTC (SMPTE timecode as audio) from an input of the sound card.
+class LtcCapture {
+public:
+  LtcCapture();
+  ~LtcCapture();
+  bool start(const std::string &deviceName, int channel, std::string *error = nullptr);
+  void stop();
+  bool running() const { return running_; }
+  // Last decoded frame and how long ago it arrived (seconds).
+  bool latest(Timecode &tc, double &age) const;
+  float level() const { return level_.load(); }
+  static std::vector<std::string> devices(); // capture devices
+  void callback(const float *in, size_t frames, int channels); // device thread
+
+private:
+  struct Impl;
+  std::unique_ptr<Impl> impl_;
+  LtcDecoder decoder_{kAudioRate};
+  mutable std::mutex mutex_;
+  Timecode last_;
+  uint64_t lastFrames_ = 0;
+  std::chrono::steady_clock::time_point at_{};
+  bool have_ = false, running_ = false;
+  int channel_ = 0;
+  std::atomic<float> level_{0};
 };
 
 } // namespace lumen

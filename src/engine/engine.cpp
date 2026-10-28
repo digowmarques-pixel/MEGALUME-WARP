@@ -21,6 +21,10 @@ void Engine::shutdown() {
   osc_.stop();
   midi_.stop();
   dmxIn_.stop();
+  serialIn_.stop();
+  ltcIn_.stop();
+  if (ltcVoice_) audio.removeVoice(ltcVoice_);
+  ltcVoice_.reset();
   states_.clear(); // playbacks remove their audio voices
   extraCompositors_.clear();
   chains_.clear();
@@ -155,12 +159,14 @@ float Engine::columnTransition(int index) const {
 }
 
 float Engine::outgoingOpacity(const LayerState &st) {
+  if (st.composed) return 0;
   // Through black: the old content is gone by the middle, the new one starts there.
   if (st.type == TransitionType::ThroughBlack) return std::max(0.0f, 1.0f - 2.0f * st.fade);
   return 1.0f - st.fade;
 }
 
 float Engine::incomingOpacity(const LayerState &st) {
+  if (st.composed) return 1;
   if (st.type == TransitionType::ThroughBlack && st.previous) return std::max(0.0f, 2.0f * st.fade - 1.0f);
   return st.fade;
 }
@@ -206,6 +212,7 @@ void Engine::sendOsc(const OscMessage &m, bool feedbackOnly) {
 }
 
 void Engine::runColumnActions(const Column &c, int index) {
+  if (!c.commands.empty()) devices.runBatch(c.commands, project);
   if (project.oscTargets.empty()) return;
   OscMessage status{"/lumen/status/column", {int32_t(index + 1), c.name}, ""};
   sendOsc(status, true);
@@ -220,17 +227,329 @@ void Engine::runColumnActions(const Column &c, int index) {
 void Engine::launchColumn(int index) {
   if (index < 0 || index >= int(project.columns.size())) return;
   const Column &col = project.columns[size_t(index)];
-  float fade = columnTransition(index);
+  // Stinger: a video (with alpha) plays over everything and the cue changes
+  // with a cut in the middle of it, hidden by the stinger.
+  if (const MediaItem *sm = project.media(col.stingerMediaId); sm && pendingColumn_ < 0) {
+    Cell c;
+    c.mediaId = sm->id;
+    c.setEndMode(EndMode::Stop);
+    MediaContext ctx = context();
+    stinger_ = std::make_unique<Playback>(*sm, c, ctx);
+    double dur = stinger_->duration();
+    if (dur <= 0) dur = 1.0;
+    pendingColumn_ = index;
+    pendingAt_ = time_ + dur * double(std::clamp(col.stingerCut, 0.0f, 1.0f));
+    return;
+  }
+  launchColumnNow(index, false);
+}
+
+void Engine::launchColumnNow(int index, bool cut) {
+  const Column &col = project.columns[size_t(index)];
+  float fade = cut ? 0.0f : columnTransition(index);
+  TransitionType type = cut ? TransitionType::Cut : col.transitionType;
+  bool manual = col.manualTransition && !cut && type != TransitionType::Cut;
+  if (manual) {
+    manualActive_ = true;
+    manualArmed_ = transitionFader <= 0.02f;
+    manualProgress_ = 0;
+  }
   for (auto &l : project.layers) {
     auto it = col.cells.find(l.id);
     const Cell *cell = (it != col.cells.end() && it->second.mediaId >= 0) ? &it->second : nullptr;
-    startTransition(l.id, cell, fade, col.id, col.transitionType);
+    startTransition(l.id, cell, manual ? 1.0f : fade, col.id, type);
+    auto st = states_.find(l.id);
+    if (st != states_.end() && st->second.fade < 1) {
+      st->second.manual = manual;
+      st->second.transitionShader = type == TransitionType::Shader ? col.transitionShader : std::string();
+    }
   }
   activeColumn_ = index;
   columnLaunchedAt_ = time_;
   autoGoFired_ = false;
-  applyColumnStates(index, col.transitionType == TransitionType::Cut ? 0.0f : fade);
+  applyColumnStates(index, type == TransitionType::Cut ? 0.0f : fade);
+  // Timelines: the column's timeline starts (or keeps running if it was
+  // already playing from the previous column); others started by columns stop.
+  for (auto it = timelineRuns_.begin(); it != timelineRuns_.end();)
+    it = it->second.fromColumn && it->first != col.timelineId ? timelineRuns_.erase(it) : std::next(it);
+  if (col.timelineId >= 0 && project.timeline(col.timelineId)) {
+    auto it = timelineRuns_.find(col.timelineId);
+    if (it == timelineRuns_.end() || !it->second.playing) playTimeline(col.timelineId, true, true);
+  }
   runColumnActions(col, index);
+}
+
+// ------------------------------------------------------------------ timelines
+
+void Engine::playTimeline(int id, bool fromStart, bool fromColumn) {
+  if (!project.timeline(id)) return;
+  TimelineRun &r = timelineRuns_[id];
+  if (fromStart) r.time = 0;
+  r.playing = true;
+  r.fromColumn = fromColumn;
+}
+
+void Engine::pauseTimeline(int id) {
+  auto it = timelineRuns_.find(id);
+  if (it != timelineRuns_.end()) it->second.playing = false;
+}
+
+void Engine::stopTimeline(int id) { timelineRuns_.erase(id); }
+
+void Engine::seekTimeline(int id, double t) {
+  Timeline *tl = project.timeline(id);
+  if (!tl) return;
+  TimelineRun &r = timelineRuns_[id];
+  r.time = std::clamp(t, 0.0, double(tl->duration));
+  applyTimeline(*tl, float(r.time));
+}
+
+const TimelineRun *Engine::timelineRun(int id) const {
+  auto it = timelineRuns_.find(id);
+  return it == timelineRuns_.end() ? nullptr : &it->second;
+}
+
+static MappingTarget namedTarget(const std::string &p, bool &ok) {
+  static const std::pair<const char *, MappingTarget> names[] = {
+      {"opacity", MappingTarget::Opacity},       {"x", MappingTarget::PositionX},
+      {"y", MappingTarget::PositionY},           {"scale", MappingTarget::Scale},
+      {"rotation", MappingTarget::Rotation},     {"brightness", MappingTarget::Brightness},
+      {"contrast", MappingTarget::Contrast},     {"saturation", MappingTarget::Saturation},
+      {"hue", MappingTarget::Hue},               {"speed", MappingTarget::Speed},
+      {"volume", MappingTarget::Volume}};
+  for (auto &[n, t] : names)
+    if (p == n) { ok = true; return t; }
+  ok = false;
+  return MappingTarget::Opacity;
+}
+
+// "effect2/color.1" -> effect index 1, input "color", component 1.
+static bool parseEffectParam(const std::string &p, int &index, std::string &name, int &comp) {
+  if (p.rfind("effect", 0) != 0) return false;
+  size_t slash = p.find('/');
+  if (slash == std::string::npos) return false;
+  index = std::atoi(p.substr(6, slash - 6).c_str()) - 1;
+  name = p.substr(slash + 1);
+  comp = 0;
+  size_t dot = name.find('.');
+  if (dot != std::string::npos) {
+    comp = std::atoi(name.substr(dot + 1).c_str());
+    name = name.substr(0, dot);
+  }
+  return index >= 0;
+}
+
+bool Engine::setNamedParam(int layerId, const std::string &param, float v) {
+  if (layerId < 0) {
+    if (param == "master") masterOpacity = std::clamp(v, 0.0f, 1.0f);
+    else if (param == "masterVolume") project.masterVolume = std::clamp(v, 0.0f, 2.0f);
+    else if (param == "dmxMaster") project.dmxMaster = std::clamp(v, 0.0f, 1.0f);
+    else if (param == "transition") transitionFader = std::clamp(v, 0.0f, 1.0f);
+    else return false;
+    return true;
+  }
+  Layer *l = project.layer(layerId);
+  if (!l) return false;
+  bool ok;
+  MappingTarget t = namedTarget(param, ok);
+  if (ok) { setParam(*l, t, v); return true; }
+  int index, comp;
+  std::string name;
+  if (!parseEffectParam(param, index, name, comp) || index >= int(l->effects.size())) return false;
+  Effect &e = l->effects[size_t(index)];
+  if (name == "enabled") { e.enabled = v > 0.5f; return true; }
+  auto &vals = e.params[name];
+  if (const IsfInfo *info = isfCatalog.info(e.path); info && vals.empty()) {
+    IsfValues d;
+    isfDefaults(*info, d);
+    vals = d[name];
+  }
+  if (comp >= int(vals.size())) vals.resize(size_t(comp) + 1, 0.0f);
+  vals[size_t(comp)] = v;
+  return true;
+}
+
+float Engine::getNamedParam(int layerId, const std::string &param) {
+  if (layerId < 0) {
+    if (param == "master") return masterOpacity;
+    if (param == "masterVolume") return project.masterVolume;
+    if (param == "dmxMaster") return project.dmxMaster;
+    if (param == "transition") return transitionFader;
+    return 0;
+  }
+  Layer *l = project.layer(layerId);
+  if (!l) return 0;
+  bool ok;
+  MappingTarget t = namedTarget(param, ok);
+  if (ok) return getParam(*l, t);
+  int index, comp;
+  std::string name;
+  if (!parseEffectParam(param, index, name, comp) || index >= int(l->effects.size())) return 0;
+  Effect &e = l->effects[size_t(index)];
+  if (name == "enabled") return e.enabled ? 1.0f : 0.0f;
+  auto it = e.params.find(name);
+  if (it == e.params.end() || comp >= int(it->second.size())) {
+    if (const IsfInfo *info = isfCatalog.info(e.path)) {
+      IsfValues d;
+      isfDefaults(*info, d);
+      auto &v = d[name];
+      return comp < int(v.size()) ? v[size_t(comp)] : 0.0f;
+    }
+    return 0;
+  }
+  return it->second[size_t(comp)];
+}
+
+void Engine::applyTimeline(const Timeline &tl, double t) {
+  for (auto &tr : tl.tracks)
+    if (tr.enabled && !tr.keys.empty()) setNamedParam(tr.layerId, tr.param, tr.valueAt(float(t)));
+}
+
+void Engine::updateTimelines(double dt) {
+  bool next = false;
+  for (auto it = timelineRuns_.begin(); it != timelineRuns_.end();) {
+    Timeline *tl = project.timeline(it->first);
+    if (!tl) { it = timelineRuns_.erase(it); continue; }
+    TimelineRun &r = it->second;
+    double before = r.time;
+    bool wrapped = false;
+    if (tl->followTimecode && timecodeValid_) {
+      r.time = std::clamp(timecodeSeconds_ - double(tl->timecodeOffset), 0.0, double(tl->duration));
+    } else if (r.playing) {
+      r.time += dt;
+      double dur = std::max(0.01f, tl->duration);
+      if (r.time >= dur) {
+        if (tl->loop) {
+          double ls = std::clamp(double(tl->loopStart), 0.0, dur - 0.01);
+          r.time = ls + std::fmod(r.time - ls, dur - ls);
+          wrapped = true;
+        } else {
+          r.time = dur;
+          r.playing = false;
+          if (tl->goAtEnd) next = true;
+        }
+      }
+    }
+    // Flags crossed this frame (both parts when the loop wrapped).
+    for (auto &f : tl->flags) {
+      double ft = f.time;
+      bool hit = wrapped ? (ft > before || ft <= r.time) : (ft > before && ft <= r.time) || (before == 0 && ft == 0 && r.time > 0);
+      if (hit && !f.command.empty()) runCommand(f.command);
+    }
+    if (r.playing || tl->followTimecode || before != r.time) applyTimeline(*tl, r.time);
+    ++it;
+  }
+  if (next) go();
+}
+
+void Engine::updateTimecode(double dt) {
+  const TimecodeConfig &cfg = project.timecode;
+  // LTC input device follows the settings.
+  bool wantLtc = cfg.source == TimecodeSource::LTC;
+  if (wantLtc && (ltcDeviceInUse_ != cfg.ltcDevice || ltcChannelInUse_ != cfg.ltcChannel)) {
+    ltcDeviceInUse_ = cfg.ltcDevice;
+    ltcChannelInUse_ = cfg.ltcChannel;
+    tcError_.clear();
+    if (!ltcIn_.start(cfg.ltcDevice, cfg.ltcChannel, &tcError_)) std::fprintf(stderr, "[ltc] %s\n", tcError_.c_str());
+  } else if (!wantLtc && ltcIn_.running()) {
+    ltcIn_.stop();
+    ltcDeviceInUse_ = "\x01";
+  }
+  // Input: fresh frames set the clock; between frames (and during short
+  // dropouts, "freewheel") it runs on its own.
+  Timecode tc;
+  double age = 1e9;
+  bool got = cfg.source == TimecodeSource::MTC ? midi_.timecode(tc, age)
+           : cfg.source == TimecodeSource::LTC ? ltcIn_.latest(tc, age) : false;
+  if (got && age < 0.25) {
+    double t = tc.seconds() + age;
+    // Small jitter: keep the running clock smooth; big differences jump.
+    if (!timecodeValid_ || std::fabs(t - timecodeSeconds_) > 0.12) timecodeSeconds_ = t;
+    else timecodeSeconds_ += dt + (t - timecodeSeconds_) * 0.1;
+    timecodeFps_ = tc.fps;
+    timecodeValid_ = true;
+    tcFreshAt_ = time_;
+  } else if (timecodeValid_ && time_ - tcFreshAt_ < std::max(0.0f, cfg.freewheel)) {
+    timecodeSeconds_ += dt;
+  } else {
+    timecodeValid_ = false;
+  }
+  // Columns cued on a timecode.
+  if (timecodeValid_) {
+    if (tcPrev_ >= 0 && timecodeSeconds_ >= tcPrev_ && timecodeSeconds_ - tcPrev_ < 1.0)
+      for (size_t i = 0; i < project.columns.size(); ++i) {
+        float cue = project.columns[i].timecodeCue;
+        if (cue >= 0 && cue > tcPrev_ && cue <= timecodeSeconds_) launchColumn(int(i));
+      }
+    tcPrev_ = timecodeSeconds_;
+  } else {
+    tcPrev_ = -1;
+  }
+
+  // Generation from a timeline.
+  const TimelineRun *run = timelineRun(cfg.genTimelineId);
+  genActive_ = cfg.generate && run && run->playing;
+  if (!genActive_) {
+    mtcClock_ = ltcClock_ = -1;
+    if (ltcVoice_) ltcVoice_->active = false;
+    return;
+  }
+  genTime_ = cfg.genStart + run->time;
+  double fps = cfg.genFps > 0 ? cfg.genFps : 25;
+  if (cfg.genMtc) {
+    if (mtcPortInUse_ != cfg.genMtcPort || !mtcOut_.isOpen()) {
+      mtcPortInUse_ = cfg.genMtcPort;
+      mtcOut_.open(cfg.genMtcPort);
+    }
+    double qf = 1.0 / (fps * 4.0);
+    if (mtcClock_ < 0 || std::fabs(genTime_ - mtcClock_) > 0.5) { // start or jump: full frame
+      mtcOut_.send(mtcFullFrame(Timecode::fromSeconds(genTime_, fps)));
+      mtcClock_ = genTime_;
+      mtcPiece_ = 0;
+    }
+    while (mtcClock_ <= genTime_) {
+      // Pieces 0..7 describe the frame at which piece 0 was sent.
+      Timecode frame = Timecode::fromSeconds(mtcClock_ - mtcPiece_ * qf, fps);
+      mtcOut_.send(mtcQuarterFrame(frame, mtcPiece_));
+      mtcPiece_ = (mtcPiece_ + 1) % 8;
+      mtcClock_ += qf;
+    }
+  }
+  if (cfg.genLtc && audio.running()) {
+    if (!ltcVoice_) ltcVoice_ = audio.createVoice();
+    ltcVoice_->active = true;
+    ltcVoice_->gain = 1.0f;
+    if (ltcClock_ < 0 || std::fabs(genTime_ - ltcClock_) > 0.5) {
+      ltcVoice_->reset();
+      ltcClock_ = genTime_;
+    }
+    std::vector<float> mono, stereo;
+    while (ltcClock_ < genTime_ + 0.12) { // keep ~100 ms queued
+      mono.clear();
+      ltcEnc_.encode(Timecode::fromSeconds(ltcClock_, fps), mono, 0.5f);
+      stereo.assign(mono.size() * 2, 0.0f);
+      for (size_t k = 0; k < mono.size(); ++k) {
+        if (cfg.genLtcChannel != 1) stereo[k * 2] = mono[k];
+        if (cfg.genLtcChannel != 0) stereo[k * 2 + 1] = mono[k];
+      }
+      ltcVoice_->write(stereo.data(), mono.size());
+      ltcClock_ += 1.0 / fps;
+    }
+  }
+}
+
+void Engine::runCommand(const std::string &line) {
+  std::string l = line;
+  l.erase(0, l.find_first_not_of(" \t"));
+  if (l.empty() || l[0] == '#') return;
+  if (l[0] == '/') {
+    OscMessage m;
+    if (!parseOscText(l, m)) return;
+    // Our own commands run here; anything else goes to the OSC outputs.
+    if (!handleOsc(m)) sendOsc(m);
+    return;
+  }
+  devices.run(l, project);
 }
 
 void Engine::applyColumnStates(int index, float duration) {
@@ -319,6 +638,7 @@ void Engine::updateSchedule() {
     case ScheduleAction::Stop: stopAll(); break;
     case ScheduleAction::BlackoutOn: blackout = true; break;
     case ScheduleAction::BlackoutOff: blackout = false; break;
+    case ScheduleAction::Command: runCommand(e.command); break;
     default: break;
     }
     oscLog.push_back(std::string("[agenda] ") + scheduleActionName(e.action));
@@ -389,6 +709,47 @@ void Engine::update(double dt) {
   size_t oscCount = inbox_.size();
   midi_.drain(inbox_);
   dmxIn_.drain(inbox_);
+  // Serial: "A0 512" -> /serial/A0 512; "1 2 3" -> /serial 1 2 3.
+  {
+    const auto &cfg = project.serialIn;
+    std::string want = cfg.enabled ? cfg.port : std::string();
+    if (want != serialPortInUse_ || (cfg.enabled && cfg.baud != serialBaudInUse_)) {
+      serialPortInUse_ = want;
+      serialBaudInUse_ = cfg.baud;
+      serialIn_.stop();
+      serialError_.clear();
+      if (!want.empty() && !serialIn_.start(want, cfg.baud, &serialError_))
+        std::fprintf(stderr, "[serial] %s\n", serialError_.c_str());
+    }
+    std::vector<std::string> lines;
+    serialIn_.drain(lines);
+    for (auto &line : lines) {
+      std::vector<std::string> tok;
+      std::string cur;
+      for (char c : line + " ") {
+        if (c == ' ' || c == ',' || c == ':' || c == '\t' || c == '=') {
+          if (!cur.empty()) tok.push_back(cur);
+          cur.clear();
+        } else {
+          cur += c;
+        }
+      }
+      if (tok.empty()) continue;
+      OscMessage m;
+      m.sender = "serial";
+      size_t first = 0;
+      char *end = nullptr;
+      std::strtod(tok[0].c_str(), &end);
+      if (*end) { m.address = "/serial/" + tok[0]; first = 1; }
+      else m.address = "/serial";
+      for (size_t i = first; i < tok.size(); ++i) {
+        float v = std::strtof(tok[i].c_str(), &end);
+        if (*end) m.args.emplace_back(tok[i]);
+        else m.args.emplace_back(v);
+      }
+      inbox_.push_back(std::move(m));
+    }
+  }
   for (auto &m : injected_) inbox_.push_back(std::move(m));
   injected_.clear();
   for (size_t i = 0; i < inbox_.size(); ++i) {
@@ -407,13 +768,35 @@ void Engine::update(double dt) {
 
   updateTweens(dt);
   updateSchedule();
+  updateTimecode(dt);
+  updateTimelines(dt);
   project.resolveSurfaces();
+  {
+    std::vector<std::string> dlog;
+    devices.drainLog(dlog);
+    for (auto &l : dlog) oscLog.push_back(l);
+  }
+  // Manual transition: the fader drives the progress once it went back to 0.
+  if (manualActive_) {
+    if (!manualArmed_ && transitionFader <= 0.02f) manualArmed_ = true;
+    if (manualArmed_) manualProgress_ = std::clamp(transitionFader, 0.0f, 1.0f);
+    if (manualProgress_ >= 0.999f) manualActive_ = false;
+  }
+  // Stinger and the cue change it hides.
+  if (pendingColumn_ >= 0 && time_ >= pendingAt_) {
+    int c = pendingColumn_;
+    pendingColumn_ = -1;
+    if (c < int(project.columns.size())) launchColumnNow(c, true);
+  }
 
   MediaContext ctx = context();
   std::vector<int> ended;
   for (auto it = states_.begin(); it != states_.end();) {
     LayerState &st = it->second;
-    if (st.fade < 1) {
+    if (st.manual) {
+      st.fade = manualActive_ ? manualProgress_ : 1.0f;
+      if (!manualActive_) st.manual = false;
+    } else if (st.fade < 1) {
       st.fade = st.fadeDuration > 0 ? std::min(1.0f, st.fade + float(dt) / st.fadeDuration) : 1.0f;
     }
     if (st.fade >= 1 && st.previous) {
@@ -448,6 +831,15 @@ void Engine::update(double dt) {
         emitBlobs(*layer, report);
       }
     }
+    st.composed = false;
+    if (st.type == TransitionType::Shader && st.fade < 1 && !st.transitionShader.empty() &&
+        (st.currentTex || st.previousTex)) {
+      if (const Texture *t = composeTransition(it->first, st)) {
+        st.currentTex = t;
+        st.previousTex = nullptr;
+        st.composed = true;
+      }
+    }
     if (st.current && !st.fadingOut && !st.endHandled && st.endMode != EndMode::Loop &&
         st.endMode != EndMode::Freeze && st.current->finished()) {
       st.endHandled = true;
@@ -474,8 +866,57 @@ void Engine::update(double dt) {
     else if (it->second.endMode == EndMode::NextColumn) next = true;
   }
   if (next && activeColumn_ + 1 < int(project.columns.size())) launchColumn(activeColumn_ + 1);
+  // Stinger playback.
+  stingerTex_ = nullptr;
+  if (stinger_) {
+    const MediaItem *sm = project.media(stinger_->mediaId());
+    if (!sm || stinger_->finished()) {
+      stinger_.reset();
+    } else {
+      stingerTex_ = stinger_->update(dt, *sm, ctx);
+      stinger_->setGain(1);
+    }
+  }
+  for (auto it = transitionIsf_.begin(); it != transitionIsf_.end();) {
+    auto st = states_.find(it->first);
+    bool busy = st != states_.end() && st->second.type == TransitionType::Shader && st->second.fade < 1;
+    if (busy) { ++it; continue; }
+    transitionIn_[0].erase(it->first);
+    transitionIn_[1].erase(it->first);
+    transitionOut_.erase(it->first);
+    it = transitionIsf_.erase(it);
+  }
   updateAutoGo();
   cache.pruneLive();
+}
+
+// ISF transition between the outgoing and the incoming content of a layer
+// (inputs startImage / endImage / progress).
+const Texture *Engine::composeTransition(int layerId, LayerState &st) {
+  auto &r = transitionIsf_[layerId];
+  if (!r) r = std::make_unique<IsfRenderer>();
+  if (!r->sync(st.transitionShader) || !r->info().transition) return nullptr;
+  if (clearTex_.empty()) {
+    unsigned char px[4] = {0, 0, 0, 0};
+    clearTex_.upload(px, 1, 1);
+  }
+  const Texture *from = st.previousTex ? st.previousTex : &clearTex_;
+  const Texture *to = st.currentTex ? st.currentTex : &clearTex_;
+  const Texture *size = st.currentTex ? st.currentTex : from;
+  auto &a = transitionIn_[0][layerId], &b = transitionIn_[1][layerId], &out = transitionOut_[layerId];
+  if (!a) a = std::make_unique<Framebuffer>();
+  if (!b) b = std::make_unique<Framebuffer>();
+  if (!out) out = std::make_unique<Framebuffer>();
+  generators.copyFlipped(*from, *a, mesh); // ISF is GL-native
+  generators.copyFlipped(*to, *b, mesh);
+  IsfValues v;
+  isfDefaults(r->info(), v);
+  v["progress"] = {st.fade};
+  const Texture *t = r->render(size->width(), size->height(), time_,
+                               {{"startImage", &a->texture()}, {"endImage", &b->texture()}}, v, mesh);
+  if (!t) return nullptr;
+  generators.copyFlipped(*t, *out, mesh);
+  return &out->texture();
 }
 
 void Engine::render() {
@@ -487,6 +928,22 @@ void Engine::render() {
   // the DMX master dims only the LEDs.
   leds.update(project, [this](int id) -> const Texture & { return canvasTexture(id); }, mesh, time_);
 
+  // NDI of the main canvas: read back (synchronous), rows top-down for NDI.
+  if (project.ndiSend) {
+    if (!ndiAvailable()) {
+      ndiStatus_ = lumen::ndiStatus();
+    } else {
+      canvas().readPixels(ndiPixels_);
+      int w = canvas().width(), h = canvas().height();
+      ndiFlip_.resize(ndiPixels_.size());
+      size_t row = size_t(w) * 4;
+      for (int y = 0; y < h; ++y)
+        std::copy_n(&ndiPixels_[size_t(h - 1 - y) * row], row, &ndiFlip_[size_t(y) * row]);
+      ndiStatus_ = ndiOut_.send(project.ndiName, ndiFlip_.data(), w, h) ? "enviando \"" + project.ndiName + "\"" : "erro";
+    }
+  } else {
+    ndiStatus_.clear();
+  }
   if (project.spoutSend && spoutAvailable()) {
     bool ok = spoutOut_.send(canvas().texture().id(), canvas().width(), canvas().height(), project.spoutName);
     spoutStatus_ = ok ? "enviando \"" + project.spoutName + "\"" : "erro ao enviar";
@@ -516,6 +973,12 @@ void Engine::renderCanvas(int canvasId) {
       draws.push_back({&l, st->second.previousTex, outgoingOpacity(st->second)});
     if (st->second.current && st->second.currentTex)
       draws.push_back({&l, st->second.currentTex, incomingOpacity(st->second)});
+  }
+  if (canvasId == 0 && stingerTex_) { // stinger on top of everything
+    stingerLayer_.slices.resize(1);
+    stingerLayer_.slices[0].warp.setRect({0, 0}, {float(project.canvasW), float(project.canvasH)});
+    stingerLayer_.id = -1000;
+    draws.push_back({&stingerLayer_, stingerTex_, 1.0f});
   }
   comp->render(project, canvasId, draws, mesh, blackout ? 0.0f : masterOpacity);
 }

@@ -5,6 +5,7 @@
 #include "core/project.h"
 #include "media/audio.h"
 #include "media/decoder.h"
+#include "media/text.h"
 #include "media/upload.h"
 #include "render/gpu.h"
 #include "render/isf_renderer.h"
@@ -16,6 +17,7 @@
 namespace lumen {
 
 class SpoutIn;
+class NdiReceiver;
 
 // Procedural content rendered by shaders (test card, plasma...).
 class Generators {
@@ -49,6 +51,9 @@ private:
   uint64_t lastFrame_ = ~0ull;
   std::unique_ptr<SpoutIn> spout_;
   Texture wrapped_; // non-owning view of the Spout texture
+  std::unique_ptr<NdiReceiver> ndi_;
+  Texture ndiTex_;
+  std::vector<uint8_t> ndiFrame_;
   bool opened_ = false;
 };
 
@@ -87,6 +92,7 @@ private:
     std::shared_ptr<LiveInput> live;
     const Texture *liveTex = nullptr;
     std::unique_ptr<IsfRenderer> isf; // shader thumbnails
+    std::unique_ptr<TextRenderer> text;
   };
   Entry &entry(const MediaItem &m);
   std::map<int, Entry> entries_;
@@ -124,6 +130,7 @@ private:
   bool hasFrame_ = false;
   std::unique_ptr<Framebuffer> genFb_;
   std::unique_ptr<IsfRenderer> isf_;
+  std::unique_ptr<TextRenderer> text_;
   std::shared_ptr<LiveInput> live_;
   // Audio: the voice's played-sample counter is the master clock.
   AudioEngine *audio_ = nullptr;

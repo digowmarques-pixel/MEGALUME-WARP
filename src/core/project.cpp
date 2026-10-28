@@ -20,7 +20,7 @@ static const char *kTargetNames[] = {"Opacity",    "Position X", "Position Y",  
                                      "Rotation",   "Brightness", "Contrast",     "Saturation",
                                      "Hue",        "Speed",      "Launch column", "Go (next)",
                                      "Stop all",   "Volume",     "Master opacity", "Master volume",
-                                     "Blackout",   "DMX master"};
+                                     "Blackout",   "DMX master", "Transition fader"};
 
 const char *generatorName(GeneratorKind k) { return kGeneratorNames[int(k)]; }
 const char *blendName(BlendMode b) { return kBlendNames[int(b)]; }
@@ -35,7 +35,7 @@ const char *transformerName(Transformer t) {
   return n[int(t)];
 }
 const char *scheduleActionName(ScheduleAction a) {
-  static const char *n[] = {"Launch column", "Go (next)", "Stop all", "Blackout on", "Blackout off"};
+  static const char *n[] = {"Launch column", "Go (next)", "Stop all", "Blackout on", "Blackout off", "Command"};
   return n[int(a)];
 }
 
@@ -78,6 +78,44 @@ std::vector<Vec2> maskOutline(const Mask &m, int steps) {
     for (auto &p : out) p = c + (p - c) * m.scale;
   }
   return out;
+}
+
+const char *easeName(Ease e) {
+  static const char *n[] = {"Linear", "Suave", "Acelera", "Desacelera", "Degrau"};
+  return n[int(e)];
+}
+
+float TimelineTrack::valueAt(float t) const {
+  if (keys.empty()) return 0;
+  if (t <= keys.front().time) return keys.front().value;
+  if (t >= keys.back().time) return keys.back().value;
+  auto it = std::upper_bound(keys.begin(), keys.end(), t, [](float x, const Keyframe &k) { return x < k.time; });
+  const Keyframe &b = *it, &a = *(it - 1);
+  float span = b.time - a.time;
+  float u = span > 0 ? (t - a.time) / span : 1.0f;
+  switch (a.ease) {
+  case Ease::Linear: break;
+  case Ease::InOut: u = u * u * (3 - 2 * u); break;
+  case Ease::In: u = u * u; break;
+  case Ease::Out: u = 1 - (1 - u) * (1 - u); break;
+  case Ease::Hold: u = 0; break;
+  default: break;
+  }
+  return a.value + (b.value - a.value) * u;
+}
+
+Timeline *Project::timeline(int id) {
+  for (auto &t : timelines)
+    if (t.id == id) return &t;
+  return nullptr;
+}
+
+Timeline &Project::addTimeline() {
+  Timeline t;
+  t.id = newId();
+  t.name = "Timeline " + std::to_string(timelines.size() + 1);
+  timelines.push_back(t);
+  return timelines.back();
 }
 
 Surface *Project::surface(int id) {
@@ -306,6 +344,28 @@ std::string builtinEffectsDir() {
   return dir;
 }
 
+MediaItem &Project::addText(const std::string &text) {
+  MediaItem m;
+  m.id = newId();
+  m.type = MediaType::Text;
+  m.name = "Texto";
+  m.text = text;
+  m.color1 = {1, 1, 1, 1};
+  m.color2 = {0, 0, 0, 0};
+  library.push_back(m);
+  return library.back();
+}
+
+MediaItem &Project::addNdi(const std::string &source) {
+  MediaItem m;
+  m.id = newId();
+  m.type = MediaType::NDI;
+  m.name = "NDI: " + source;
+  m.path = source;
+  library.push_back(m);
+  return library.back();
+}
+
 MediaItem &Project::addShader(const std::string &path) {
   MediaItem m;
   m.id = newId();
@@ -384,6 +444,9 @@ void Project::removeLayer(int id) {
   for (auto &c : columns)
     c.states.erase(std::remove_if(c.states.begin(), c.states.end(), [&](auto &s) { return s.layerId == id; }),
                    c.states.end());
+  for (auto &t : timelines)
+    t.tracks.erase(std::remove_if(t.tracks.begin(), t.tracks.end(), [&](auto &tr) { return tr.layerId == id; }),
+                   t.tracks.end());
 }
 
 void Project::removeMedia(int id) {
@@ -392,6 +455,8 @@ void Project::removeMedia(int id) {
   for (auto &c : columns)
     for (auto &[lid, cell] : c.cells)
       if (cell.mediaId == id) cell.mediaId = -1;
+  for (auto &c : columns)
+    if (c.stingerMediaId == id) c.stingerMediaId = -1;
 }
 
 Project Project::makeDefault() {
@@ -711,13 +776,37 @@ std::string serializeProject(const Project &p, const std::string &baseDir) {
     j["canvases"].push_back({{"id", c.id}, {"name", c.name}, {"size", {c.width, c.height}},
                              {"background", toJson(c.background)}});
   j["canvasName"] = p.canvasName;
+  j["serialIn"] = {{"enabled", p.serialIn.enabled}, {"port", p.serialIn.port}, {"baud", p.serialIn.baud}};
+  j["ndi"] = {{"send", p.ndiSend}, {"name", p.ndiName}};
+  j["projectors"] = json::array();
+  for (auto &pj : p.projectors) j["projectors"].push_back({{"name", pj.name}, {"host", pj.host}, {"password", pj.password}});
+  {
+    const TimecodeConfig &t = p.timecode;
+    j["timecode"] = {{"source", int(t.source)}, {"ltcDevice", t.ltcDevice}, {"ltcChannel", t.ltcChannel},
+                     {"freewheel", t.freewheel}, {"generate", t.generate}, {"genTimeline", t.genTimelineId},
+                     {"genStart", t.genStart}, {"genFps", t.genFps}, {"genMtc", t.genMtc}, {"genMtcPort", t.genMtcPort},
+                     {"genLtc", t.genLtc}, {"genLtcChannel", t.genLtcChannel}};
+  }
+  j["timelines"] = json::array();
+  for (auto &t : p.timelines) {
+    json jt = {{"id", t.id}, {"name", t.name}, {"duration", t.duration}, {"loop", t.loop}, {"loopStart", t.loopStart},
+               {"goAtEnd", t.goAtEnd}, {"followTimecode", t.followTimecode}, {"timecodeOffset", t.timecodeOffset},
+               {"tracks", json::array()}, {"flags", json::array()}};
+    for (auto &tr : t.tracks) {
+      json jk = json::array();
+      for (auto &k : tr.keys) jk.push_back({k.time, k.value, int(k.ease)});
+      jt["tracks"].push_back({{"layer", tr.layerId}, {"param", tr.param}, {"enabled", tr.enabled}, {"keys", jk}});
+    }
+    for (auto &f : t.flags) jt["flags"].push_back({{"time", f.time}, {"name", f.name}, {"command", f.command}});
+    j["timelines"].push_back(jt);
+  }
   j["surfaces"] = json::array();
   for (auto &sf : p.surfaces)
     j["surfaces"].push_back({{"id", sf.id}, {"name", sf.name}, {"color", toJson(sf.color)}, {"warp", toJson(sf.warp)}});
   j["schedule"] = json::array();
   for (auto &e : p.schedule)
     j["schedule"].push_back({{"enabled", e.enabled}, {"time", {e.hour, e.minute}}, {"days", e.days},
-                             {"action", int(e.action)}, {"column", e.column}});
+                             {"action", int(e.action)}, {"column", e.column}, {"command", e.command}});
   j["dmxInput"] = {{"enabled", p.dmxInput.enabled}, {"protocol", int(p.dmxInput.protocol)},
                    {"universe", p.dmxInput.universe}, {"count", p.dmxInput.count}};
   j["keyboardInput"] = p.keyboardInput;
@@ -740,6 +829,18 @@ std::string serializeProject(const Project &p, const std::string &baseDir) {
       jm["path"] = m.path;
     } else if (m.type == MediaType::Canvas) {
       jm["canvas"] = m.canvasRef;
+    } else if (m.type == MediaType::Text) {
+      jm["text"] = m.text;
+      jm["path"] = m.path.empty() ? std::string() : makeRelative(m.path, baseDir);
+      jm["font"] = m.font.empty() ? std::string() : makeRelative(m.font, baseDir);
+      jm["fontSize"] = m.fontSize;
+      jm["align"] = {m.align, m.valign};
+      jm["lineSpacing"] = m.lineSpacing;
+      jm["color1"] = toJson(m.color1);
+      jm["color2"] = toJson(m.color2);
+      jm["size"] = {m.width, m.height};
+    } else if (m.type == MediaType::NDI) {
+      jm["path"] = m.path;
     } else if (m.type == MediaType::Shader) {
       jm["path"] = shaderToJson(m.path, baseDir);
       jm["params"] = valuesToJson(m.shaderParams);
@@ -777,6 +878,12 @@ std::string serializeProject(const Project &p, const std::string &baseDir) {
     if (c.autoGo >= 0)
       jc["autoGo"] = {{"wait", c.autoGo}, {"afterTransition", c.autoGoAfterTransition}, {"target", c.autoGoTarget}};
     if (c.color[0] > 0 || c.color[1] > 0 || c.color[2] > 0) jc["color"] = {c.color[0], c.color[1], c.color[2]};
+    if (c.timelineId >= 0) jc["timeline"] = c.timelineId;
+    if (!c.transitionShader.empty()) jc["transitionShader"] = shaderToJson(c.transitionShader, baseDir);
+    if (c.manualTransition) jc["manualTransition"] = true;
+    if (c.stingerMediaId >= 0) jc["stinger"] = {{"media", c.stingerMediaId}, {"cut", c.stingerCut}};
+    if (!c.commands.empty()) jc["commands"] = c.commands;
+    if (c.timecodeCue >= 0) jc["timecodeCue"] = c.timecodeCue;
     for (auto &st : c.states)
       jc["states"].push_back({{"layer", st.layerId}, {"param", st.param}, {"value", st.value}});
     for (auto &[lid, cell] : c.cells)
@@ -800,7 +907,7 @@ std::string serializeProject(const Project &p, const std::string &baseDir) {
                     {"gamma", o.color.gamma}, {"gain", toJson(o.color.gain)}}},
          {"blackLevel", toJson(o.blackLevel)},
          {"masks", masksToJson(o.masks)}, {"delay", o.delayFrames}, {"canvas", o.canvasId},
-         {"spout", o.spoutName}, {"windowless", o.windowless}});
+         {"spout", o.spoutName}, {"windowless", o.windowless}, {"ndi", o.ndiName}});
   }
 
   for (auto &m : p.mappings)
@@ -904,6 +1011,59 @@ bool deserializeProject(const std::string &text, const std::string &baseDir, Pro
       if (c.id > 0) p.canvases.push_back(c);
     }
     p.canvasName = j.value("canvasName", "Canvas 1");
+    if (j.contains("serialIn")) {
+      p.serialIn.enabled = j["serialIn"].value("enabled", false);
+      p.serialIn.port = j["serialIn"].value("port", "");
+      p.serialIn.baud = j["serialIn"].value("baud", 115200);
+    }
+    if (j.contains("ndi")) {
+      p.ndiSend = j["ndi"].value("send", false);
+      p.ndiName = j["ndi"].value("name", "Lumen");
+    }
+    for (auto &x : j.value("projectors", json::array()))
+      p.projectors.push_back({x.value("name", "Projetor"), x.value("host", ""), x.value("password", "")});
+    if (j.contains("timecode")) {
+      auto &x = j["timecode"];
+      TimecodeConfig &t = p.timecode;
+      t.source = enumFrom(x, "source", TimecodeSource::Off, int(TimecodeSource::COUNT));
+      t.ltcDevice = x.value("ltcDevice", "");
+      t.ltcChannel = x.value("ltcChannel", 0);
+      t.freewheel = x.value("freewheel", 1.0f);
+      t.generate = x.value("generate", false);
+      t.genTimelineId = x.value("genTimeline", -1);
+      t.genStart = x.value("genStart", 3600.0f);
+      t.genFps = x.value("genFps", 25.0f);
+      t.genMtc = x.value("genMtc", true);
+      t.genMtcPort = x.value("genMtcPort", "");
+      t.genLtc = x.value("genLtc", false);
+      t.genLtcChannel = x.value("genLtcChannel", 0);
+    }
+    for (auto &x : j.value("timelines", json::array())) {
+      Timeline t;
+      t.id = x.value("id", 0);
+      t.name = x.value("name", "Timeline");
+      t.duration = std::max(0.1f, x.value("duration", 30.0f));
+      t.loop = x.value("loop", false);
+      t.loopStart = x.value("loopStart", 0.0f);
+      t.goAtEnd = x.value("goAtEnd", false);
+      t.followTimecode = x.value("followTimecode", false);
+      t.timecodeOffset = x.value("timecodeOffset", 0.0f);
+      for (auto &y : x.value("tracks", json::array())) {
+        TimelineTrack tr;
+        tr.layerId = y.value("layer", -1);
+        tr.param = y.value("param", "opacity");
+        tr.enabled = y.value("enabled", true);
+        for (auto &k : y.value("keys", json::array()))
+          if (k.is_array() && k.size() >= 2)
+            tr.keys.push_back({k[0].get<float>(), k[1].get<float>(),
+                               k.size() > 2 && k[2].get<int>() >= 0 && k[2].get<int>() < int(Ease::COUNT) ? Ease(k[2].get<int>()) : Ease::InOut});
+        std::sort(tr.keys.begin(), tr.keys.end(), [](const Keyframe &a, const Keyframe &b) { return a.time < b.time; });
+        t.tracks.push_back(tr);
+      }
+      for (auto &y : x.value("flags", json::array()))
+        t.flags.push_back({y.value("time", 0.0f), y.value("name", ""), y.value("command", "")});
+      p.timelines.push_back(t);
+    }
     for (auto &x : j.value("surfaces", json::array())) {
       Surface sf;
       sf.id = x.value("id", 0);
@@ -919,6 +1079,7 @@ bool deserializeProject(const std::string &text, const std::string &baseDir, Pro
       e.days = x.value("days", 0x7F);
       e.action = enumFrom(x, "action", ScheduleAction::LaunchColumn, int(ScheduleAction::COUNT));
       e.column = x.value("column", 1);
+      e.command = x.value("command", "");
       p.schedule.push_back(e);
     }
     if (j.contains("dmxInput")) {
@@ -942,7 +1103,7 @@ bool deserializeProject(const std::string &text, const std::string &baseDir, Pro
       MediaItem m;
       m.id = jm.value("id", 0);
       m.name = jm.value("name", "");
-      m.type = enumFrom(jm, "type", MediaType::Video, 7);
+      m.type = enumFrom(jm, "type", MediaType::Video, 9);
       if (m.type == MediaType::Generator) {
         m.generator = enumFrom(jm, "generator", GeneratorKind::TestCard, int(GeneratorKind::COUNT));
         if (jm.contains("color1")) fromJson(jm["color1"], m.color1);
@@ -958,6 +1119,18 @@ bool deserializeProject(const std::string &text, const std::string &baseDir, Pro
         m.path = jm.value("path", "");
       } else if (m.type == MediaType::Canvas) {
         m.canvasRef = jm.value("canvas", 0);
+      } else if (m.type == MediaType::Text) {
+        m.text = jm.value("text", "");
+        m.path = jm.value("path", "").empty() ? std::string() : makeAbsolute(jm.value("path", ""), baseDir);
+        m.font = jm.value("font", "").empty() ? std::string() : makeAbsolute(jm.value("font", ""), baseDir);
+        m.fontSize = jm.value("fontSize", 96.0f);
+        if (jm.contains("align")) { m.align = jm["align"][0]; m.valign = jm["align"][1]; }
+        m.lineSpacing = jm.value("lineSpacing", 1.15f);
+        if (jm.contains("color1")) fromJson(jm["color1"], m.color1);
+        if (jm.contains("color2")) fromJson(jm["color2"], m.color2);
+        if (jm.contains("size")) { m.width = jm["size"][0]; m.height = jm["size"][1]; }
+      } else if (m.type == MediaType::NDI) {
+        m.path = jm.value("path", "");
       } else if (m.type == MediaType::Shader) {
         m.path = shaderFromJson(jm.value("path", ""), baseDir);
         m.shaderParams = valuesFromJson(jm.value("params", json::object()));
@@ -1039,6 +1212,16 @@ bool deserializeProject(const std::string &text, const std::string &baseDir, Pro
       }
       if (jc.contains("color"))
         for (int k = 0; k < 3; ++k) c.color[k] = jc["color"][size_t(k)];
+      c.timelineId = jc.value("timeline", -1);
+      if (jc.contains("transitionShader")) c.transitionShader = shaderFromJson(jc["transitionShader"].get<std::string>(), baseDir);
+      c.manualTransition = jc.value("manualTransition", false);
+      if (jc.contains("stinger")) {
+        c.stingerMediaId = jc["stinger"].value("media", -1);
+        c.stingerCut = jc["stinger"].value("cut", 0.5f);
+      }
+      for (auto &a : jc.value("commands", json::array()))
+        if (a.is_string()) c.commands.push_back(a.get<std::string>());
+      c.timecodeCue = jc.value("timecodeCue", -1.0f);
       for (auto &x : jc.value("states", json::array()))
         c.states.push_back({x.value("layer", -1), x.value("param", 0), x.value("value", 0.0f)});
       for (auto &cell : jc.value("cells", json::array())) {
@@ -1094,6 +1277,7 @@ bool deserializeProject(const std::string &text, const std::string &baseDir, Pro
       o.canvasId = jo.value("canvas", 0);
       o.spoutName = jo.value("spout", "");
       o.windowless = jo.value("windowless", false);
+      o.ndiName = jo.value("ndi", "");
       p.outputs.push_back(o);
     }
 
@@ -1123,6 +1307,7 @@ bool deserializeProject(const std::string &text, const std::string &baseDir, Pro
     for (auto &m : p.ledMappings) maxId = std::max(maxId, m.id);
     for (auto &sf : p.surfaces) maxId = std::max(maxId, sf.id);
     for (auto &c : p.canvases) maxId = std::max(maxId, c.id);
+    for (auto &t : p.timelines) maxId = std::max(maxId, t.id);
     // References to canvases that do not exist fall back to the main one.
     for (auto &l : p.layers) if (!p.hasCanvas(l.canvasId)) l.canvasId = 0;
     for (auto &o : p.outputs) if (!p.hasCanvas(o.canvasId)) o.canvasId = 0;

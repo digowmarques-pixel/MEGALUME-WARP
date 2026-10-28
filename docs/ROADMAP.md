@@ -69,22 +69,33 @@ Ordem pensada para **videomapping** e **instalações interativas**.
 - **Rastreamento de blobs** na câmera, com fundo gravado, prévia e atalhos de mapeamento
 - **Design novo**: preto e amarelo, painéis arredondados
 
+## ✅ v0.9
+- **Timeline** com keyframes e curvas (opacidade, posição, escala, rotação, cor, volume,
+  parâmetros de efeitos, masters), **marcadores** que disparam comandos, loop com
+  introdução, GO no fim, ligada a colunas ou por OSC
+- **Transições** em shader ISF (6 incluídas), **stinger** e **fader de transição manual**
+- **Comandos de equipamentos** por coluna, marcador, agenda e OSC: PJLink (com senha),
+  MIDI, DMX (Art-Net/sACN), TCP, UDP, serial, OSC, espera
+- **Timecode**: recebe MTC e LTC (roda livre), colunas e timelines no timecode, gera MTC e LTC
+- **NDI** (receber; enviar por saída e o canvas), **texto dinâmico** (OSC / arquivo),
+  **Arduino pela serial**
+- **Acabamento**: salvamento automático com recuperação, mídias ausentes (busca automática
+  e por pasta), **modo show**, **instalador** (NSIS), interface em **inglês**, ícone,
+  **diagnóstico do sistema** (`--diagnose`) e roteiro de teste ([TESTE-WINDOWS.md](TESTE-WINDOWS.md))
+
 ## ⚠️ Pendente de teste em Windows real
 Tudo foi compilado para Windows, mas **ainda não rodou numa máquina Windows**:
-Spout, WASAPI, DirectShow, D3D11VA e WinMM precisam de um teste de verdade.
+Spout, NDI, WASAPI, DirectShow, D3D11VA, WinMM, saída MIDI, portas COM e o instalador
+precisam de um teste de verdade. Siga [TESTE-WINDOWS.md](TESTE-WINDOWS.md).
+MTC/LTC e PJLink foram testados com simuladores, não com equipamentos reais.
 
 ## 🔜 Próximas tarefas (por prioridade)
 
-1. **Teste no Windows** com projetor, placa de vídeo dedicada, câmera, Spout e controlador MIDI
-2. **Timeline** com keyframes, curvas, segmentos (loop / intro) e flags que disparam ações;
-   timeline como mídia dentro de uma célula
-3. Transições de coluna em shader ISF e stinger (vídeo com alpha); LUT (.cube)
-4. Detecção de pessoas por IA (esqueleto) e câmeras de profundidade (Kinect, Orbbec)
-5. **NDI** (receber e enviar), **texto dinâmico** (OSC `/layer/media/text`, arquivo .txt)
-6. NDI nativo (sem passar pelo Spout); triângulo e cantos soldados nas surfaces
-7. Mapping 3D / anamorfose (veja o item 10)
-8. Data-tracks: comandos MIDI / DMX / PJLink (ligar projetor, obturador) / string TCP por coluna
-9. Timecode LTC/MTC (entrada e geração), cues de ensaio, transição manual por fader
-10. Estrutura 3D (anamorfose): importar OBJ, câmera do público, calibração por 6 pontos (DLT)
-11. Scripts (JavaScript/QuickJS), Arduino por serial, gamepad
-12. Áudio multicanal por layer, ASIO; upload assíncrono (PBO) para 8K; instalador
+1. **Teste no Windows** com o roteiro, corrigindo o que aparecer
+2. Detecção de pessoas por IA (esqueleto) e câmeras de profundidade (Kinect, Orbbec)
+3. LUT (.cube) por layer e por saída; transição por layer (fade in/out)
+4. Timeline como mídia dentro de uma célula; Auto States
+5. Estrutura 3D (anamorfose): importar OBJ, câmera do público, calibração por 6 pontos (DLT)
+6. Scripts (JavaScript/QuickJS), gamepad, MSC e ATEM nos comandos
+7. Áudio multicanal por layer, ASIO; upload assíncrono (PBO) para 8K
+8. Triângulo e cantos soldados nas surfaces; mídias navegador, PDF e captura de tela

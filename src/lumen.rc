@@ -1,0 +1,3 @@
+// Windows resources. GLFW uses the icon named GLFW_ICON for its windows;
+// Explorer and the taskbar show the first icon of the executable.
+GLFW_ICON ICON "lumen.ico"

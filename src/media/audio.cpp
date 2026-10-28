@@ -372,4 +372,108 @@ void AudioDecoder::run() {
   cleanup();
 }
 
+// ------------------------------------------------------------------ LTC input
+
+struct LtcCapture::Impl {
+  ma_context context{};
+  ma_device device{};
+  bool hasContext = false, hasDevice = false;
+};
+
+static void captureCallback(ma_device *d, void *, const void *in, ma_uint32 frames) {
+  static_cast<LtcCapture *>(d->pUserData)->callback(static_cast<const float *>(in), frames, int(d->capture.channels));
+}
+
+LtcCapture::LtcCapture() : impl_(std::make_unique<Impl>()) {}
+LtcCapture::~LtcCapture() { stop(); }
+
+std::vector<std::string> LtcCapture::devices() {
+  std::vector<std::string> names;
+  ma_context ctx;
+  if (ma_context_init(nullptr, 0, nullptr, &ctx) != MA_SUCCESS) return names;
+  ma_device_info *capture = nullptr;
+  ma_uint32 count = 0;
+  if (ma_context_get_devices(&ctx, nullptr, nullptr, &capture, &count) == MA_SUCCESS)
+    for (ma_uint32 i = 0; i < count; ++i) names.emplace_back(capture[i].name);
+  ma_context_uninit(&ctx);
+  return names;
+}
+
+bool LtcCapture::start(const std::string &name, int channel, std::string *error) {
+  stop();
+  channel_ = std::clamp(channel, 0, 7);
+  if (ma_context_init(nullptr, 0, nullptr, &impl_->context) != MA_SUCCESS) {
+    if (error) *error = "sem sistema de áudio";
+    return false;
+  }
+  impl_->hasContext = true;
+  ma_device_config cfg = ma_device_config_init(ma_device_type_capture);
+  cfg.capture.format = ma_format_f32;
+  cfg.capture.channels = 0; // native channel count
+  cfg.sampleRate = kAudioRate;
+  cfg.dataCallback = captureCallback;
+  cfg.pUserData = this;
+  ma_device_id id{};
+  if (!name.empty()) {
+    ma_device_info *capture = nullptr;
+    ma_uint32 count = 0;
+    if (ma_context_get_devices(&impl_->context, nullptr, nullptr, &capture, &count) == MA_SUCCESS)
+      for (ma_uint32 i = 0; i < count; ++i)
+        if (name == capture[i].name) { id = capture[i].id; cfg.capture.pDeviceID = &id; }
+  }
+  if (ma_device_init(&impl_->context, &cfg, &impl_->device) != MA_SUCCESS) {
+    if (error) *error = "não foi possível abrir a entrada de áudio";
+    stop();
+    return false;
+  }
+  impl_->hasDevice = true;
+  if (ma_device_start(&impl_->device) != MA_SUCCESS) {
+    if (error) *error = "a entrada de áudio não iniciou";
+    stop();
+    return false;
+  }
+  running_ = true;
+  return true;
+}
+
+void LtcCapture::stop() {
+  if (impl_->hasDevice) {
+    ma_device_uninit(&impl_->device);
+    impl_->hasDevice = false;
+  }
+  if (impl_->hasContext) {
+    ma_context_uninit(&impl_->context);
+    impl_->hasContext = false;
+  }
+  running_ = false;
+  std::lock_guard<std::mutex> lock(mutex_);
+  have_ = false;
+}
+
+void LtcCapture::callback(const float *in, size_t frames, int channels) {
+  if (!in || channels <= 0) return;
+  int ch = std::min(channel_, channels - 1);
+  float pk = 0;
+  for (size_t i = 0; i < frames; ++i) pk = std::max(pk, std::fabs(in[i * size_t(channels) + size_t(ch)]));
+  level_ = std::max(pk, level_.load() * 0.9f);
+  decoder_.feed(in + ch, frames, size_t(channels));
+  if (decoder_.frames() != lastFrames_) {
+    lastFrames_ = decoder_.frames();
+    Timecode tc;
+    decoder_.latest(tc);
+    std::lock_guard<std::mutex> lock(mutex_);
+    last_ = tc;
+    at_ = std::chrono::steady_clock::now();
+    have_ = true;
+  }
+}
+
+bool LtcCapture::latest(Timecode &tc, double &age) const {
+  std::lock_guard<std::mutex> lock(mutex_);
+  if (!have_) return false;
+  tc = last_;
+  age = std::chrono::duration<double>(std::chrono::steady_clock::now() - at_).count();
+  return true;
+}
+
 } // namespace lumen

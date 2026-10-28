@@ -12,6 +12,7 @@
 #include <windows.h>
 #include <commdlg.h>
 #include <shellapi.h>
+#include <shlobj.h>
 #include <io.h>
 #include <process.h>
 #else
@@ -135,6 +136,24 @@ std::string saveFileDialog(const std::string &title, const std::string &filter,
 
 bool hasNativeDialogs() { return true; }
 
+void openInShell(const std::string &path) {
+  ShellExecuteW(nullptr, L"open", widen(path).c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+}
+
+std::string folderDialog(const std::string &title) {
+  std::wstring wtitle = widen(title);
+  CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
+  BROWSEINFOW bi{};
+  bi.lpszTitle = wtitle.c_str();
+  bi.ulFlags = BIF_RETURNONLYFSDIRS | BIF_NEWDIALOGSTYLE;
+  PIDLIST_ABSOLUTE pidl = SHBrowseForFolderW(&bi);
+  if (!pidl) return {};
+  wchar_t path[MAX_PATH * 4] = {};
+  bool ok = SHGetPathFromIDListW(pidl, path);
+  CoTaskMemFree(pidl);
+  return ok ? narrow(path) : std::string();
+}
+
 std::vector<std::string> utf8Args(int, char **) {
   std::vector<std::string> out;
   int n = 0;
@@ -148,11 +167,9 @@ static std::wstring g_logPath;
 
 static std::wstring logPathW() {
   if (!g_logPath.empty()) return g_logPath;
-  // Next to the exe when writable, otherwise in %TEMP%.
-  wchar_t buf[MAX_PATH];
-  DWORD n = GetModuleFileNameW(nullptr, buf, MAX_PATH);
-  std::wstring dir = std::filesystem::path(std::wstring(buf, n)).parent_path().wstring();
-  std::wstring path = dir + L"\\lumen.log";
+  // %APPDATA%\Lumen (the program folder is read-only when installed),
+  // otherwise %TEMP%.
+  std::wstring path = (toPath(settingsDir()) / L"lumen.log").wstring();
   HANDLE h = CreateFileW(path.c_str(), GENERIC_WRITE, FILE_SHARE_READ, nullptr, CREATE_ALWAYS,
                          FILE_ATTRIBUTE_NORMAL, nullptr);
   if (h == INVALID_HANDLE_VALUE) {
@@ -299,6 +316,26 @@ std::string saveFileDialog(const std::string &title, const std::string &,
 #endif
 }
 
+std::string folderDialog(const std::string &title) {
+  if (!hasNativeDialogs()) return {};
+#ifdef __APPLE__
+  return runCapture("osascript -e 'POSIX path of (choose folder with prompt " + asQuote(title) + ")' 2>/dev/null");
+#else
+  return runCapture("zenity --file-selection --directory --title='" + title + "' 2>/dev/null");
+#endif
+}
+
+void openInShell(const std::string &path) {
+  std::string quoted = "'";
+  for (char c : path) quoted += c == '\'' ? std::string("'\\''") : std::string(1, c);
+  quoted += "'";
+#ifdef __APPLE__
+  runCapture("open " + quoted + " >/dev/null 2>&1");
+#else
+  runCapture("xdg-open " + quoted + " >/dev/null 2>&1 &");
+#endif
+}
+
 void attachConsole() {}
 
 std::string logPath() { return ""; }
@@ -329,6 +366,23 @@ std::string executableDir() {
 }
 
 #endif
+
+std::string settingsDir() {
+  namespace fs = std::filesystem;
+  fs::path dir;
+#ifdef _WIN32
+  if (const wchar_t *app = _wgetenv(L"APPDATA")) dir = fs::path(app) / L"Lumen";
+#elif defined(__APPLE__)
+  if (const char *home = std::getenv("HOME")) dir = fs::path(home) / "Library/Application Support/Lumen";
+#else
+  if (const char *xdg = std::getenv("XDG_CONFIG_HOME")) dir = fs::path(xdg) / "lumen";
+  else if (const char *home = std::getenv("HOME")) dir = fs::path(home) / ".config/lumen";
+#endif
+  if (dir.empty()) dir = toPath(executableDir());
+  std::error_code ec;
+  fs::create_directories(dir, ec);
+  return toUtf8(dir);
+}
 
 } // namespace lumen::platform
 

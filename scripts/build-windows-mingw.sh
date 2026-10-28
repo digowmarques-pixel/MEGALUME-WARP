@@ -37,6 +37,9 @@ for s in $SOURCES; do
 done
 for p in "${pids[@]}"; do wait "$p"; done
 touch "$OUT/.stamp"
+# Icon resource (Explorer, taskbar and the GLFW windows).
+x86_64-w64-mingw32-windres --include-dir "$ROOT/assets" "$ROOT/src/lumen.rc" -O coff -o "$OUT/obj/lumen_rc.o"
+OBJS="$OBJS $OUT/obj/lumen_rc.o"
 LINK_LIBS=""
 $CXX -o "$OUT/Lumen/lumen.exe" $OBJS -mwindows -static-libgcc -static-libstdc++ -Wl,-Bstatic -lwinpthread -Wl,-Bdynamic \
   -L"$GLFW/lib-mingw-w64" -lglfw3 -L"$FF/lib" -lavformat -lavdevice -lavcodec -lswscale -lswresample -lavutil $EXTRA_LIBS \

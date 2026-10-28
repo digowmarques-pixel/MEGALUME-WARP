@@ -3,6 +3,7 @@
 #include "gl/gl.h"
 #include "platform/platform.h"
 #include "ui/ui.h"
+#include "ui/i18n.h"
 
 #include <GLFW/glfw3.h>
 #include <imgui.h>
@@ -13,6 +14,7 @@
 #include <fstream>
 #include <algorithm>
 #include <filesystem>
+#include <map>
 
 namespace lumen {
 
@@ -59,7 +61,7 @@ bool History::push(const std::string &s) {
 
 // ------------------------------------------------------------------ app
 
-App::App() : ui_(std::make_unique<Ui>()) {}
+App::App() : ui_(std::make_unique<Ui>()) { loadLanguage(); }
 App::~App() = default;
 
 void App::status(const std::string &msg, bool error) {
@@ -87,14 +89,14 @@ void App::newProject() {
   sel = {};
   history_.reset(serializeProject(engine.project, ""));
   dirty = false;
-  status("Novo projeto");
+  status(T("Novo projeto"));
 }
 
 bool App::openProject(const std::string &path) {
   Project p;
   std::string err;
   if (!loadProject(path, p, &err)) {
-    status("Erro ao abrir: " + err, true);
+    status(T("Erro ao abrir: ") + err, true);
     return false;
   }
   engine.setProject(std::move(p), false);
@@ -104,8 +106,136 @@ bool App::openProject(const std::string &path) {
   ui_->workspace.fitRequested = true;
   history_.reset(serializeProject(engine.project, ""));
   dirty = false;
-  status("Projeto aberto: " + path);
+  // Files moved with the project folder: find them next to it.
+  int missing = missingMedia();
+  if (missing > 0) {
+    int fixed = relinkMissing(platform::toUtf8(platform::toPath(path).parent_path()));
+    history_.reset(serializeProject(engine.project, ""));
+    dirty = fixed > 0;
+    status(fixed == missing ? T("Projeto aberto: ") + std::to_string(fixed) + T(" mídia(s) encontradas em outra pasta")
+                            : T("Projeto aberto: ") + std::to_string(missing - fixed) + T(" mídia(s) não encontradas (veja a biblioteca)"),
+           fixed < missing);
+  } else {
+    status(T("Projeto aberto: ") + path);
+  }
+  checkRecovery();
   return true;
+}
+
+// ---------------------------------------------------------------- autosave
+
+static std::string autosaveFile() { return platform::toUtf8(platform::toPath(platform::settingsDir()) / "autosave.lumen"); }
+static std::string autosaveInfoFile() { return platform::toUtf8(platform::toPath(platform::settingsDir()) / "autosave.txt"); }
+
+void App::autosave() {
+  // Every minute while there are unsaved changes; the project file itself is
+  // never touched.
+  double now = glfwGetTime();
+  if (!dirty || now - lastAutosave_ < 60) return;
+  lastAutosave_ = now;
+  std::string base = engine.project.filePath.empty() ? std::string()
+                                                     : platform::toUtf8(platform::toPath(engine.project.filePath).parent_path());
+  if (platform::writeFile(autosaveFile(), serializeProject(engine.project, base)))
+    platform::writeFile(autosaveInfoFile(), engine.project.filePath);
+}
+
+void App::clearAutosave() {
+  std::error_code ec;
+  std::filesystem::remove(platform::toPath(autosaveFile()), ec);
+  std::filesystem::remove(platform::toPath(autosaveInfoFile()), ec);
+}
+
+void App::checkRecovery() {
+  std::error_code ec;
+  auto file = platform::toPath(autosaveFile());
+  if (!std::filesystem::exists(file, ec)) return;
+  std::string orig;
+  platform::readFile(autosaveInfoFile(), orig);
+  // Only for the project that is open now (or an unsaved one), and only if the
+  // autosave is newer than the saved file.
+  if (orig != engine.project.filePath) return;
+  if (!orig.empty()) {
+    auto a = std::filesystem::last_write_time(file, ec), b = std::filesystem::last_write_time(platform::toPath(orig), ec);
+    if (!ec && a <= b) return;
+  }
+  recoveryFile_ = autosaveFile();
+  recoveryInfo_ = orig.empty() ? "um projeto não salvo" : orig;
+}
+
+void App::recover(bool yes) {
+  if (yes) {
+    std::string text;
+    Project p;
+    std::string base = engine.project.filePath.empty() ? std::string()
+                                                       : platform::toUtf8(platform::toPath(engine.project.filePath).parent_path());
+    if (platform::readFile(recoveryFile_, text) && deserializeProject(text, base, p)) {
+      p.filePath = engine.project.filePath;
+      engine.setProject(std::move(p), false);
+      history_.reset(serializeProject(engine.project, ""));
+      dirty = true;
+      status(T("Alterações recuperadas. Salve para mantê-las."));
+    }
+  } else {
+    clearAutosave();
+  }
+  recoveryFile_.clear();
+}
+
+// ---------------------------------------------------------------- missing media
+
+bool App::mediaMissing(const MediaItem &m) const {
+  // The library is drawn every frame: check the disk at most every 2 s.
+  double now = glfwGetTime();
+  if (now - missingCheckedAt_ > 2) {
+    missingCache_.clear();
+    missingCheckedAt_ = now;
+  }
+  auto key = std::make_pair(m.id, m.path);
+  auto it = missingCache_.find(key);
+  if (it != missingCache_.end()) return it->second;
+  return missingCache_[key] = checkMissing(m);
+}
+
+bool App::checkMissing(const MediaItem &m) {
+  std::string path;
+  if (m.type == MediaType::Video || m.type == MediaType::Image || m.type == MediaType::Shader) path = m.path;
+  else if (m.type == MediaType::Text) path = m.path;
+  if (path.empty()) return false;
+  std::error_code ec;
+  return !std::filesystem::exists(platform::toPath(path), ec);
+}
+
+int App::missingMedia() const {
+  int n = 0;
+  for (auto &m : engine.project.library) n += mediaMissing(m);
+  return n;
+}
+
+int App::relinkMissing(const std::string &dir) {
+  std::map<std::string, std::string> byName; // file name -> first match
+  std::error_code ec;
+  int scanned = 0;
+  for (auto it = std::filesystem::recursive_directory_iterator(platform::toPath(dir), std::filesystem::directory_options::skip_permission_denied, ec);
+       !ec && it != std::filesystem::recursive_directory_iterator() && scanned < 200000; it.increment(ec), ++scanned) {
+    if (!it->is_regular_file(ec)) continue;
+    std::string n = platform::toUtf8(it->path().filename());
+    std::transform(n.begin(), n.end(), n.begin(), ::tolower);
+    byName.emplace(n, platform::toUtf8(it->path()));
+  }
+  int fixed = 0;
+  for (auto &m : engine.project.library) {
+    if (!checkMissing(m)) continue;
+    std::string n = platform::toUtf8(platform::toPath(m.path).filename());
+    std::transform(n.begin(), n.end(), n.begin(), ::tolower);
+    auto f = byName.find(n);
+    if (f == byName.end()) continue;
+    m.path = f->second;
+    engine.cache.invalidate(m.id);
+    ++fixed;
+  }
+  missingCheckedAt_ = -10;
+  if (fixed) edited();
+  return fixed;
 }
 
 bool App::saveProject(bool saveAs) {
@@ -113,18 +243,19 @@ bool App::saveProject(bool saveAs) {
   if (saveAs || path.empty()) {
     path = platform::saveFileDialog("Salvar projeto", kProjectFilter, "show.lumen");
     if (path.empty()) {
-      if (!platform::hasNativeDialogs()) status("Sem diálogo de arquivos neste sistema", true);
+      if (!platform::hasNativeDialogs()) status(T("Sem diálogo de arquivos neste sistema"), true);
       return false;
     }
     if (platform::toPath(path).extension().empty()) path += ".lumen";
   }
   std::string err;
   if (!lumen::saveProject(engine.project, path, &err)) {
-    status("Erro ao salvar: " + err, true);
+    status(T("Erro ao salvar: ") + err, true);
     return false;
   }
   dirty = false;
-  status("Salvo: " + path);
+  clearAutosave();
+  status(T("Salvo: ") + path);
   return true;
 }
 
@@ -136,7 +267,7 @@ void App::openDialog() {
 void App::importDialog() {
   auto files = platform::openFileDialog("Importar mídia", kMediaFilter, true);
   if (!files.empty()) importFiles(files);
-  else if (!platform::hasNativeDialogs()) status("Arraste os arquivos para a janela para importar", true);
+  else if (!platform::hasNativeDialogs()) status(T("Arraste os arquivos para a janela para importar"), true);
 }
 
 void App::importFiles(const std::vector<std::string> &paths, int column, int layerId) {
@@ -153,7 +284,7 @@ void App::importFiles(const std::vector<std::string> &paths, int column, int lay
       continue;
     }
     if (!isMediaPath(path)) {
-      status("Formato não suportado: " + path, true);
+      status(T("Formato não suportado: ") + path, true);
       continue;
     }
     MediaItem &m = engine.project.addMedia(path);
@@ -168,7 +299,7 @@ void App::importFiles(const std::vector<std::string> &paths, int column, int lay
   if (count) {
     sel.inspector = Inspector::Media;
     edited();
-    status(std::to_string(count) + " mídia(s) importada(s)");
+    status(std::to_string(count) + T(" mídia(s) importada(s)"));
   }
 }
 
@@ -271,6 +402,7 @@ int App::run(const Options &opts) {
   glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
   glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GLFW_TRUE);
   glfwWindowHint(GLFW_MAXIMIZED, opts.frames > 0 ? GLFW_FALSE : GLFW_TRUE);
+  if (opts.diagnose || opts.checkEffects) glfwWindowHint(GLFW_VISIBLE, GLFW_FALSE);
   window = glfwCreateWindow(opts.width, opts.height, "Lumen", nullptr, nullptr);
   if (!window) {
     const char *glfwDesc = nullptr;
@@ -305,6 +437,17 @@ int App::run(const Options &opts) {
     return 1;
   }
 
+  if (opts.diagnose) {
+    std::string report = diagnosticReport();
+    std::fputs(report.c_str(), stdout);
+    std::string file = platform::toUtf8(platform::toPath(platform::settingsDir()) / "diagnostico.txt");
+    if (platform::writeFile(file, report)) {
+      std::printf("\nRelatório salvo em %s\n", file.c_str());
+      if (opts.frames == 0) platform::openInShell(file); // the console closes when we exit
+    }
+    std::fflush(stdout);
+    return report.find("[FALHA]") == std::string::npos ? 0 : 2;
+  }
   if (opts.checkEffects) {
     int bad = 0, n = 0;
     std::vector<IsfCatalog::Entry> list = engine.isfCatalog.builtins();
@@ -330,8 +473,9 @@ int App::run(const Options &opts) {
       src.upload(px.data(), 64, 36);
       IsfValues v;
       isfDefaults(r.info(), v);
-      const Texture *t = r.render(64, 36, 1.0, {{"inputImage", &src}}, v, engine.mesh);
-      std::printf("[isf] ok %s (%s, %zu passes)%s\n", e.name.c_str(), r.info().filter ? "efeito" : "gerador",
+      v["progress"] = {0.5f};
+      const Texture *t = r.render(64, 36, 1.0, {{"inputImage", &src}, {"startImage", &src}, {"endImage", &src}}, v, engine.mesh);
+      std::printf("[isf] ok %s (%s, %zu passes)%s\n", e.name.c_str(), r.info().transition ? "transição" : r.info().filter ? "efeito" : "gerador",
                   r.info().passes.size(), t ? "" : " SEM IMAGEM");
       if (!t) ++bad;
     }
@@ -346,6 +490,7 @@ int App::run(const Options &opts) {
     newProject();
   }
   if (!engine.project.layers.empty() && sel.layerId < 0) sel.layerId = engine.project.layers.front().id;
+  showLocked = opts.showMode;
   if (!opts.blend.empty()) {
     BlendLayoutParams bp;
     if (std::sscanf(opts.blend.c_str(), "%dx%d:%f:%dx%d", &bp.cols, &bp.rows, &bp.overlapX, &bp.projW,
@@ -422,19 +567,25 @@ int App::run(const Options &opts) {
     ImGuiIO &io = ImGui::GetIO();
     if (!io.WantTextInput) {
       bool ctrl = io.KeyCtrl, shift = io.KeyShift;
+      if (ctrl && shift && ImGui::IsKeyPressed(ImGuiKey_L, false)) {
+        showLocked = !showLocked;
+        status(showLocked ? T("Modo show: edição travada (Ctrl+Shift+L destrava)") : T("Edição liberada"));
+      }
       if (!ctrl && ImGui::IsKeyPressed(ImGuiKey_Space, false)) shift ? engine.back() : engine.go();
       if (!ctrl && ImGui::IsKeyPressed(ImGuiKey_Escape, false)) engine.stopAll();
       if (!ctrl && ImGui::IsKeyPressed(ImGuiKey_B, false)) engine.blackout = !engine.blackout;
       if (ctrl && ImGui::IsKeyPressed(ImGuiKey_S, false)) saveProject(shift);
-      if (ctrl && ImGui::IsKeyPressed(ImGuiKey_O, false)) openDialog();
-      if (ctrl && ImGui::IsKeyPressed(ImGuiKey_N, false)) newProject();
-      if (ctrl && ImGui::IsKeyPressed(ImGuiKey_I, false)) importDialog();
+      if (!showLocked && ctrl && ImGui::IsKeyPressed(ImGuiKey_O, false)) openDialog();
+      if (!showLocked && ctrl && ImGui::IsKeyPressed(ImGuiKey_N, false)) newProject();
+      if (!showLocked && ctrl && ImGui::IsKeyPressed(ImGuiKey_I, false)) importDialog();
       if (ctrl && !shift && ImGui::IsKeyPressed(ImGuiKey_P, false)) outputsOpen = !outputsOpen;
       if (ctrl && shift && ImGui::IsKeyPressed(ImGuiKey_P, false)) ui_->openOutputs();
       if (ctrl && shift && ImGui::IsKeyPressed(ImGuiKey_D, false)) showOutputControls = !showOutputControls;
-      if (ctrl && ImGui::IsKeyPressed(ImGuiKey_Z)) shift ? redo() : undo();
-      if (ctrl && ImGui::IsKeyPressed(ImGuiKey_Y)) redo();
-      ui_->workspace.handleShortcuts(*this);
+      if (!showLocked) {
+        if (ctrl && ImGui::IsKeyPressed(ImGuiKey_Z)) shift ? redo() : undo();
+        if (ctrl && ImGui::IsKeyPressed(ImGuiKey_Y)) redo();
+        ui_->workspace.handleShortcuts(*this);
+      }
     }
     if (engine.project.keyboardInput) pollKeyboard(!io.WantTextInput);
 
@@ -479,6 +630,8 @@ int App::run(const Options &opts) {
       // Summary for automated tests.
       std::printf("[test] audio device: %s\n", engine.audio.deviceName().c_str());
       std::printf("[test] column=%d\n", engine.activeColumn() + 1);
+      for (auto &line : engine.oscLog)
+        if (!line.empty() && line[0] == '[') std::printf("[test] log %s\n", line.c_str());
       for (auto &l : engine.project.layers)
         if (const auto *bl = engine.blobs(l.id)) {
           std::printf("[test] blobs %s: %zu", l.name.c_str(), bl->size());
@@ -491,7 +644,7 @@ int App::run(const Options &opts) {
                     engine.layerState(l.id) && engine.layerState(l.id)->current ? 1 : 0);
       for (auto &l : engine.project.layers)
         if (const LayerState *st = engine.layerState(l.id); st && st->current)
-          std::printf("[test] layer %s: t=%.3f audio=%d hw=%s\n", l.name.c_str(), st->current->time(),
+          std::printf("[test] layer %s: t=%.3f fade=%.2f audio=%d hw=%s\n", l.name.c_str(), st->current->time(), st->fade,
                       st->current->hasAudio() ? 1 : 0, st->current->hwaccel().c_str());
       std::fflush(stdout);
       std::vector<unsigned char> px;
@@ -545,10 +698,12 @@ int App::run(const Options &opts) {
     glfwSwapBuffers(window);
 
     commitIfNeeded();
+    if (opts.frames == 0) autosave();
     updateTitle();
     if (lastFrame) break;
   }
 
+  clearAutosave(); // only a crash leaves something to recover
   outputs.shutdown();
   engine.shutdown();
   // GPU objects must die while the context is alive (before glfwTerminate).

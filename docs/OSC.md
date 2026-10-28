@@ -42,6 +42,17 @@ Layers são endereçadas pela **posição a partir do topo (1, 2, 3...)** ou pel
 | `/lumen/layer/<l>/launch` | `n` | Dispara a célula da coluna `n` nesta layer |
 | `/lumen/layer/<l>/stop` | `[fade]` | Para a layer |
 | `/lumen/layer/<l>/restart` | | Reinicia a mídia da layer |
+| `/lumen/layer/<l>/effect<n>/<param>` | valor(es) | Parâmetro do efeito ISF `n` (1 = o primeiro) |
+| `/lumen/layer/<l>/text` | `"texto"` | Troca o texto de uma mídia de texto |
+| `/lumen/timeline/<n ou nome>/play` | `[0]` | Toca do início (`0`: continua de onde parou) |
+| `/lumen/timeline/<n>/pause`, `/stop` | | Pausa / para a timeline |
+| `/lumen/timeline/<n>/time` | `s` | Vai para o tempo, em segundos |
+| `/lumen/transition` | `0..1` | Fader de transição manual |
+| `/lumen/command` | `"comando"` | Comando de equipamento (veja [DISPOSITIVOS.md](DISPOSITIVOS.md)) |
+
+Entradas que não são OSC chegam como endereços e também servem nos mapeamentos:
+teclado `/key/<tecla>`, DMX `/artnet/<universo>/<canal>` ou `/sacn/...`, serial `/serial/<palavra>`
+(veja [DISPOSITIVOS.md](DISPOSITIVOS.md)) e blobs da câmera `/blob/<layer>/<n>`.
 
 ## MIDI
 

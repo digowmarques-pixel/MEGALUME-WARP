@@ -59,6 +59,20 @@ jobs:
           name: Lumen-windows-x64
           path: dist/Lumen
 
+      - name: Installer (NSIS)
+        run: |
+          $nsis = Get-Command makensis -ErrorAction SilentlyContinue
+          if (-not $nsis) { choco install nsis -y --no-progress; $env:PATH += ";${env:ProgramFiles(x86)}\NSIS" }
+          $version = (Select-String -Path CMakeLists.txt -Pattern 'project\(lumen VERSION ([0-9.]+)').Matches[0].Groups[1].Value
+          Push-Location installer
+          makensis /V2 "/DVERSION=$version" /DSRCDIR=..\dist\Lumen "/DOUTFILE=..\Lumen-$version-setup.exe" lumen.nsi
+          Pop-Location
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Lumen-windows-x64-setup
+          path: Lumen-*-setup.exe
+
   macos:
     runs-on: macos-latest # Apple Silicon
     steps:

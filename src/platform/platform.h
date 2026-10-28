@@ -20,9 +20,15 @@ std::vector<std::string> openFileDialog(const std::string &title, const std::str
                                         bool multiple);
 std::string saveFileDialog(const std::string &title, const std::string &filter,
                            const std::string &defaultName);
+std::string folderDialog(const std::string &title);
 bool hasNativeDialogs();
 
+// Opens a file or folder with its default program (Explorer, Finder, xdg-open).
+void openInShell(const std::string &path);
+
 std::string executableDir();
+// Per-user folder for settings and autosaves (created if missing).
+std::string settingsDir();
 
 // Windows: reuse the parent terminal for stdout/stderr when there is one.
 void attachConsole();

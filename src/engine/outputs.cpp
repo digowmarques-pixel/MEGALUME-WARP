@@ -245,14 +245,19 @@ void OutputManager::sendSpout(const Project &p, const CanvasLookup &canvases, do
   spoutStatus_.clear();
   for (auto it = spout_.begin(); it != spout_.end();) {
     const OutputConfig *o = p.output(it->first);
-    if (!o || !o->enabled || o->spoutName.empty()) it = spout_.erase(it);
+    if (!o || !o->enabled || (o->spoutName.empty() && o->ndiName.empty())) it = spout_.erase(it);
     else ++it;
   }
   auto mons = monitors();
   for (size_t i = 0; i < p.outputs.size(); ++i) {
     const OutputConfig &o = p.outputs[i];
-    if (!o.enabled || o.spoutName.empty()) continue;
-    if (!spoutAvailable()) { spoutStatus_[o.id] = "Spout só existe no Windows"; continue; }
+    if (!o.enabled || (o.spoutName.empty() && o.ndiName.empty())) continue;
+    bool wantSpout = !o.spoutName.empty() && spoutAvailable();
+    bool wantNdi = !o.ndiName.empty() && ndiAvailable();
+    std::string status;
+    if (!o.spoutName.empty() && !spoutAvailable()) status = "Spout só existe no Windows. ";
+    if (!o.ndiName.empty() && !ndiAvailable()) status += ndiStatus() + ". ";
+    if (!wantSpout && !wantNdi) { spoutStatus_[o.id] = status; continue; }
     int w = std::max(16, o.winW), h = std::max(16, o.winH);
     if (!o.windowless && o.monitor >= 0 && o.monitor < int(mons.size())) {
       w = mons[size_t(o.monitor)].w;
@@ -266,9 +271,19 @@ void OutputManager::sendSpout(const Project &p, const CanvasLookup &canvases, do
     draw(p, o, int(i), delayedCanvas(o.canvasId, canvases(o.canvasId), o.delayFrames), mask, mainMesh_, w, h,
          time, blackout);
     Framebuffer::unbind();
-    bool ok = t->out.send(t->fb.texture().id(), w, h, o.spoutName);
-    spoutStatus_[o.id] = ok ? "enviando \"" + o.spoutName + "\" " + std::to_string(w) + "×" + std::to_string(h)
-                            : "erro ao enviar";
+    if (wantSpout) {
+      bool ok = t->out.send(t->fb.texture().id(), w, h, o.spoutName);
+      status += ok ? "Spout \"" + o.spoutName + "\" " + std::to_string(w) + "×" + std::to_string(h) + ". " : "erro no Spout. ";
+    }
+    if (wantNdi) { // NDI wants rows top-down
+      t->fb.readPixels(t->px);
+      t->flip.resize(t->px.size());
+      size_t row = size_t(w) * 4;
+      for (int y = 0; y < h; ++y) std::copy_n(&t->px[size_t(h - 1 - y) * row], row, &t->flip[size_t(y) * row]);
+      bool ok = t->ndi.send(o.ndiName, t->flip.data(), w, h);
+      status += ok ? "NDI \"" + o.ndiName + "\"." : "erro no NDI.";
+    }
+    spoutStatus_[o.id] = status;
   }
 }
 
@@ -488,7 +503,7 @@ void OutputManager::draw(const Project &p, const OutputConfig &o, int index,
 void OutputManager::render(const Project &p, const CanvasLookup &canvases, double time, bool blackout,
                            const OutputControls *controls) {
   bool anySpout = std::any_of(p.outputs.begin(), p.outputs.end(),
-                              [](const OutputConfig &o) { return o.enabled && !o.spoutName.empty(); });
+                              [](const OutputConfig &o) { return o.enabled && (!o.spoutName.empty() || !o.ndiName.empty()); });
   if (windows_.empty() && !anySpout && spout_.empty()) return;
   pushHistory(p, canvases);
   sendSpout(p, canvases, time, blackout);

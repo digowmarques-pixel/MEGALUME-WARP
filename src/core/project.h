@@ -18,7 +18,7 @@ struct Color {
 };
 
 // Values are stored in project files: only append.
-enum class MediaType { Video, Image, Generator, Live, Spout, Canvas, Shader };
+enum class MediaType { Video, Image, Generator, Live, Spout, Canvas, Shader, Text, NDI };
 enum class GeneratorKind { TestCard, Solid, Gradient, Grid, Plasma, Stripes, COUNT };
 const char *generatorName(GeneratorKind k);
 
@@ -42,6 +42,16 @@ struct MediaItem {
   int canvasRef = 0;
   // Shader (ISF generator): `path` is the .fs file, rendered at width x height.
   IsfValues shaderParams;
+  // Text: drawn at width x height with color1 on color2 (background).
+  // `path` (optional) is a .txt file read again when it changes; OSC
+  // /layer:Name/text "..." changes `text` live.
+  std::string text = "Texto";
+  std::string font;       // .ttf / .otf file ("" = system font)
+  float fontSize = 96;
+  int align = 1;          // 0 left, 1 centre, 2 right
+  int valign = 1;         // 0 top, 1 middle, 2 bottom
+  float lineSpacing = 1.15f;
+  // NDI receiver: `path` is the source name ("MACHINE (Source)").
 };
 
 // Built-in effects and generators (.fs files shipped next to lumen.exe).
@@ -171,7 +181,50 @@ struct ColumnState {
 };
 
 // Values are stored in project files: only append.
-enum class TransitionType { Crossfade, Cut, ThroughBlack, COUNT };
+enum class TransitionType { Crossfade, Cut, ThroughBlack, Shader, COUNT };
+
+// ---- Timeline: keyframes that animate parameters over time.
+// Values are stored: only append.
+enum class Ease { Linear, InOut, In, Out, Hold, COUNT };
+const char *easeName(Ease e);
+
+struct Keyframe {
+  float time = 0;  // seconds
+  float value = 0;
+  Ease ease = Ease::InOut; // curve towards the next keyframe
+};
+
+// What a track animates: a layer parameter ("opacity", "x", "y", "scale",
+// "rotation", "brightness", "contrast", "saturation", "hue", "volume",
+// "speed", "effect1/radius", "effect2/color.1"...) or, with layerId < 0, a
+// master ("master", "masterVolume", "dmxMaster").
+struct TimelineTrack {
+  int layerId = -1;
+  std::string param = "opacity";
+  bool enabled = true;
+  std::vector<Keyframe> keys; // sorted by time
+  float valueAt(float t) const;
+};
+
+// A command fired when the playhead passes (OSC line or device command).
+struct TimelineFlag {
+  float time = 0;
+  std::string name;
+  std::string command;
+};
+
+struct Timeline {
+  int id = 0;
+  std::string name = "Timeline";
+  float duration = 30;
+  bool loop = false;
+  float loopStart = 0;   // with loop: plays 0..duration once, then loops loopStart..duration (intro + loop)
+  bool goAtEnd = false;  // without loop: launches the next column at the end
+  bool followTimecode = false;
+  float timecodeOffset = 0; // timecode (s) at which the timeline time is 0
+  std::vector<TimelineTrack> tracks;
+  std::vector<TimelineFlag> flags;
+};
 
 struct Column {
   int id = 0;
@@ -190,6 +243,15 @@ struct Column {
   bool autoGoAfterTransition = false;
   int autoGoTarget = 0; // 0 = next column, n = column n (1-based)
   float color[3] = {0, 0, 0}; // 0,0,0 = default
+  int timelineId = -1;        // timeline started by this column
+  std::string transitionShader; // ISF transition (TransitionType::Shader)
+  bool manualTransition = false; // progress follows the transition fader
+  int stingerMediaId = -1;    // video (with alpha) played over the change
+  float stingerCut = 0.5f;    // fraction of the stinger at which the cue changes
+  // Device commands sent when the column launches, one per line
+  // ("pjlink 10.0.0.5 power on", "midi note 1 60 127", "dmx 0 12 255"...).
+  std::vector<std::string> commands;
+  float timecodeCue = -1;     // launches when the incoming timecode reaches this (s); <0 off
 };
 
 struct OscTarget {
@@ -238,7 +300,8 @@ struct OutputConfig {
   // Spout sender of this output (warp, blend and colour applied), for LED
   // processors, other machines or capture. "" = off.
   std::string spoutName;
-  bool windowless = false;        // no window: Spout only
+  bool windowless = false;        // no window: Spout / NDI only
+  std::string ndiName;            // NDI sender of this output ("" = off)
 };
 
 // An Art-Net node or sACN receiver (LED controller such as DMXking LeDMX4 Pro,
@@ -277,7 +340,8 @@ struct LedMapping {
 // Values are stored in project files: only append.
 enum class MappingTarget {
   Opacity, PositionX, PositionY, Scale, Rotation, Brightness, Contrast, Saturation, Hue,
-  Speed, LaunchColumn, Go, StopAll, Volume, MasterOpacity, MasterVolume, Blackout, DmxMaster, COUNT
+  Speed, LaunchColumn, Go, StopAll, Volume, MasterOpacity, MasterVolume, Blackout, DmxMaster,
+  TransitionFader, COUNT
 };
 const char *mappingTargetName(MappingTarget t);
 // Continuous parameter of a layer (needs a layer, uses the output range).
@@ -319,7 +383,33 @@ struct InputMapping {
 };
 
 // Values are stored: only append.
-enum class ScheduleAction { LaunchColumn, Go, Stop, BlackoutOn, BlackoutOff, COUNT };
+enum class TimecodeSource { Off, MTC, LTC, COUNT };
+
+struct TimecodeConfig {
+  TimecodeSource source = TimecodeSource::Off;
+  std::string ltcDevice; // capture device ("" = default)
+  int ltcChannel = 0;
+  float freewheel = 1.0f; // seconds the clock keeps running when the signal drops
+  // Generation (for other machines / the sound desk) from a timeline.
+  bool generate = false;
+  int genTimelineId = -1;
+  double genStart = 3600; // timecode at timeline time 0 (01:00:00:00)
+  double genFps = 25;
+  bool genMtc = true;
+  std::string genMtcPort;
+  bool genLtc = false;
+  int genLtcChannel = 0; // 0 left, 1 right, 2 both
+};
+
+// A projector controlled over the network (PJLink: power, shutter, input).
+struct PjlinkProjector {
+  std::string name = "Projetor";
+  std::string host;
+  std::string password; // PJLink class 1 authentication ("" = none)
+};
+
+// Values are stored: only append.
+enum class ScheduleAction { LaunchColumn, Go, Stop, BlackoutOn, BlackoutOff, Command, COUNT };
 const char *scheduleActionName(ScheduleAction a);
 
 // Unattended installations: actions at a time of day on selected weekdays.
@@ -329,6 +419,7 @@ struct ScheduleEntry {
   int days = 0x7F; // bit 0 = Sunday ... bit 6 = Saturday
   ScheduleAction action = ScheduleAction::LaunchColumn;
   int column = 1; // 1-based, for LaunchColumn
+  std::string command; // for Command (device command or OSC line)
 };
 
 // Art-Net / sACN receiver: incoming channels become /artnet/<u>/<ch> or
@@ -377,6 +468,15 @@ struct Project {
   std::vector<DmxDevice> dmxDevices;
   std::vector<LedMapping> ledMappings;
   std::vector<Surface> surfaces;
+  std::vector<Timeline> timelines;
+  std::vector<PjlinkProjector> projectors;
+  TimecodeConfig timecode;
+  // Serial input (Arduino...): each line becomes /serial/<first word> <numbers>.
+  struct SerialInput { bool enabled = false; std::string port; int baud = 115200; } serialIn;
+  bool ndiSend = false;           // publish the main canvas over NDI
+  std::string ndiName = "Lumen";
+  Timeline *timeline(int id);
+  Timeline &addTimeline();
 
   int newId() { return nextId++; }
   DmxDevice *dmxDevice(int id);
@@ -412,6 +512,8 @@ struct Project {
   void removeCanvas(int id);
   MediaItem &addCanvasMedia(int canvasId);
   MediaItem &addShader(const std::string &path);
+  MediaItem &addText(const std::string &text);
+  MediaItem &addNdi(const std::string &source);
   Surface *surface(int id);
   Surface &addSurface(const Warp &w);
   // Copies every surface's mapping into the slices bound to it (and unbinds

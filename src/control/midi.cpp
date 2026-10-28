@@ -47,6 +47,10 @@ struct MidiInputs::Port {
 static void onMidi(double, std::vector<unsigned char> *msg, void *user) {
   auto *port = static_cast<MidiInputs::Port *>(user);
   OscMessage m;
+  if (msg && !msg->empty() && ((*msg)[0] == 0xF1 || (*msg)[0] == 0xF0)) {
+    port->owner->timecodeFromCallback(msg->data(), msg->size());
+    return;
+  }
   if (!msg || !midiToOsc(msg->data(), msg->size(), m)) return;
   m.sender = port->name;
   port->owner->pushFromCallback(std::move(m));
@@ -64,6 +68,66 @@ bool MidiInputs::available() const {
 void MidiInputs::pushFromCallback(OscMessage m) {
   std::lock_guard<std::mutex> lock(mutex_);
   if (queue_.size() < 4096) queue_.push_back(std::move(m));
+}
+
+void MidiInputs::timecodeFromCallback(const unsigned char *b, size_t n) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  Timecode tc;
+  if (mtc_.feed(b, n, tc)) {
+    mtcLast_ = tc;
+    mtcHave_ = true;
+    mtcAt_ = std::chrono::steady_clock::now();
+  }
+}
+
+bool MidiInputs::timecode(Timecode &tc, double &age) const {
+  std::lock_guard<std::mutex> lock(mutex_);
+  if (!mtcHave_) return false;
+  tc = mtcLast_;
+  age = std::chrono::duration<double>(std::chrono::steady_clock::now() - mtcAt_).count();
+  return true;
+}
+
+struct MidiOutPort::Impl {
+  std::unique_ptr<RtMidiOut> out;
+};
+
+MidiOutPort::MidiOutPort() : impl_(std::make_unique<Impl>()) {}
+MidiOutPort::~MidiOutPort() { close(); }
+
+bool MidiOutPort::open(const std::string &match) {
+  close();
+  try {
+    impl_->out = std::make_unique<RtMidiOut>();
+    unsigned n = impl_->out->getPortCount();
+    for (unsigned i = 0; i < n; ++i) {
+      std::string pn = impl_->out->getPortName(i);
+      if (match.empty() || pn.find(match) != std::string::npos) {
+        impl_->out->openPort(i, "Lumen MTC");
+        name_ = pn;
+        open_ = true;
+        return true;
+      }
+    }
+  } catch (...) {
+  }
+  impl_->out.reset();
+  return false;
+}
+
+void MidiOutPort::close() {
+  if (impl_->out) impl_->out->closePort();
+  impl_->out.reset();
+  open_ = false;
+}
+
+void MidiOutPort::send(const std::vector<uint8_t> &bytes) {
+  if (!open_ || !impl_->out) return;
+  std::vector<unsigned char> m(bytes.begin(), bytes.end());
+  try {
+    impl_->out->sendMessage(&m);
+  } catch (...) {
+  }
 }
 
 void MidiInputs::start() {
@@ -97,7 +161,8 @@ void MidiInputs::rescan() {
       port->owner = this;
       port->in = std::make_unique<RtMidiIn>();
       port->in->openPort(i, "Lumen");
-      port->in->ignoreTypes(true, true, true); // sysex, timing, active sensing
+      // Sysex and timing pass for MIDI Time Code (full frame / quarter frames).
+      port->in->ignoreTypes(false, false, true);
       port->in->setCallback(onMidi, port.get());
       std::printf("[midi] opened %s\n", names[i].c_str());
       ports_.push_back(std::move(port));

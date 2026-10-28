@@ -78,6 +78,9 @@ struct CaptureDevice {
 };
 std::vector<CaptureDevice> listCaptureDevices();
 
+// FFmpeg versions and the hardware decoders this build can use (diagnostics).
+std::string ffmpegInfo();
+
 class VideoDecoder {
 public:
   VideoDecoder() = default;

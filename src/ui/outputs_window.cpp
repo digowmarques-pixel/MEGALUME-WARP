@@ -30,7 +30,7 @@ bool stepper(const char *id, int &v, int lo, int hi) {
 bool pxField(const char *id, int &v, int hi) {
   ImGui::PushID(id);
   ImGui::SetNextItemWidth(70);
-  bool changed = ImGui::DragInt("##px", &v, 1.0f, 0, hi, "%d px");
+  bool changed = ImGui::DragInt("##px", &v, 1.0f, 0, hi, T("%d px"));
   v = std::clamp(v, 0, hi);
   ImGui::PopID();
   return changed;
@@ -45,7 +45,7 @@ void Ui::outputsWindow(App &app) {
   ImGui::SetNextWindowPos({vp->WorkPos.x + vp->WorkSize.x * 0.5f, vp->WorkPos.y + vp->WorkSize.y * 0.5f},
                           ImGuiCond_Appearing, {0.5f, 0.5f});
   ImGui::SetNextWindowSize({vp->WorkSize.x * 0.86f, vp->WorkSize.y * 0.86f}, ImGuiCond_Appearing);
-  if (!ImGui::Begin("Saídas###outputs", &showOutputs_, ImGuiWindowFlags_NoCollapse)) {
+  if (!ImGui::Begin(T("Saídas###outputs"), &showOutputs_, ImGuiWindowFlags_NoCollapse)) {
     ImGui::End();
     return;
   }
@@ -55,14 +55,14 @@ void Ui::outputsWindow(App &app) {
 
   // ---------------------------------------------------------------- left column
   ImGui::BeginChild("##left", {170, -ImGui::GetFrameHeightWithSpacing() * 2.6f}, ImGuiChildFlags_Borders);
-  ImGui::TextDisabled("Canvas");
+  ImGui::TextDisabled("%s", T("Canvas"));
   ImGui::Text("%d × %d", p.canvasW, p.canvasH);
   ImGui::Separator();
-  ImGui::TextDisabled("Projetores");
+  ImGui::TextDisabled("%s", T("Projetores"));
   for (size_t i = 0; i < p.outputs.size(); ++i) {
     auto &o = p.outputs[i];
     char label[160];
-    std::snprintf(label, sizeof(label), "%zu  %s", i + 1, o.name.c_str());
+    std::snprintf(label, sizeof(label), T("%zu  %s"), i + 1, o.name.c_str());
     if (ImGui::Selectable(label, outputsSel_ == o.id)) outputsSel_ = o.id;
     if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
       outputsSel_ = o.id;
@@ -88,15 +88,15 @@ void Ui::outputsWindow(App &app) {
   if (outputsPage_ == 0) {
     // Layout row: "layout [2] x [1] de [1920] px [1080] px"
     ImGui::AlignTextToFramePadding();
-    ImGui::TextDisabled("layout");
+    ImGui::TextDisabled("%s", T("layout"));
     ImGui::SameLine();
-    bool changed = stepper("cols", L.cols, 1, 16);
+    bool changed = stepper(T("cols"), L.cols, 1, 16);
     ImGui::SameLine();
     ImGui::TextDisabled("×");
     ImGui::SameLine();
-    changed |= stepper("rows", L.rows, 1, 16);
+    changed |= stepper(T("rows"), L.rows, 1, 16);
     ImGui::SameLine(0, 18);
-    ImGui::TextDisabled("de");
+    ImGui::TextDisabled("%s", T("de"));
     ImGui::SameLine();
     ImGui::SetNextItemWidth(90);
     changed |= ImGui::InputInt("##w", &L.projW, 0);
@@ -106,18 +106,18 @@ void Ui::outputsWindow(App &app) {
     ImGui::SetNextItemWidth(90);
     changed |= ImGui::InputInt("##h", &L.projH, 0);
     ImGui::SameLine();
-    ImGui::TextDisabled("px por projetor");
+    ImGui::TextDisabled("%s", T("px por projetor"));
     L.projW = std::clamp(L.projW, 16, 16384);
     L.projH = std::clamp(L.projH, 16, 16384);
     if (changed || int(p.outputs.size()) != L.cols * L.rows) {
       if (changed) apply();
     }
     ImGui::SameLine(0, 30);
-    if (sel && ImGui::Button("Mapping  >")) outputsPage_ = 1;
+    if (sel && ImGui::Button(T("Mapping  >"))) outputsPage_ = 1;
     if (int(p.outputs.size()) != L.cols * L.rows) {
-      ImGui::TextColored({1, 0.7f, 0.3f, 1}, "O projeto tem %zu saídas e o layout pede %d.", p.outputs.size(), L.cols * L.rows);
+      ImGui::TextColored({1, 0.7f, 0.3f, 1}, T("O projeto tem %zu saídas e o layout pede %d."), p.outputs.size(), L.cols * L.rows);
       ImGui::SameLine();
-      if (ImGui::SmallButton("Aplicar layout")) apply();
+      if (ImGui::SmallButton(T("Aplicar layout"))) apply();
     }
     ImGui::Spacing();
 
@@ -143,7 +143,7 @@ void Ui::outputsWindow(App &app) {
         dl->AddRectFilled(a, z, selected ? IM_COL32(58, 52, 40, 255) : IM_COL32(44, 44, 48, 255), 6);
         dl->AddRect(a, z, selected ? IM_COL32(255, 196, 0, 255) : IM_COL32(70, 70, 76, 255), 6, 0, selected ? 2.0f : 1.0f);
         char num[24];
-        std::snprintf(num, sizeof(num), "%zu", idx + 1);
+        std::snprintf(num, sizeof(num), T("%zu"), idx + 1);
         dl->AddText(nullptr, 42, {a.x + cardW * 0.5f - 14, a.y + 14}, IM_COL32(150, 150, 155, 255), num);
         ImGui::PushID(o.id);
         // Click on the card selects it; gear opens its mapping.
@@ -155,31 +155,31 @@ void Ui::outputsWindow(App &app) {
           outputsPage_ = 1;
         }
         ImGui::SetCursorScreenPos({a.x + cardW - 84, a.y + 8});
-        if (ImGui::Button("Mapping", {76, 0})) {
+        if (ImGui::Button(T("Mapping"), {76, 0})) {
           outputsSel_ = o.id;
           outputsPage_ = 1;
         }
-        ImGui::SetItemTooltip("Mapping desta saída");
+        ImGui::SetItemTooltip("%s", T("Mapping desta saída"));
         // Display chooser.
         ImGui::SetCursorScreenPos({a.x + 12, a.y + cardH - 40});
         ImGui::SetNextItemWidth(cardW - 24);
-        std::string cur = o.monitor < 0 ? "(janela)" : "Tela " + std::to_string(o.monitor + 1);
+        std::string cur = o.monitor < 0 ? T("(janela)") : T("Tela ") + std::to_string(o.monitor + 1);
         if (o.monitor >= 0 && o.monitor < int(mons.size())) cur += " · " + mons[size_t(o.monitor)].name;
         if (ImGui::BeginCombo("##disp", cur.c_str())) {
-          if (ImGui::Selectable("(janela)", o.monitor < 0)) { o.monitor = -1; app.edited(); }
+          if (ImGui::Selectable(T("(janela)"), o.monitor < 0)) { o.monitor = -1; app.edited(); }
           for (size_t i = 0; i < mons.size(); ++i) {
             char label[200];
-            std::snprintf(label, sizeof(label), "Tela %zu · %s (%d×%d)", i + 1, mons[i].name.c_str(), mons[i].w, mons[i].h);
+            std::snprintf(label, sizeof(label), T("Tela %zu · %s (%d×%d)"), i + 1, mons[i].name.c_str(), mons[i].w, mons[i].h);
             if (ImGui::Selectable(label, o.monitor == int(i))) { o.monitor = int(i); app.edited(); }
           }
           ImGui::EndCombo();
         }
         if (o.monitor >= 0 && o.monitor < int(mons.size()) &&
             (mons[size_t(o.monitor)].w != L.projW || mons[size_t(o.monitor)].h != L.projH))
-          dl->AddText({a.x + 12, a.y + cardH - 62}, IM_COL32(255, 180, 80, 255), "resolução diferente da tela");
+          dl->AddText({a.x + 12, a.y + cardH - 62}, IM_COL32(255, 180, 80, 255), T("resolução diferente da tela"));
         else if (idx < lay.projectors.size()) {
           char info[64];
-          std::snprintf(info, sizeof(info), "canvas x %.0f  y %.0f", lay.projectors[idx].srcX, lay.projectors[idx].srcY);
+          std::snprintf(info, sizeof(info), T("canvas x %.0f  y %.0f"), lay.projectors[idx].srcX, lay.projectors[idx].srcY);
           dl->AddText({a.x + 12, a.y + cardH - 62}, IM_COL32(130, 130, 135, 255), info);
         }
         ImGui::PopID();
@@ -187,30 +187,30 @@ void Ui::outputsWindow(App &app) {
         // Soft edge field on the seam to the right (first row only: the seam is shared by the column).
         if (r == 0 && c + 1 < L.cols && size_t(c) < L.gapsX.size()) {
           ImGui::SetCursorScreenPos({z.x + 8, a.y + cardH * 0.5f - 22});
-          ImGui::TextDisabled("soft edge");
+          ImGui::TextDisabled("%s", T("soft edge"));
           ImGui::SetCursorScreenPos({z.x + 8, a.y + cardH * 0.5f - 2});
           char id[16];
-          std::snprintf(id, sizeof(id), "gx%d", c);
+          std::snprintf(id, sizeof(id), T("gx%d"), c);
           if (pxField(id, L.gapsX[size_t(c)], L.projW * 9 / 10)) apply();
         }
         // Seam below (first column only).
         if (c == 0 && r + 1 < L.rows && size_t(r) < L.gapsY.size()) {
           ImGui::SetCursorScreenPos({a.x + 12, z.y + 6});
           ImGui::AlignTextToFramePadding();
-          ImGui::TextDisabled("soft edge");
+          ImGui::TextDisabled("%s", T("soft edge"));
           ImGui::SameLine();
           char id[16];
-          std::snprintf(id, sizeof(id), "gy%d", r);
+          std::snprintf(id, sizeof(id), T("gy%d"), r);
           if (pxField(id, L.gapsY[size_t(r)], L.projH * 9 / 10)) apply();
         }
       }
     ImGui::SetCursorScreenPos({origin.x, origin.y + float(L.rows) * (cardH + gapH)});
     ImGui::Dummy({1, 1});
-    ImGui::TextDisabled("O soft edge entre dois projetores é a largura (em px) em que eles se sobrepõem. "
-                        "Use o padrão Grade para alinhar e Branco para conferir a emenda.");
+    ImGui::TextDisabled("%s", T("O soft edge entre dois projetores é a largura (em px) em que eles se sobrepõem. "
+                        "Use o padrão Grade para alinhar e Branco para conferir a emenda."));
   } else if (sel) {
     // ---------------------------------------------------------------- mapping page
-    if (ImGui::Button("<  Layout")) outputsPage_ = 0;
+    if (ImGui::Button(T("<  Layout"))) outputsPage_ = 0;
     ImGui::SameLine(0, 20);
     ImGui::SetNextItemWidth(220);
     if (ImGui::BeginCombo("##which", sel->name.c_str())) {
@@ -220,7 +220,7 @@ void Ui::outputsWindow(App &app) {
     }
     sel = p.output(outputsSel_);
     ImGui::SameLine(0, 30);
-    const char *tabs[] = {"Slice", "Mapping", "Máscaras", "Cor e blend"};
+    const char *tabs[] = {T("Slice"), T("Mapping"), T("Máscaras"), T("Cor e blend")};
     for (int t = 0; t < 4; ++t) {
       if (t) ImGui::SameLine(0, 2);
       bool on = mappingTab_ == t;
@@ -237,7 +237,7 @@ void Ui::outputsWindow(App &app) {
 
     if (mappingTab_ == 0) {
       // Slice: the portion of the canvas this projector shows.
-      ImGui::TextDisabled("A fatia (slice) é a parte do canvas usada por este projetor. Arraste o retângulo ou os cantos.");
+      ImGui::TextDisabled("%s", T("A fatia (slice) é a parte do canvas usada por este projetor. Arraste o retângulo ou os cantos."));
       ImVec2 av = ImGui::GetContentRegionAvail();
       av.y -= ImGui::GetFrameHeightWithSpacing() * 1.5f;
       float scw = float(p.canvasWidth(sel->canvasId)), sch = float(p.canvasHeight(sel->canvasId));
@@ -278,43 +278,43 @@ void Ui::outputsWindow(App &app) {
       for (ImVec2 q : {ra, rb}) dl->AddRectFilled({q.x - 5, q.y - 5}, {q.x + 5, q.y + 5}, IM_COL32(255, 196, 0, 255));
       float src[4] = {sel->srcX, sel->srcY, sel->srcW, sel->srcH};
       ImGui::SetNextItemWidth(360);
-      if (ImGui::DragFloat4("x  y  largura  altura", src, 1.0f)) {
+      if (ImGui::DragFloat4(T("x  y  largura  altura"), src, 1.0f)) {
         sel->srcX = src[0]; sel->srcY = src[1]; sel->srcW = std::max(1.0f, src[2]); sel->srcH = std::max(1.0f, src[3]);
         app.edited();
       }
       ImGui::SameLine();
-      if (ImGui::Button("reset")) apply();
+      if (ImGui::Button(T("reset"))) apply();
       ImGui::SameLine();
-      if (ImGui::Button("blend automático")) {
+      if (ImGui::Button(T("blend automático"))) {
         int n = autoBlendOverlaps(p, sel->canvasId);
-        app.status(std::to_string(n) + " emenda(s) com soft edge calculado pelas sobreposições");
+        app.status(std::to_string(n) + T(" emenda(s) com soft edge calculado pelas sobreposições"));
         app.edited();
       }
-      ImGui::SetItemTooltip("Projetores fora de grade: as bordas suaves saem das sobreposições das fatias");
-      ImGui::SetItemTooltip("Volta a fatia de todas as saídas ao cálculo do layout");
+      ImGui::SetItemTooltip("%s", T("Projetores fora de grade: as bordas suaves saem das sobreposições das fatias"));
+      ImGui::SetItemTooltip("%s", T("Volta a fatia de todas as saídas ao cálculo do layout"));
     } else if (mappingTab_ == 1 || mappingTab_ == 2) {
       // Warp (corners / mesh) and masks, edited on the output preview.
       outputsWs_.viewOutputId = sel->id;
       outputsWs_.lockView = true;
       if (mappingTab_ == 1) {
         bool mesh = outputsWs_.tool == Tool::Mesh;
-        if (ImGui::RadioButton("Cantos (perspectiva)", !mesh)) outputsWs_.tool = Tool::Perspective;
+        if (ImGui::RadioButton(T("Cantos (perspectiva)"), !mesh)) outputsWs_.tool = Tool::Perspective;
         ImGui::SameLine();
-        if (ImGui::RadioButton("Malha (warping)", mesh)) outputsWs_.tool = Tool::Mesh;
+        if (ImGui::RadioButton(T("Malha (warping)"), mesh)) outputsWs_.tool = Tool::Mesh;
         if (outputsWs_.tool != Tool::Mesh) outputsWs_.tool = Tool::Perspective;
         ImGui::SameLine(0, 20);
         int grid[2] = {sel->warp.meshCols, sel->warp.meshRows};
         ImGui::SetNextItemWidth(140);
-        if (ImGui::InputInt2("malha", grid)) {
+        if (ImGui::InputInt2(T("malha"), grid)) {
           sel->warp.resampleMesh(grid[0], grid[1]); // keeps the current warp
           outputsWs_.tool = Tool::Mesh;
           app.edited();
         }
         ImGui::SameLine();
-        if (ImGui::Button("entrada...")) openInputMesh(-1, 0, sel->id);
-        ImGui::SetItemTooltip("Malha de entrada: põe os pontos sobre detalhes do canvas");
+        if (ImGui::Button(T("entrada..."))) openInputMesh(-1, 0, sel->id);
+        ImGui::SetItemTooltip("%s", T("Malha de entrada: põe os pontos sobre detalhes do canvas"));
         ImGui::SameLine();
-        if (ImGui::Button("reset##warp")) {
+        if (ImGui::Button(T("reset##warp"))) {
           sel->warp.setRect({0, 0}, {1, 1});
           sel->warp.resetMesh(2, 2);
           app.edited();
@@ -332,7 +332,7 @@ void Ui::outputsWindow(App &app) {
     } else {
       int pat = int(sel->pattern);
       ImGui::SetNextItemWidth(260);
-      if (ImGui::Combo("Padrão de teste", &pat, "Nenhum (conteúdo)\0Test card da saída\0Grade de blend (contínua)\0Branco\0Preto\0")) {
+      if (ImGui::Combo(T("Padrão de teste"), &pat, TZ("Nenhum (conteúdo)\0Test card da saída\0Grade de blend (contínua)\0Branco\0Preto\0"))) {
         sel->pattern = TestPattern(pat);
         app.edited();
       }
@@ -345,13 +345,13 @@ void Ui::outputsWindow(App &app) {
   // ---------------------------------------------------------------- bottom bar
   bool open = app.outputsOpen;
   if (open) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.12f, 0.42f, 0.55f, 1));
-  if (ImGui::Button(open ? "Tela cheia: ligada" : "Tela cheia", {170, 30})) app.outputsOpen = !open;
+  if (ImGui::Button(open ? T("Tela cheia: ligada") : T("Tela cheia"), {170, 30})) app.outputsOpen = !open;
   if (open) ImGui::PopStyleColor();
-  ImGui::SetItemTooltip("Abre as saídas nos projetores (Ctrl+P)");
+  ImGui::SetItemTooltip("%s", T("Abre as saídas nos projetores (Ctrl+P)"));
   ImGui::SameLine();
   bool card = !p.outputs.empty() && std::all_of(p.outputs.begin(), p.outputs.end(), [](auto &o) { return o.pattern == TestPattern::Card; });
   if (card) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(1.0f, 0.77f, 0.0f, 0.8f));
-  if (ImGui::Button("Test Card", {120, 30})) {
+  if (ImGui::Button(T("Test Card"), {120, 30})) {
     for (auto &o : p.outputs) o.pattern = card ? TestPattern::None : TestPattern::Card;
     app.edited();
   }
@@ -359,15 +359,15 @@ void Ui::outputsWindow(App &app) {
   ImGui::SameLine();
   bool grid = !p.outputs.empty() && std::all_of(p.outputs.begin(), p.outputs.end(), [](auto &o) { return o.pattern == TestPattern::BlendGrid; });
   if (grid) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(1.0f, 0.77f, 0.0f, 0.8f));
-  if (ImGui::Button("Grade", {90, 30})) {
+  if (ImGui::Button(T("Grade"), {90, 30})) {
     for (auto &o : p.outputs) o.pattern = grid ? TestPattern::None : TestPattern::BlendGrid;
     app.edited();
   }
   if (grid) ImGui::PopStyleColor();
   ImGui::SameLine();
-  if (ImGui::Button("Identificar", {110, 30})) app.outputs.identify();
+  if (ImGui::Button(T("Identificar"), {110, 30})) app.outputs.identify();
   ImGui::SameLine(ImGui::GetWindowWidth() - 110);
-  if (ImGui::Button("OK", {90, 30})) showOutputs_ = false;
+  if (ImGui::Button(T("OK"), {90, 30})) showOutputs_ = false;
   ImGui::End();
 }
 

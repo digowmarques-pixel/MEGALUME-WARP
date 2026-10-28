@@ -1,5 +1,8 @@
 #include "media/source.h"
 
+#include "io/ndi.h"
+#include "media/text.h"
+
 #include "io/spout.h"
 
 #include <algorithm>
@@ -155,6 +158,10 @@ LiveInput::LiveInput(const MediaItem &m, const DecoderSettings &s) : type_(m.typ
     spout_ = std::make_unique<SpoutIn>(m.path);
     return;
   }
+  if (type_ == MediaType::NDI) {
+    ndi_ = std::make_unique<NdiReceiver>(m.path);
+    return;
+  }
   MediaSource src{m.path, m.liveFormat, m.liveOptions, true};
   std::string err;
   opened_ = decoder_.open(src, false, s, &err);
@@ -173,12 +180,21 @@ const Texture *LiveInput::update(uint64_t frame, DynamicMesh &mesh) {
     }
     return tex_;
   }
+  if (ndi_) {
+    int w, h;
+    if (ndi_->latest(ndiFrame_, w, h)) {
+      ndiTex_.upload(ndiFrame_.data(), w, h);
+      tex_ = &ndiTex_;
+    }
+    return tex_;
+  }
   if (decoder_.fetch(0, frame_, true)) tex_ = uploader_.upload(frame_, mesh);
   return tex_;
 }
 
 std::string LiveInput::status() const {
   if (spout_) return spout_->connected() ? "Spout: " + spout_->senderName() : "Spout: aguardando sender";
+  if (ndi_) return !ndiAvailable() ? ndiStatus() : ndi_->connected() ? "NDI conectado" : "NDI: procurando a fonte";
   if (!opened_) return "não abriu";
   return tex_ ? "ao vivo" : "aguardando sinal";
 }
@@ -254,7 +270,11 @@ const Texture *MediaCache::thumbnail(const MediaItem &m, Generators &gen, Dynami
     gen.render(small, 1.0, *e.thumbFb, mesh);
     return &e.thumbFb->texture();
   }
-  if (m.type == MediaType::Live || m.type == MediaType::Spout) return e.liveTex;
+  if (m.type == MediaType::Live || m.type == MediaType::Spout || m.type == MediaType::NDI) return e.liveTex;
+  if (m.type == MediaType::Text) {
+    if (!e.text) e.text = std::make_unique<TextRenderer>();
+    return e.text->render(m);
+  }
   if (m.type == MediaType::Canvas) return nullptr; // shown by name
   if (m.type == MediaType::Shader) {
     if (!e.isf) e.isf = std::make_unique<IsfRenderer>();
@@ -295,7 +315,7 @@ void MediaCache::clear() { entries_.clear(); }
 
 Playback::Playback(const MediaItem &m, const Cell &cell, MediaContext &ctx)
     : speed(cell.speed), loop(cell.loop), mediaId_(m.id), type_(m.type), audio_(ctx.audio) {
-  if (type_ == MediaType::Live || type_ == MediaType::Spout) {
+  if (type_ == MediaType::Live || type_ == MediaType::Spout || type_ == MediaType::NDI) {
     live_ = ctx.cache.live(m, ctx.decoder);
     return;
   }
@@ -381,7 +401,14 @@ const Texture *Playback::update(double dt, const MediaItem &m, MediaContext &ctx
     ctx.generators.copyFlipped(*src, *genFb_, ctx.mesh);
     return &genFb_->texture();
   }
+  case MediaType::Text: {
+    if (started_) clock_ += dt * double(speed);
+    started_ = true;
+    if (!text_) text_ = std::make_unique<TextRenderer>();
+    return text_->render(m);
+  }
   case MediaType::Live:
+  case MediaType::NDI:
   case MediaType::Spout: {
     clock_ += dt;
     const Texture *t = live_ ? live_->update(ctx.frame, ctx.mesh) : nullptr;

@@ -2,6 +2,8 @@
 
 #include "app.h"
 #include "core/svg.h"
+#include "io/ndi.h"
+#include "io/serial.h"
 #include "engine/outputs.h"
 #include "io/spout.h"
 #include "media/decoder.h"
@@ -91,7 +93,7 @@ bool canvasCombo(const char *label, const Project &p, int &id) {
   if (ImGui::BeginCombo(label, p.canvasLabel(id).c_str())) {
     for (int c : p.canvasIds()) {
       char item[160];
-      std::snprintf(item, sizeof(item), "%s  (%d×%d)##%d", p.canvasLabel(c).c_str(), p.canvasWidth(c), p.canvasHeight(c), c);
+      std::snprintf(item, sizeof(item), T("%s  (%d×%d)##%d"), p.canvasLabel(c).c_str(), p.canvasWidth(c), p.canvasHeight(c), c);
       if (ImGui::Selectable(item, c == id)) { id = c; changed = true; }
     }
     ImGui::EndCombo();
@@ -148,13 +150,15 @@ bool isfParamsUi(const IsfInfo &info, IsfValues &values) {
 
 const char *mediaTypeLabel(MediaType t) {
   switch (t) {
-  case MediaType::Video: return "Vídeo";
-  case MediaType::Image: return "Imagem";
-  case MediaType::Generator: return "Gerador";
-  case MediaType::Live: return "Ao vivo";
-  case MediaType::Spout: return "Spout";
-  case MediaType::Canvas: return "Canvas";
-  case MediaType::Shader: return "Shader ISF";
+  case MediaType::Video: return T("Vídeo");
+  case MediaType::Image: return T("Imagem");
+  case MediaType::Generator: return T("Gerador");
+  case MediaType::Live: return T("Ao vivo");
+  case MediaType::Spout: return T("Spout");
+  case MediaType::Canvas: return T("Canvas");
+  case MediaType::Shader: return T("Shader ISF");
+  case MediaType::Text: return T("Texto");
+  case MediaType::NDI: return T("NDI");
   }
   return "";
 }
@@ -314,28 +318,50 @@ void Ui::draw(App &app) {
 
   ImGui::SetNextWindowPos({x0 + g, bodyY + g});
   ImGui::SetNextWindowSize({libraryW - g, bodyH - g});
-  ImGui::Begin("Biblioteca", nullptr, fixed);
+  const bool locked = app.showLocked;
+  ImGui::Begin(T("Biblioteca"), nullptr, fixed);
+  ImGui::BeginDisabled(locked);
   library(app);
+  ImGui::EndDisabled();
   ImGui::End();
 
   ImGui::SetNextWindowPos({x0 + libraryW + g, bodyY + g});
   ImGui::SetNextWindowSize({centerW - g, bodyH - dashH - g});
   ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {4, 4});
-  ImGui::Begin("Workspace", nullptr, fixed | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+  ImGui::Begin(T("Workspace"), nullptr, fixed | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+  ImGui::BeginDisabled(locked);
   workspace.draw(app, ImGui::GetContentRegionAvail());
+  ImGui::EndDisabled();
   ImGui::End();
   ImGui::PopStyleVar();
 
   ImGui::SetNextWindowPos({x0 + libraryW + g, bodyY + bodyH - dashH + g});
   ImGui::SetNextWindowSize({centerW - g, dashH - g});
-  ImGui::Begin("Dashboard", nullptr, fixed);
-  dashboard(app);
+  ImGui::Begin("##bottom", nullptr, fixed | ImGuiWindowFlags_NoTitleBar);
+  if (ImGui::BeginTabBar("##bottomtabs")) {
+    if (ImGui::BeginTabItem(T("Dashboard"), nullptr, bottomTab_ == 0 && forceBottom_ ? ImGuiTabItemFlags_SetSelected : 0)) {
+      if (!forceBottom_) bottomTab_ = 0;
+      dashboard(app);
+      ImGui::EndTabItem();
+    }
+    if (ImGui::BeginTabItem(T("Timeline"), nullptr, bottomTab_ == 1 && forceBottom_ ? ImGuiTabItemFlags_SetSelected : 0)) {
+      if (!forceBottom_) bottomTab_ = 1;
+      ImGui::BeginDisabled(locked);
+      timelineEditor(app);
+      ImGui::EndDisabled();
+      ImGui::EndTabItem();
+    }
+    ImGui::EndTabBar();
+  }
+  forceBottom_ = false;
   ImGui::End();
 
   ImGui::SetNextWindowPos({x0 + W - inspectorW + g, bodyY + g});
   ImGui::SetNextWindowSize({inspectorW - 2 * g, bodyH - g});
-  ImGui::Begin("Propriedades", nullptr, fixed);
+  ImGui::Begin(T("Propriedades"), nullptr, fixed);
+  ImGui::BeginDisabled(locked);
   inspector(app);
+  ImGui::EndDisabled();
   ImGui::End();
 
   ImGui::SetNextWindowPos({x0 + g, y0 + H - statusH + 2});
@@ -348,68 +374,121 @@ void Ui::draw(App &app) {
   ImGui::PopStyleColor();
   ImGui::PopStyleVar();
 
-  outputsWindow(app);
-  inputMeshWindow(app);
+  if (!locked) {
+    outputsWindow(app);
+    inputMeshWindow(app);
+  }
+  recoveryPopup(app);
+  if (showDiag_) {
+    ImGui::SetNextWindowSize({640, 560}, ImGuiCond_FirstUseEver);
+    if (ImGui::Begin(T("Diagnóstico do sistema"), &showDiag_)) {
+      if (ImGui::Button(T("Copiar"))) ImGui::SetClipboardText(diagReport_.c_str());
+      ImGui::SameLine();
+      if (ImGui::Button(T("Testar de novo"))) diagReport_ = app.diagnosticReport();
+      ImGui::SameLine();
+      ImGui::TextDisabled("%s", T("Envie este texto junto com qualquer relato de problema."));
+      ImGui::InputTextMultiline("##diag", diagReport_.data(), diagReport_.size() + 1, {-1, -1}, ImGuiInputTextFlags_ReadOnly);
+    }
+    ImGui::End();
+  }
   if (showDemo_) ImGui::ShowDemoWindow(&showDemo_);
   if (showHelp_) {
     ImGui::SetNextWindowSize({520, 460}, ImGuiCond_FirstUseEver);
-    if (ImGui::Begin("Atalhos e ajuda", &showHelp_)) {
-      ImGui::SeparatorText("Show");
-      ImGui::BulletText("Espaço: GO (próxima coluna)   |   Shift+Espaço: coluna anterior");
-      ImGui::BulletText("Esc: parar tudo com fade   |   B: blackout");
-      ImGui::BulletText("Clique numa célula: dispara só aquela layer");
-      ImGui::SeparatorText("Workspace / mapping");
-      ImGui::BulletText("V: selecionar/mover   M: perspectiva (4 cantos)");
-      ImGui::BulletText("G: malha (mesh warp)   K: máscara");
-      ImGui::BulletText("Tab: próximo canto/ponto   Setas: ajuste fino (Shift = 10px)");
-      ImGui::BulletText("Roda do mouse: zoom   Botão do meio / Alt+arrastar: mover a vista");
-      ImGui::BulletText("F: enquadrar   Máscara: clique adiciona ponto, botão direito apaga");
-      ImGui::SeparatorText("Projeto");
-      ImGui::BulletText("Ctrl+N novo, Ctrl+O abrir, Ctrl+S salvar, Ctrl+Shift+S salvar como");
-      ImGui::BulletText("Ctrl+Z desfazer, Ctrl+Y / Ctrl+Shift+Z refazer, Ctrl+I importar");
-      ImGui::BulletText("Arraste arquivos do Explorer para a janela para importar");
-      ImGui::SeparatorText("OSC");
-      ImGui::TextWrapped("Envie mensagens para a porta configurada (padrão 8000). "
+    if (ImGui::Begin(T("Atalhos e ajuda"), &showHelp_)) {
+      ImGui::SeparatorText(T("Show"));
+      ImGui::BulletText("%s", T("Espaço: GO (próxima coluna)   |   Shift+Espaço: coluna anterior"));
+      ImGui::BulletText("%s", T("Esc: parar tudo com fade   |   B: blackout"));
+      ImGui::BulletText("%s", T("Clique numa célula: dispara só aquela layer"));
+      ImGui::SeparatorText(T("Workspace / mapping"));
+      ImGui::BulletText("%s", T("V: selecionar/mover   M: perspectiva (4 cantos)"));
+      ImGui::BulletText("%s", T("G: malha (mesh warp)   K: máscara"));
+      ImGui::BulletText("%s", T("Tab: próximo canto/ponto   Setas: ajuste fino (Shift = 10px)"));
+      ImGui::BulletText("%s", T("Roda do mouse: zoom   Botão do meio / Alt+arrastar: mover a vista"));
+      ImGui::BulletText("%s", T("F: enquadrar   Máscara: clique adiciona ponto, botão direito apaga"));
+      ImGui::SeparatorText(T("Projeto"));
+      ImGui::BulletText("%s", T("Ctrl+N novo, Ctrl+O abrir, Ctrl+S salvar, Ctrl+Shift+S salvar como"));
+      ImGui::BulletText("%s", T("Ctrl+Z desfazer, Ctrl+Y / Ctrl+Shift+Z refazer, Ctrl+I importar"));
+      ImGui::BulletText("%s", T("Arraste arquivos do Explorer para a janela para importar"));
+      ImGui::SeparatorText(T("OSC"));
+      ImGui::TextWrapped("%s", T("Envie mensagens para a porta configurada (padrão 8000). "
                          "Exemplos: /lumen/go, /lumen/column/launch 2, /lumen/layer/1/opacity 0.5. "
-                         "Veja docs/OSC.md para a lista completa.");
+                         "Veja docs/OSC.md para a lista completa."));
     }
     ImGui::End();
   }
 }
 
+void Ui::recoveryPopup(App &app) {
+  if (app.recoveryPending() && !ImGui::IsPopupOpen("###recover")) ImGui::OpenPopup("###recover");
+  ImGui::SetNextWindowSize({460, 0});
+  std::string title = std::string(T("Recuperar alterações")) + "###recover";
+  if (ImGui::BeginPopupModal(title.c_str(), nullptr, ImGuiWindowFlags_NoResize)) {
+    ImGui::TextWrapped(T("O Lumen não foi fechado corretamente da última vez. Existe um salvamento automático "
+                       "mais recente de %s."), app.recoveryInfo().c_str());
+    ImGui::Spacing();
+    pushPrimary();
+    if (ImGui::Button(T("Recuperar"), {140, 30})) {
+      app.recover(true);
+      ImGui::CloseCurrentPopup();
+    }
+    popPrimary();
+    ImGui::SameLine();
+    if (ImGui::Button(T("Descartar"), {140, 30})) {
+      app.recover(false);
+      ImGui::CloseCurrentPopup();
+    }
+    ImGui::EndPopup();
+  }
+}
+
+void Ui::relinkDialog(App &app) {
+  std::string dir = platform::folderDialog(T("Pasta onde procurar as mídias"));
+  if (dir.empty()) return;
+  int before = app.missingMedia();
+  int fixed = app.relinkMissing(dir);
+  app.status(std::to_string(fixed) + T(" de ") + std::to_string(before) + T(" mídia(s) encontradas"), fixed < before);
+}
+
 void Ui::menuBar(App &app) {
   if (!ImGui::BeginMainMenuBar()) return;
-  if (ImGui::BeginMenu("Arquivo")) {
-    if (ImGui::MenuItem("Novo projeto", "Ctrl+N")) app.newProject();
-    if (ImGui::MenuItem("Abrir...", "Ctrl+O")) app.openDialog();
-    if (ImGui::MenuItem("Salvar", "Ctrl+S")) app.saveProject(false);
-    if (ImGui::MenuItem("Salvar como...", "Ctrl+Shift+S")) app.saveProject(true);
+  if (ImGui::BeginMenu(T("Arquivo"))) {
+    ImGui::BeginDisabled(app.showLocked);
+    if (ImGui::MenuItem(T("Novo projeto"), T("Ctrl+N"))) app.newProject();
+    if (ImGui::MenuItem(T("Abrir..."), T("Ctrl+O"))) app.openDialog();
+    ImGui::EndDisabled();
+    if (ImGui::MenuItem(T("Salvar"), T("Ctrl+S"))) app.saveProject(false);
+    if (ImGui::MenuItem(T("Salvar como..."), T("Ctrl+Shift+S"))) app.saveProject(true);
     ImGui::Separator();
-    if (ImGui::MenuItem("Importar mídia...", "Ctrl+I")) app.importDialog();
+    ImGui::BeginDisabled(app.showLocked);
+    if (ImGui::MenuItem(T("Importar mídia..."), T("Ctrl+I"))) app.importDialog();
+    if (ImGui::MenuItem(T("Procurar mídias ausentes..."), nullptr, false, app.missingMedia() > 0)) relinkDialog(app);
+    ImGui::EndDisabled();
     ImGui::Separator();
-    if (ImGui::MenuItem("Sair")) app.requestQuit = true;
+    ImGui::MenuItem(T("Modo show (travar edição)"), T("Ctrl+Shift+L"), &app.showLocked);
+    ImGui::Separator();
+    if (ImGui::MenuItem(T("Sair"))) app.requestQuit = true;
     ImGui::EndMenu();
   }
-  if (ImGui::BeginMenu("Editar")) {
-    if (ImGui::MenuItem("Desfazer", "Ctrl+Z")) app.undo();
-    if (ImGui::MenuItem("Refazer", "Ctrl+Y")) app.redo();
+  if (ImGui::BeginMenu(T("Editar"), !app.showLocked)) {
+    if (ImGui::MenuItem(T("Desfazer"), T("Ctrl+Z"))) app.undo();
+    if (ImGui::MenuItem(T("Refazer"), T("Ctrl+Y"))) app.redo();
     ImGui::Separator();
-    if (ImGui::MenuItem("Nova layer")) {
+    if (ImGui::MenuItem(T("Nova layer"))) {
       Layer &l = app.engine.project.addLayer("", workspace.viewCanvas);
       app.sel.layerId = l.id;
       app.edited();
     }
-    if (ImGui::MenuItem("Nova coluna")) {
+    if (ImGui::MenuItem(T("Nova coluna"))) {
       app.engine.project.addColumn();
       app.edited();
     }
     ImGui::EndMenu();
   }
-  if (ImGui::BeginMenu("Saídas")) {
-    if (ImGui::MenuItem("Configurar saídas...", "Ctrl+Shift+P")) openOutputs();
-    if (ImGui::MenuItem(app.outputsOpen ? "Fechar saídas" : "Abrir saídas", "Ctrl+P")) app.outputsOpen = !app.outputsOpen;
+  if (ImGui::BeginMenu(T("Saídas"))) {
+    if (ImGui::MenuItem(T("Configurar saídas..."), T("Ctrl+Shift+P"), false, !app.showLocked)) openOutputs();
+    if (ImGui::MenuItem(app.outputsOpen ? T("Fechar saídas") : T("Abrir saídas"), T("Ctrl+P"))) app.outputsOpen = !app.outputsOpen;
     ImGui::Separator();
-    if (ImGui::MenuItem("Adicionar saída")) {
+    if (ImGui::MenuItem(T("Adicionar saída"), nullptr, false, !app.showLocked)) {
       OutputConfig &o = app.engine.project.addOutput();
       app.sel.outputId = o.id;
       app.sel.inspector = Inspector::Output;
@@ -417,17 +496,32 @@ void Ui::menuBar(App &app) {
     }
     ImGui::Separator();
     auto mons = OutputManager::monitors();
-    ImGui::TextDisabled("Monitores detectados:");
+    ImGui::TextDisabled("%s", T("Monitores detectados:"));
     for (size_t i = 0; i < mons.size(); ++i)
-      ImGui::TextDisabled("  %zu: %s  %dx%d @%dHz", i + 1, mons[i].name.c_str(), mons[i].w,
+      ImGui::TextDisabled(T("  %zu: %s  %dx%d @%dHz"), i + 1, mons[i].name.c_str(), mons[i].w,
                           mons[i].h, mons[i].refresh);
     ImGui::EndMenu();
   }
-  if (ImGui::BeginMenu("Ajuda")) {
-    if (ImGui::MenuItem("Atalhos e ajuda", "F1")) showHelp_ = true;
-    ImGui::MenuItem("Demo do ImGui", nullptr, &showDemo_);
+  if (ImGui::BeginMenu("Idioma / Language")) {
+    if (ImGui::MenuItem("Português", nullptr, language() == Language::Portuguese)) {
+      setLanguage(Language::Portuguese);
+      saveLanguage();
+    }
+    if (ImGui::MenuItem("English", nullptr, language() == Language::English)) {
+      setLanguage(Language::English);
+      saveLanguage();
+    }
+    ImGui::EndMenu();
+  }
+  if (ImGui::BeginMenu(T("Ajuda"))) {
+    if (ImGui::MenuItem(T("Atalhos e ajuda"), "F1")) showHelp_ = true;
+    if (ImGui::MenuItem(T("Diagnóstico do sistema..."))) {
+      diagReport_ = app.diagnosticReport();
+      showDiag_ = true;
+    }
+    ImGui::MenuItem(T("Demo do ImGui"), nullptr, &showDemo_);
     ImGui::Separator();
-    ImGui::TextDisabled("Lumen %s", LUMEN_VERSION);
+    ImGui::TextDisabled(T("Lumen %s"), LUMEN_VERSION);
     ImGui::EndMenu();
   }
   ImGui::EndMainMenuBar();
@@ -446,78 +540,101 @@ void Ui::toolbar(App &app) {
     ImGui::SameLine();
     if (bigFont_) ImGui::PushFont(bigFont_);
     ImGui::SetCursorPosY(ImGui::GetCursorPosY() + (bigFont_ ? 2 : 6));
-    ImGui::TextUnformatted("LUMEN");
+    ImGui::TextUnformatted(T("LUMEN"));
     if (bigFont_) ImGui::PopFont();
     ImGui::SameLine(0, 18);
     ImGui::SetCursorPosY(2 + ImGui::GetStyle().WindowPadding.y);
   }
 
   pushPrimary();
-  if (ImGui::Button("GO", {84, 30})) e.go();
+  if (ImGui::Button(T("GO"), {84, 30})) e.go();
   popPrimary();
-  ImGui::SetItemTooltip("Dispara a próxima coluna (Espaço)");
+  ImGui::SetItemTooltip("%s", T("Dispara a próxima coluna (Espaço)"));
   ImGui::SameLine();
   if (ImGui::Button("<", {30, 30})) e.back();
-  ImGui::SetItemTooltip("Coluna anterior (Shift+Espaço)");
+  ImGui::SetItemTooltip("%s", T("Coluna anterior (Shift+Espaço)"));
   ImGui::SameLine();
-  if (ImGui::Button("Parar", {60, 30})) e.stopAll();
-  ImGui::SetItemTooltip("Para tudo com fade (Esc)");
+  if (ImGui::Button(T("Parar"), {60, 30})) e.stopAll();
+  ImGui::SetItemTooltip("%s", T("Para tudo com fade (Esc)"));
   ImGui::SameLine();
   if (e.blackout) {
     ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.75f, 0.15f, 0.15f, 1));
     ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.9f, 0.2f, 0.2f, 1));
   }
-  if (ImGui::Button("Blackout", {80, 30})) e.blackout = !e.blackout;
+  if (ImGui::Button(T("Blackout"), {80, 30})) e.blackout = !e.blackout;
   if (e.blackout) ImGui::PopStyleColor(2);
-  ImGui::SetItemTooltip("Escurece todas as saídas (B)");
+  ImGui::SetItemTooltip("%s", T("Escurece todas as saídas (B)"));
   ImGui::SameLine();
   bool open = app.outputsOpen;
   if (open) pushPrimary();
-  if (ImGui::Button(open ? "Fechar saídas" : "Abrir saídas", {110, 30})) app.outputsOpen = !open;
+  if (ImGui::Button(open ? T("Fechar saídas") : T("Abrir saídas"), {110, 30})) app.outputsOpen = !open;
   if (open) popPrimary();
   ImGui::SameLine();
-  if (ImGui::Button("Saídas...", {80, 30})) openOutputs();
-  ImGui::SetItemTooltip("Layout dos projetores, telas, soft edge e mapping de cada saída");
-  ImGui::SetItemTooltip("Abre/fecha as janelas dos projetores (Ctrl+P). O workspace mostra a prévia mesmo fechadas.");
+  if (ImGui::Button(T("Saídas..."), {80, 30})) openOutputs();
+  ImGui::SetItemTooltip("%s", T("Layout dos projetores, telas, soft edge e mapping de cada saída"));
+  ImGui::SetItemTooltip("%s", T("Abre/fecha as janelas dos projetores (Ctrl+P). O workspace mostra a prévia mesmo fechadas."));
+  ImGui::SameLine();
+  bool lk = app.showLocked;
+  if (lk) pushPrimary();
+  if (ImGui::Button(lk ? T("SHOW") : T("Editar"), {64, 30})) app.showLocked = !lk;
+  if (lk) popPrimary();
+  ImGui::SetItemTooltip("%s", lk ? T("Modo show: edição travada. Clique (ou Ctrl+Shift+L) para editar.")
+                           : T("Travar a edição para o show (Ctrl+Shift+L). GO, parar, blackout e masters continuam."));
 
   ImGui::SameLine(0, 16);
   ImGui::SetNextItemWidth(100);
   ImGui::SetCursorPosY(ImGui::GetCursorPosY() + 5);
-  ImGui::SliderFloat("Master", &e.masterOpacity, 0, 1, "%.2f");
+  ImGui::SliderFloat(T("Master"), &e.masterOpacity, 0, 1, "%.2f");
 
   ImGui::SameLine(0, 14);
   ImGui::SetNextItemWidth(80);
-  if (ImGui::DragFloat("Fade padrão", &e.project.defaultTransition, 0.05f, 0, 30, "%.2f s"))
+  ImGui::BeginDisabled(app.showLocked);
+  if (ImGui::DragFloat(T("Fade padrão"), &e.project.defaultTransition, 0.05f, 0, 30, "%.2f s"))
     app.edited();
+  ImGui::EndDisabled();
 
+  bool anyManual = std::any_of(e.project.columns.begin(), e.project.columns.end(),
+                               [](const Column &c) { return c.manualTransition; });
+  if (anyManual) {
+    ImGui::SameLine(0, 14);
+    ImGui::SetNextItemWidth(90);
+    ImGui::SetCursorPosY(ImGui::GetCursorPosY() + 5);
+    bool waiting = e.manualTransitionActive() && !e.manualTransitionArmed();
+    if (e.manualTransitionActive()) ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.35f, 0.27f, 0.0f, 1));
+    ImGui::SliderFloat("##tfader", &e.transitionFader, 0, 1, waiting ? T("abaixe") : "%.2f");
+    if (e.manualTransitionActive()) ImGui::PopStyleColor();
+    ImGui::SetItemTooltip("%s", T("Fader de transição manual. Leve a 0 para assumir a transição e suba até 1."));
+  }
   ImGui::SameLine(0, 16);
-  const char *tools[] = {"Selecionar", "Perspectiva", "Malha", "Máscara", "LED"};
+  const char *tools[] = {T("Selecionar"), T("Perspectiva"), T("Malha"), T("Máscara"), T("LED")};
   const char *keys[] = {"V", "M", "G", "K", "L"};
   ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, {3, 6});
+  ImGui::BeginDisabled(app.showLocked);
   for (int i = 0; i < 5; ++i) {
     bool active = int(workspace.tool) == i;
     if (active) pushPrimary();
     if (ImGui::Button(tools[i], {0, 30})) workspace.tool = Tool(i);
     if (active) popPrimary();
-    ImGui::SetItemTooltip("Tecla %s", keys[i]);
+    ImGui::SetItemTooltip(T("Tecla %s"), keys[i]);
     ImGui::SameLine();
   }
+  ImGui::EndDisabled();
   ImGui::PopStyleVar();
 
   ImGui::SameLine(0, 20);
   ImGui::SetCursorPosY(ImGui::GetCursorPosY() + 6);
   int col = e.activeColumn();
   if (col >= 0 && col < int(e.project.columns.size()))
-    ImGui::TextColored(kAccent, "No ar: %d · %s", col + 1, e.project.columns[size_t(col)].name.c_str());
+    ImGui::TextColored(kAccent, T("No ar: %d · %s"), col + 1, e.project.columns[size_t(col)].name.c_str());
   else
-    ImGui::TextDisabled("Nada no ar");
+    ImGui::TextDisabled("%s", T("Nada no ar"));
 }
 
 void Ui::library(App &app) {
   Project &p = app.engine.project;
-  if (ImGui::Button("Importar...")) app.importDialog();
+  if (ImGui::Button(T("Importar..."))) app.importDialog();
   ImGui::SameLine();
-  if (ImGui::Button("+ Gerador")) ImGui::OpenPopup("gen");
+  if (ImGui::Button(T("+ Gerador"))) ImGui::OpenPopup("gen");
   if (ImGui::BeginPopup("gen")) {
     for (int k = 0; k < int(GeneratorKind::COUNT); ++k)
       if (ImGui::MenuItem(generatorName(GeneratorKind(k)))) {
@@ -526,7 +643,15 @@ void Ui::library(App &app) {
         app.sel.inspector = Inspector::Media;
         app.edited();
       }
-    ImGui::SeparatorText("Shaders ISF");
+    ImGui::SeparatorText(T("Texto"));
+    if (ImGui::MenuItem(T("Texto (dinâmico)"))) {
+      MediaItem &m = p.addText(T("Texto"));
+      app.sel.mediaId = m.id;
+      app.sel.inspector = Inspector::Media;
+      app.edited();
+    }
+    ImGui::SetItemTooltip("%s", T("Texto que muda por OSC (/layer:Nome/text \"...\") ou lido de um arquivo .txt"));
+    ImGui::SeparatorText(T("Shaders ISF"));
     for (auto &e : app.engine.isfCatalog.builtins()) {
       if (e.info.filter || e.info.transition) continue;
       if (ImGui::MenuItem(e.name.c_str())) {
@@ -537,7 +662,7 @@ void Ui::library(App &app) {
       }
       if (!e.info.description.empty()) ImGui::SetItemTooltip("%s", e.info.description.c_str());
     }
-    if (ImGui::MenuItem("Abrir arquivo .fs...")) {
+    if (ImGui::MenuItem(T("Abrir arquivo .fs..."))) {
       auto files = platform::openFileDialog("Shader ISF", "ISF|*.fs|Todos|*.*", false);
       if (!files.empty()) {
         MediaItem &m = p.addShader(files[0]);
@@ -549,7 +674,7 @@ void Ui::library(App &app) {
     ImGui::EndPopup();
   }
   ImGui::SameLine();
-  if (ImGui::Button("+ Ao vivo")) {
+  if (ImGui::Button(T("+ Ao vivo"))) {
     captureDevices_ = listCaptureDevices();
     spoutSenders_ = spoutSenders();
     ImGui::OpenPopup("live");
@@ -561,42 +686,59 @@ void Ui::library(App &app) {
       app.edited();
       ImGui::CloseCurrentPopup();
     };
-    ImGui::SeparatorText("Câmeras e placas de captura");
+    ImGui::SeparatorText(T("Câmeras e placas de captura"));
 #ifdef __APPLE__
     // FFmpeg cannot list AVFoundation devices: offer the usual indexes.
-    if (ImGui::MenuItem("Câmera 1 do Mac (AVFoundation)")) add(p.addLive("Câmera 1", "0", "avfoundation", "framerate=30"));
-    if (ImGui::MenuItem("Câmera 2 do Mac (AVFoundation)")) add(p.addLive("Câmera 2", "1", "avfoundation", "framerate=30"));
+    if (ImGui::MenuItem(T("Câmera 1 do Mac (AVFoundation)"))) add(p.addLive(T("Câmera 1"), "0", "avfoundation", "framerate=30"));
+    if (ImGui::MenuItem(T("Câmera 2 do Mac (AVFoundation)"))) add(p.addLive(T("Câmera 2"), "1", "avfoundation", "framerate=30"));
 #endif
-    if (captureDevices_.empty()) ImGui::TextDisabled("Nenhum dispositivo encontrado");
+    if (captureDevices_.empty()) ImGui::TextDisabled("%s", T("Nenhum dispositivo encontrado"));
     for (auto &d : captureDevices_)
       if (ImGui::MenuItem(d.name.c_str())) add(p.addLive(d.name, d.url, d.format, ""));
-    if (ImGui::SmallButton("Procurar de novo")) captureDevices_ = listCaptureDevices();
-    ImGui::SeparatorText("Stream de rede");
+    if (ImGui::SmallButton(T("Procurar de novo"))) captureDevices_ = listCaptureDevices();
+    ImGui::SeparatorText(T("Stream de rede"));
     ImGui::SetNextItemWidth(300);
     ImGui::InputTextWithHint("##url", "rtsp://, srt://, udp://, http://...", liveUrl_, sizeof(liveUrl_));
     ImGui::SameLine();
-    if (ImGui::Button("Adicionar") && liveUrl_[0]) add(p.addLive("", liveUrl_, "", ""));
-    ImGui::SeparatorText("Spout (Windows)");
-    if (!spoutAvailable()) ImGui::TextDisabled("Disponível só no Windows (no Mac o equivalente é o Syphon)");
+    if (ImGui::Button(T("Adicionar")) && liveUrl_[0]) add(p.addLive("", liveUrl_, "", ""));
+    ImGui::SeparatorText(T("NDI (rede)"));
+    if (!ndiAvailable()) {
+      ImGui::TextDisabled("%s", ndiStatus().c_str());
+    } else {
+      auto srcs = ndiSources();
+      if (srcs.empty()) ImGui::TextDisabled("%s", T("Procurando fontes NDI na rede..."));
+      for (auto &n : srcs)
+        if (ImGui::MenuItem(n.c_str())) add(p.addNdi(n));
+    }
+    ImGui::SeparatorText(T("Spout (Windows)"));
+    if (!spoutAvailable()) ImGui::TextDisabled("%s", T("Disponível só no Windows (no Mac o equivalente é o Syphon)"));
     else {
-      if (ImGui::MenuItem("Sender ativo (qualquer um)")) add(p.addSpout(""));
+      if (ImGui::MenuItem(T("Sender ativo (qualquer um)"))) add(p.addSpout(""));
       for (auto &n : spoutSenders_)
         if (ImGui::MenuItem(n.c_str())) add(p.addSpout(n));
     }
-    ImGui::SeparatorText("Canvas (video routing)");
+    ImGui::SeparatorText(T("Canvas (video routing)"));
     for (int c : p.canvasIds()) {
       char label[160];
-      std::snprintf(label, sizeof(label), "%s (%d×%d)##cvm%d", p.canvasLabel(c).c_str(), p.canvasWidth(c), p.canvasHeight(c), c);
+      std::snprintf(label, sizeof(label), T("%s (%d×%d)##cvm%d"), p.canvasLabel(c).c_str(), p.canvasWidth(c), p.canvasHeight(c), c);
       if (ImGui::MenuItem(label)) add(p.addCanvasMedia(c));
     }
-    ImGui::TextDisabled("Mostra um canvas dentro de outro (posição, escala e mapping da layer).");
-    ImGui::SeparatorText("Teste");
-    if (ImGui::MenuItem("Sinal de teste ao vivo (lavfi)"))
-      add(p.addLive("Sinal de teste", "testsrc2=size=1280x720:rate=30", "lavfi", ""));
+    ImGui::TextDisabled("%s", T("Mostra um canvas dentro de outro (posição, escala e mapping da layer)."));
+    ImGui::SeparatorText(T("Teste"));
+    if (ImGui::MenuItem(T("Sinal de teste ao vivo (lavfi)")))
+      add(p.addLive(T("Sinal de teste"), T("testsrc2=size=1280x720:rate=30"), "lavfi", ""));
     ImGui::EndPopup();
   }
+  if (int missing = app.missingMedia()) {
+    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.55f, 0.12f, 0.12f, 1));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.7f, 0.16f, 0.16f, 1));
+    char label[64];
+    std::snprintf(label, sizeof(label), T("%d mídia(s) ausente(s): procurar..."), missing);
+    if (ImGui::Button(label, {-1, 0})) relinkDialog(app);
+    ImGui::PopStyleColor(2);
+  }
   ImGui::SetNextItemWidth(-1);
-  ImGui::InputTextWithHint("##filter", "Buscar mídia...", filterText_, sizeof(filterText_));
+  ImGui::InputTextWithHint("##filter", T("Buscar mídia..."), filterText_, sizeof(filterText_));
   ImGui::Separator();
 
   ImGui::BeginChild("##items");
@@ -621,7 +763,7 @@ void Ui::library(App &app) {
       ImGui::EndDragDropSource();
     }
     if (ImGui::BeginPopupContextItem()) {
-      if (ImGui::MenuItem("Remover da biblioteca")) removeId = m.id;
+      if (ImGui::MenuItem(T("Remover da biblioteca"))) removeId = m.id;
       ImGui::EndPopup();
     }
     const Texture *thumb = app.engine.cache.thumbnail(m, app.engine.generators, app.engine.mesh);
@@ -631,16 +773,22 @@ void Ui::library(App &app) {
     if (m.type == MediaType::Canvas) // live picture of the canvas (bottom-up texture)
       dl->AddImageRounded(texId(app.engine.canvasTexture(m.canvasRef)), tl, br, {0, 1}, {1, 0}, IM_COL32_WHITE, 5);
     else if (thumb && !thumb->empty()) dl->AddImageRounded(texId(*thumb), tl, br, {0, 0}, {1, 1}, IM_COL32_WHITE, 5);
-    else if (m.type == MediaType::Live || m.type == MediaType::Spout)
-      dl->AddText({tl.x + 6, tl.y + 14}, IM_COL32(150, 150, 150, 255), "parado");
-    else dl->AddText({tl.x + 6, tl.y + 14}, IM_COL32(200, 80, 80, 255), "erro");
+    else if (m.type == MediaType::Live || m.type == MediaType::Spout || m.type == MediaType::NDI)
+      dl->AddText({tl.x + 6, tl.y + 14}, IM_COL32(150, 150, 150, 255), T("parado"));
+    else dl->AddText({tl.x + 6, tl.y + 14}, IM_COL32(200, 80, 80, 255), T("erro"));
     dl->AddText({start.x + 86, start.y + 6}, IM_COL32(230, 230, 230, 255), m.name.c_str());
-    dl->AddText({start.x + 86, start.y + 25}, IM_COL32(140, 140, 140, 255), mediaTypeLabel(m.type));
+    if (app.mediaMissing(m)) {
+      dl->AddRect(tl, br, IM_COL32(230, 60, 60, 255), 5, 0, 2);
+      dl->AddText({start.x + 86, start.y + 25}, IM_COL32(230, 90, 90, 255), T("arquivo não encontrado"));
+      ImGui::SetItemTooltip(T("%s\nUse Arquivo > Procurar mídias ausentes ou troque o arquivo nas propriedades."), m.path.c_str());
+    } else {
+      dl->AddText({start.x + 86, start.y + 25}, IM_COL32(140, 140, 140, 255), mediaTypeLabel(m.type));
+    }
     ImGui::PopID();
   }
   if (p.library.empty())
-    ImGui::TextWrapped("Arraste vídeos ou imagens para esta janela, ou clique em Importar. "
-                       "Geradores (test card, grade...) ajudam a alinhar projetores.");
+    ImGui::TextWrapped("%s", T("Arraste vídeos ou imagens para esta janela, ou clique em Importar. "
+                       "Geradores (test card, grade...) ajudam a alinhar projetores."));
   ImGui::EndChild();
 
   if (removeId >= 0) {
@@ -654,23 +802,26 @@ void Ui::library(App &app) {
 void Ui::dashboard(App &app) {
   Engine &e = app.engine;
   Project &p = e.project;
+  const bool locked = app.showLocked; // show mode: launching only, no editing
 
-  if (ImGui::Button("+ Layer")) {
+  ImGui::BeginDisabled(locked);
+  if (ImGui::Button(T("+ Layer"))) {
     Layer &l = p.addLayer("", workspace.viewCanvas);
     app.sel.layerId = l.id;
     app.sel.slice = 0;
     app.edited();
   }
   ImGui::SameLine();
-  if (ImGui::Button("+ Coluna")) {
+  if (ImGui::Button(T("+ Coluna"))) {
     p.addColumn();
     app.edited();
   }
+  ImGui::EndDisabled();
   ImGui::SameLine();
-  ImGui::TextDisabled("Arraste mídias para as células. Clique numa célula para disparar.");
+  ImGui::TextDisabled("%s", T("Arraste mídias para as células. Clique numa célula para disparar."));
   ImGui::SameLine(std::max(ImGui::GetCursorPosX() + 10, ImGui::GetWindowWidth() - 150));
   ImGui::SetNextItemWidth(130);
-  ImGui::Combo("##zoom", &dashZoom_, "pequeno\0médio\0grande\0");
+  ImGui::Combo("##zoom", &dashZoom_, TZ("pequeno\0médio\0grande\0"));
 
   const float zw[] = {86, 116, 160}, zh[] = {50, 74, 104};
   const float cellW = zw[std::clamp(dashZoom_, 0, 2)], cellH = zh[std::clamp(dashZoom_, 0, 2)], nameW = 150;
@@ -687,7 +838,7 @@ void Ui::dashboard(App &app) {
   // Header row: one launch button per column.
   ImGui::TableNextRow(ImGuiTableRowFlags_Headers);
   ImGui::TableSetColumnIndex(0);
-  ImGui::TextDisabled("Layers \\ Cues");
+  ImGui::TextDisabled("%s", T("Layers \\ Cues"));
   int removeColumn = -1, moveColumn = -1, moveDir = 0;
   for (int c = 0; c < ncols; ++c) {
     ImGui::TableSetColumnIndex(c + 1);
@@ -696,7 +847,7 @@ void Ui::dashboard(App &app) {
     bool active = e.activeColumn() == c;
     if (active) pushPrimary();
     char label[96];
-    std::snprintf(label, sizeof(label), "%02d  \xe2\x96\xb6  %s", c + 1, colRef.name.c_str()); // ▶
+    std::snprintf(label, sizeof(label), T("%02d  \xe2\x96\xb6  %s"), c + 1, colRef.name.c_str()); // ▶
     if (ImGui::Button(label, {cellW - 4, 0})) e.launchColumn(c);
     if (active) popPrimary();
     if (colRef.color[0] > 0 || colRef.color[1] > 0 || colRef.color[2] > 0) {
@@ -709,79 +860,183 @@ void Ui::dashboard(App &app) {
     {
       float dur = colRef.transition < 0 ? p.defaultTransition : colRef.transition;
       char tl[64];
-      if (colRef.transitionType == TransitionType::Cut || dur <= 0) std::snprintf(tl, sizeof(tl), "corte");
-      else std::snprintf(tl, sizeof(tl), "%s %.1fs", colRef.transitionType == TransitionType::ThroughBlack ? "pelo preto" : "crossfade", dur);
+      if (colRef.transitionType == TransitionType::Cut || dur <= 0) std::snprintf(tl, sizeof(tl), "%s", T("corte"));
+      else std::snprintf(tl, sizeof(tl), T("%s %.1fs"), colRef.transitionType == TransitionType::ThroughBlack ? T("pelo preto") : T("crossfade"), dur);
       // Auto-go: countdown on the live column, wait time on the others.
       if (colRef.autoGo >= 0) {
         size_t n = std::strlen(tl);
         float left = active ? e.autoGoRemaining() : -1;
-        if (left >= 0) std::snprintf(tl + n, sizeof(tl) - n, "  \xe2\x8f\xb1%.1f", left); // ⏱
-        else std::snprintf(tl + n, sizeof(tl) - n, "  \xe2\x8f\xb1%.0fs", colRef.autoGo);
+        if (left >= 0) std::snprintf(tl + n, sizeof(tl) - n, T("  \xe2\x8f\xb1%.1f"), left); // ⏱
+        else std::snprintf(tl + n, sizeof(tl) - n, T("  \xe2\x8f\xb1%.0fs"), colRef.autoGo);
       }
       ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
       ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
-      if (ImGui::SmallButton(tl)) ImGui::OpenPopup("colpop");
+      if (ImGui::SmallButton(tl) && !locked) ImGui::OpenPopup("colpop");
       ImGui::PopStyleColor(2);
     }
-    bool popupOpen = ImGui::BeginPopup("colpop");
-    if (!popupOpen) popupOpen = ImGui::BeginPopupContextItem("colpop");
+    bool popupOpen = !locked && ImGui::BeginPopup("colpop");
+    if (!popupOpen && !locked) popupOpen = ImGui::BeginPopupContextItem("colpop");
     if (popupOpen) {
-      ImGui::SeparatorText("Coluna");
+      ImGui::SeparatorText(T("Coluna"));
       ImGui::SetNextItemWidth(220);
-      if (inputText("Título", colRef.name)) app.edited();
+      if (inputText(T("Título"), colRef.name)) app.edited();
       {
         char notes[1024];
         std::snprintf(notes, sizeof(notes), "%s", colRef.notes.c_str());
-        if (ImGui::InputTextMultiline("Notas", notes, sizeof(notes), {220, 54})) {
+        if (ImGui::InputTextMultiline(T("Notas"), notes, sizeof(notes), {220, 54})) {
           colRef.notes = notes;
           app.edited();
         }
       }
-      ImGui::SeparatorText("Transição");
+      ImGui::SeparatorText(T("Transição"));
       int tt = int(colRef.transitionType);
       ImGui::SetNextItemWidth(160);
-      if (ImGui::Combo("Tipo", &tt, "Crossfade\0Corte (sem transição)\0Fade pelo preto\0")) {
+      if (ImGui::Combo(T("Tipo"), &tt, TZ("Crossfade\0Corte (sem transição)\0Fade pelo preto\0Shader (ISF)\0"))) {
         colRef.transitionType = TransitionType(tt);
+        if (colRef.transitionType == TransitionType::Shader && colRef.transitionShader.empty())
+          for (auto &x : e.isfCatalog.builtins())
+            if (x.info.transition) { colRef.transitionShader = x.path; break; }
         app.edited();
+      }
+      if (colRef.transitionType == TransitionType::Shader) {
+        std::string cur = colRef.transitionShader.empty() ? T("(escolha)") : platform::toUtf8(platform::toPath(colRef.transitionShader).stem());
+        if (cur.rfind("T_", 0) == 0) cur = cur.substr(2);
+        ImGui::SetNextItemWidth(160);
+        if (ImGui::BeginCombo(T("Shader"), cur.c_str())) {
+          for (auto &x : e.isfCatalog.builtins()) {
+            if (!x.info.transition) continue;
+            std::string n = x.name.rfind("T_", 0) == 0 ? x.name.substr(2) : x.name;
+            if (ImGui::Selectable(n.c_str(), x.path == colRef.transitionShader)) { colRef.transitionShader = x.path; app.edited(); }
+            if (!x.info.description.empty()) ImGui::SetItemTooltip("%s", x.info.description.c_str());
+          }
+          if (ImGui::Selectable(T("Abrir arquivo .fs..."))) {
+            auto files = platform::openFileDialog("Transição ISF", "ISF|*.fs|Todos|*.*", false);
+            if (!files.empty()) { colRef.transitionShader = files[0]; app.edited(); }
+          }
+          ImGui::EndCombo();
+        }
+      }
+      if (ImGui::Checkbox(T("Manual (fader)"), &colRef.manualTransition)) app.edited();
+      helpMarker(T("A transição anda com o fader de transição (barra de cima, MIDI ou OSC "
+                 "/lumen/transition). Para assumir, leve o fader a 0 e depois suba até 1."));
+      {
+        const MediaItem *sm = p.media(colRef.stingerMediaId);
+        ImGui::SetNextItemWidth(160);
+        if (ImGui::BeginCombo(T("Stinger"), sm ? sm->name.c_str() : T("(nenhum)"))) {
+          if (ImGui::Selectable(T("(nenhum)"), !sm)) { colRef.stingerMediaId = -1; app.edited(); }
+          for (auto &m : p.library)
+            if (m.type == MediaType::Video && ImGui::Selectable(m.name.c_str(), m.id == colRef.stingerMediaId)) {
+              colRef.stingerMediaId = m.id;
+              app.edited();
+            }
+          ImGui::EndCombo();
+        }
+        helpMarker(T("Vídeo (com transparência, ex. HAP Alpha ou ProRes 4444) tocado por cima de tudo; "
+                   "o cue troca com um corte no meio dele, escondido pela animação."));
+        if (sm) {
+          ImGui::SetNextItemWidth(160);
+          if (ImGui::SliderFloat(T("Troca em"), &colRef.stingerCut, 0, 1, T("%.2f do vídeo"))) app.edited();
+        }
       }
       float &tr = colRef.transition;
       bool custom = tr >= 0;
-      if (ImGui::Checkbox("Duração própria", &custom)) {
+      if (ImGui::Checkbox(T("Duração própria"), &custom)) {
         tr = custom ? p.defaultTransition : -1;
         app.edited();
       }
       if (custom) {
         ImGui::SetNextItemWidth(160);
-        if (ImGui::DragFloat("Duração (s)", &tr, 0.05f, 0, 60, "%.2f s")) app.edited();
+        if (ImGui::DragFloat(T("Duração (s)"), &tr, 0.05f, 0, 60, "%.2f s")) app.edited();
       } else {
         ImGui::SameLine();
-        ImGui::TextDisabled("(padrão %.2f s)", p.defaultTransition);
+        ImGui::TextDisabled(T("(padrão %.2f s)"), p.defaultTransition);
       }
-      ImGui::SeparatorText("Auto-GO");
+      ImGui::SeparatorText(T("Auto-GO"));
       {
         bool on = colRef.autoGo >= 0;
-        if (ImGui::Checkbox("Disparar outra coluna sozinho", &on)) {
+        if (ImGui::Checkbox(T("Disparar outra coluna sozinho"), &on)) {
           colRef.autoGo = on ? 10.0f : -1.0f;
           app.edited();
         }
-        helpMarker("Para instalações: depois do tempo de espera, dispara a próxima coluna "
-                   "(na última, volta para a primeira) ou uma coluna escolhida.");
+        helpMarker(T("Para instalações: depois do tempo de espera, dispara a próxima coluna "
+                   "(na última, volta para a primeira) ou uma coluna escolhida."));
         if (on) {
           ImGui::SetNextItemWidth(160);
-          if (ImGui::DragFloat("Espera (s)", &colRef.autoGo, 0.1f, 0, 36000, "%.1f s")) app.edited();
-          if (ImGui::Checkbox("Contar depois da transição", &colRef.autoGoAfterTransition)) app.edited();
+          if (ImGui::DragFloat(T("Espera (s)"), &colRef.autoGo, 0.1f, 0, 36000, "%.1f s")) app.edited();
+          if (ImGui::Checkbox(T("Contar depois da transição"), &colRef.autoGoAfterTransition)) app.edited();
           ImGui::SetNextItemWidth(160);
-          if (ImGui::InputInt("Coluna (0 = próxima)", &colRef.autoGoTarget)) {
+          if (ImGui::InputInt(T("Coluna (0 = próxima)"), &colRef.autoGoTarget)) {
             colRef.autoGoTarget = std::clamp(colRef.autoGoTarget, 0, ncols);
             app.edited();
           }
         }
       }
-      ImGui::SeparatorText("Estados (animar parâmetros)");
+      ImGui::SeparatorText(T("Timeline"));
       {
-        helpMarker("Grava o valor atual de parâmetros de uma layer nesta coluna. Ao disparar a "
+        const Timeline *tl = p.timeline(colRef.timelineId);
+        ImGui::SetNextItemWidth(180);
+        if (ImGui::BeginCombo(T("Ao disparar, tocar"), tl ? tl->name.c_str() : T("(nenhuma)"))) {
+          if (ImGui::Selectable(T("(nenhuma)"), !tl)) { colRef.timelineId = -1; app.edited(); }
+          for (auto &t : p.timelines)
+            if (ImGui::Selectable(t.name.c_str(), t.id == colRef.timelineId)) { colRef.timelineId = t.id; app.edited(); }
+          if (ImGui::Selectable(T("+ Nova timeline"))) {
+            Timeline &t = p.addTimeline();
+            colRef.timelineId = t.id;
+            showTimeline(t.id);
+            app.edited();
+          }
+          ImGui::EndCombo();
+        }
+        helpMarker(T("A timeline começa quando a coluna é disparada e para quando outra coluna "
+                   "(sem ela) entra. Se a próxima coluna usa a mesma timeline, ela continua."));
+      }
+      ImGui::SeparatorText(T("Comandos para equipamentos"));
+      {
+        std::string text;
+        for (auto &line : colRef.commands) text += line + "\n";
+        char buf[2048];
+        std::snprintf(buf, sizeof(buf), "%s", text.c_str());
+        if (ImGui::InputTextMultiline("##cmds", buf, sizeof(buf), {320, 70})) {
+          colRef.commands.clear();
+          std::string cur;
+          for (const char *q = buf; *q; ++q) {
+            if (*q == '\n') { if (!cur.empty()) colRef.commands.push_back(cur); cur.clear(); }
+            else cur += *q;
+          }
+          if (!cur.empty()) colRef.commands.push_back(cur);
+          app.edited();
+        }
+        ImGui::TextDisabled("%s", T("Ex.: pjlink Sala power on · wait 2 · midi note 1 60 127 · dmx 0 5 255"));
+        helpMarker(T("Um por linha, em ordem. Veja docs/DISPOSITIVOS.md:\n"
+                   "pjlink <projetor> power on|off, shutter close|open, input 31\n"
+                   "midi note|noteoff|cc|pc <canal> ...  (midi@nome para escolher a porta)\n"
+                   "dmx [artnet|sacn] <universo> <canal>[-<último>] <valor>\n"
+                   "tcp|udp <ip>:<porta> <texto>   serial COM3@9600 <texto>\n"
+                   "osc <ip>:<porta> /endereco args   wait <segundos>"));
+      }
+      ImGui::SeparatorText(T("Timecode"));
+      {
+        bool on = colRef.timecodeCue >= 0;
+        if (ImGui::Checkbox(T("Disparar no timecode"), &on)) { colRef.timecodeCue = on ? 0.0f : -1.0f; app.edited(); }
+        if (on) {
+          int hmsf[4];
+          float t = colRef.timecodeCue;
+          hmsf[0] = int(t / 3600); hmsf[1] = int(std::fmod(t, 3600) / 60); hmsf[2] = int(std::fmod(t, 60));
+          hmsf[3] = int(std::lround((t - std::floor(t)) * 25.0f));
+          ImGui::SetNextItemWidth(180);
+          if (ImGui::InputInt4(T("hh mm ss qq"), hmsf)) {
+            colRef.timecodeCue = float(std::max(0, hmsf[0]) * 3600 + std::clamp(hmsf[1], 0, 59) * 60 + std::clamp(hmsf[2], 0, 59)) +
+                                 float(std::clamp(hmsf[3], 0, 29)) / 25.0f;
+            app.edited();
+          }
+          helpMarker(T("A coluna dispara quando o timecode recebido (MTC ou LTC, em Interação) passa por este valor."));
+        }
+      }
+      ImGui::SeparatorText(T("Estados (animar parâmetros)"));
+      {
+        helpMarker(T("Grava o valor atual de parâmetros de uma layer nesta coluna. Ao disparar a "
                    "coluna, eles vão até esse valor durante a transição. Colunas sem valor "
-                   "herdam o da coluna anterior.");
+                   "herdam o da coluna anterior."));
         Layer *sl = p.layer(app.sel.layerId);
         static const MappingTarget recordable[] = {
             MappingTarget::Opacity,    MappingTarget::PositionX,  MappingTarget::PositionY,
@@ -789,22 +1044,22 @@ void Ui::dashboard(App &app) {
             MappingTarget::Contrast,   MappingTarget::Saturation, MappingTarget::Hue,
             MappingTarget::Volume};
         if (sl) {
-          ImGui::Text("Layer selecionada: %s", sl->name.c_str());
-          if (ImGui::Button("Gravar opacidade + transformação")) {
+          ImGui::Text(T("Layer selecionada: %s"), sl->name.c_str());
+          if (ImGui::Button(T("Gravar opacidade + transformação"))) {
             for (auto t : {MappingTarget::Opacity, MappingTarget::PositionX, MappingTarget::PositionY,
                            MappingTarget::Scale, MappingTarget::Rotation})
               e.storeState(c, sl->id, t);
             app.edited();
           }
           ImGui::SameLine();
-          if (ImGui::Button("Gravar...")) ImGui::OpenPopup("statepick");
+          if (ImGui::Button(T("Gravar..."))) ImGui::OpenPopup("statepick");
           if (ImGui::BeginPopup("statepick")) {
             for (auto t : recordable)
               if (ImGui::MenuItem(mappingTargetName(t))) { e.storeState(c, sl->id, t); app.edited(); }
             ImGui::EndPopup();
           }
         } else {
-          ImGui::TextDisabled("Selecione uma layer para gravar estados.");
+          ImGui::TextDisabled("%s", T("Selecione uma layer para gravar estados."));
         }
         int removeState = -1;
         for (size_t si = 0; si < colRef.states.size(); ++si) {
@@ -824,11 +1079,11 @@ void Ui::dashboard(App &app) {
           app.edited();
         }
       }
-      ImGui::SeparatorText("Organizar");
-      if (ImGui::ColorEdit3("Cor", colRef.color, ImGuiColorEditFlags_NoInputs)) app.edited();
-      if (ImGui::MenuItem("Mover para a esquerda", nullptr, false, c > 0)) { moveColumn = c; moveDir = -1; }
-      if (ImGui::MenuItem("Mover para a direita", nullptr, false, c + 1 < ncols)) { moveColumn = c; moveDir = 1; }
-      ImGui::SeparatorText("Ações OSC ao disparar");
+      ImGui::SeparatorText(T("Organizar"));
+      if (ImGui::ColorEdit3(T("Cor"), colRef.color, ImGuiColorEditFlags_NoInputs)) app.edited();
+      if (ImGui::MenuItem(T("Mover para a esquerda"), nullptr, false, c > 0)) { moveColumn = c; moveDir = -1; }
+      if (ImGui::MenuItem(T("Mover para a direita"), nullptr, false, c + 1 < ncols)) { moveColumn = c; moveDir = 1; }
+      ImGui::SeparatorText(T("Ações OSC ao disparar"));
       {
         std::string text;
         for (auto &line : p.columns[size_t(c)].oscActions) text += line + "\n";
@@ -845,9 +1100,9 @@ void Ui::dashboard(App &app) {
           if (!cur.empty()) acts.push_back(cur);
           app.edited();
         }
-        ImGui::TextDisabled("Uma por linha, ex.: /luz/cena 3   (vai para as saídas OSC)");
+        ImGui::TextDisabled("%s", T("Uma por linha, ex.: /luz/cena 3   (vai para as saídas OSC)"));
       }
-      if (ImGui::MenuItem("Remover coluna")) removeColumn = c;
+      if (ImGui::MenuItem(T("Remover coluna"))) removeColumn = c;
       ImGui::EndPopup();
     }
     ImGui::PopID();
@@ -855,7 +1110,7 @@ void Ui::dashboard(App &app) {
   // Stop column: stops everything, and per layer below.
   ImGui::TableSetColumnIndex(ncols + 1);
   if (ImGui::Button("\xe2\x96\xa0##stopall", {32, 0})) e.stopAll(); // ■
-  ImGui::SetItemTooltip("Parar tudo (Esc)");
+  ImGui::SetItemTooltip("%s", T("Parar tudo (Esc)"));
 
   int removeLayer = -1, moveLayer = -1, moveLayerDir = 0;
   for (size_t li = 0; li < p.layers.size(); ++li) {
@@ -865,22 +1120,22 @@ void Ui::dashboard(App &app) {
     ImGui::PushID(l.id);
     bool selected = app.sel.layerId == l.id;
     if (ImGui::Checkbox("##vis", &l.visible)) app.edited();
-    ImGui::SetItemTooltip("Visível");
+    ImGui::SetItemTooltip("%s", T("Visível"));
     ImGui::SameLine();
-    std::string rowName = p.canvases.empty() ? l.name : l.name + "  \xc2\xb7 " + p.canvasLabel(l.canvasId); // ·
+    std::string rowName = p.canvases.empty() ? l.name : l.name + T("  \xc2\xb7 ") + p.canvasLabel(l.canvasId); // ·
     if (ImGui::Selectable(rowName.c_str(), selected, 0, {nameW - 36, 0})) {
       app.sel.layerId = l.id;
       app.sel.slice = 0;
       app.sel.inspector = Inspector::Layer;
       if (workspace.viewOutputId < 0) workspace.viewCanvas = l.canvasId;
     }
-    if (ImGui::BeginPopupContextItem()) {
+    if (!locked && ImGui::BeginPopupContextItem()) {
       ImGui::SetNextItemWidth(160);
-      if (inputText("Nome", l.name)) app.edited();
-      if (ImGui::MenuItem("Subir", nullptr, false, li > 0)) { moveLayer = int(li); moveLayerDir = -1; }
-      if (ImGui::MenuItem("Descer", nullptr, false, li + 1 < p.layers.size())) { moveLayer = int(li); moveLayerDir = 1; }
-      if (ImGui::MenuItem("Parar layer")) e.stopLayer(l.id);
-      if (ImGui::MenuItem("Remover layer")) removeLayer = l.id;
+      if (inputText(T("Nome"), l.name)) app.edited();
+      if (ImGui::MenuItem(T("Subir"), nullptr, false, li > 0)) { moveLayer = int(li); moveLayerDir = -1; }
+      if (ImGui::MenuItem(T("Descer"), nullptr, false, li + 1 < p.layers.size())) { moveLayer = int(li); moveLayerDir = 1; }
+      if (ImGui::MenuItem(T("Parar layer"))) e.stopLayer(l.id);
+      if (ImGui::MenuItem(T("Remover layer"))) removeLayer = l.id;
       ImGui::EndPopup();
     }
     ImGui::SetNextItemWidth(nameW - 12);
@@ -906,13 +1161,13 @@ void Ui::dashboard(App &app) {
         if (m) app.sel.inspector = Inspector::Cell;
         e.launchCell(c, l.id);
       }
-      if (cell && ImGui::BeginDragDropSource()) {
+      if (cell && !locked && ImGui::BeginDragDropSource()) {
         int payload[2] = {c, l.id};
         ImGui::SetDragDropPayload("LUMEN_CELL", payload, sizeof(payload));
-        ImGui::Text("%s  (Ctrl = copiar)", m ? m->name.c_str() : "");
+        ImGui::Text(T("%s  (Ctrl = copiar)"), m ? m->name.c_str() : "");
         ImGui::EndDragDropSource();
       }
-      if (ImGui::BeginDragDropTarget()) {
+      if (!locked && ImGui::BeginDragDropTarget()) {
         if (const ImGuiPayload *pl = ImGui::AcceptDragDropPayload("LUMEN_MEDIA")) {
           Cell nc;
           nc.mediaId = *static_cast<const int *>(pl->Data);
@@ -931,18 +1186,18 @@ void Ui::dashboard(App &app) {
         }
         ImGui::EndDragDropTarget();
       }
-      if (cell && ImGui::BeginPopupContextItem("##cellctx")) {
-        ImGui::TextDisabled("No fim da mídia");
+      if (cell && !locked && ImGui::BeginPopupContextItem("##cellctx")) {
+        ImGui::TextDisabled("%s", T("No fim da mídia"));
         for (int em = 0; em < int(EndMode::COUNT); ++em) {
-          static const char *names[] = {"Loop", "Congelar no último quadro", "Parar",
-                                        "Disparar a próxima coluna"};
+          const char *names[] = {T("Loop"), T("Congelar no último quadro"), T("Parar"),
+                                        T("Disparar a próxima coluna")};
           if (ImGui::MenuItem(names[em], nullptr, int(cell->endMode) == em)) {
             cell->setEndMode(EndMode(em));
             app.edited();
           }
         }
         ImGui::Separator();
-        if (ImGui::MenuItem("Limpar célula")) {
+        if (ImGui::MenuItem(T("Limpar célula"))) {
           col.cells.erase(l.id);
           cell = nullptr;
           m = nullptr;
@@ -989,7 +1244,7 @@ void Ui::dashboard(App &app) {
     ImGui::TableSetColumnIndex(ncols + 1);
     if (st && (st->current || st->previous)) {
       if (ImGui::Button("\xe2\x96\xa0##stopl", {32, cellH - 10})) e.stopLayer(l.id); // ■
-      ImGui::SetItemTooltip("Parar esta layer");
+      ImGui::SetItemTooltip("%s", T("Parar esta layer"));
     }
     ImGui::PopID();
   }
@@ -1016,9 +1271,9 @@ void Ui::dashboard(App &app) {
 
 void Ui::inspector(App &app) {
   struct Tab { const char *name; Inspector id; };
-  const Tab tabs[] = {{"Layer", Inspector::Layer},   {"Célula", Inspector::Cell},
-                      {"Mídia", Inspector::Media},   {"Saídas", Inspector::Output}, {"LED", Inspector::Led},
-                      {"Interação", Inspector::Interaction}, {"Projeto", Inspector::Project}};
+  const Tab tabs[] = {{T("Layer"), Inspector::Layer},   {T("Célula"), Inspector::Cell},
+                      {T("Mídia"), Inspector::Media},   {T("Saídas"), Inspector::Output}, {T("LED"), Inspector::Led},
+                      {T("Interação"), Inspector::Interaction}, {T("Projeto"), Inspector::Project}};
   static Inspector shown = Inspector::Layer;
   bool forced = shown != app.sel.inspector;
   if (ImGui::BeginTabBar("##insp")) {
@@ -1058,23 +1313,23 @@ void Ui::maskList(App &app, std::vector<Mask> &masks, int &sel, int &selPoint, V
     bool valid = m.points.size() >= 3;
     if (!valid) ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.77f, 0.0f, 1)); // like Millumin: orange = no shape yet
     char label[160];
-    std::snprintf(label, sizeof(label), "%s  %s%s", m.name.c_str(), m.subtract ? "(esconde)" : "(mostra)",
-                  m.inverted ? " inv." : "");
+    std::snprintf(label, sizeof(label), "%s  %s%s", m.name.c_str(), m.subtract ? T("(esconde)") : T("(mostra)"),
+                  m.inverted ? T(" inv.") : "");
     if (ImGui::Selectable(label, sel == int(i))) { sel = int(i); selPoint = -1; }
     if (!valid) ImGui::PopStyleColor();
     if (ImGui::BeginPopupContextItem()) {
-      if (ImGui::MenuItem("Subir", nullptr, false, i > 0)) { move = int(i); dir = -1; }
-      if (ImGui::MenuItem("Descer", nullptr, false, i + 1 < masks.size())) { move = int(i); dir = 1; }
-      if (ImGui::MenuItem("Duplicar")) {
+      if (ImGui::MenuItem(T("Subir"), nullptr, false, i > 0)) { move = int(i); dir = -1; }
+      if (ImGui::MenuItem(T("Descer"), nullptr, false, i + 1 < masks.size())) { move = int(i); dir = 1; }
+      if (ImGui::MenuItem(T("Duplicar"))) {
         Mask c = m;
-        c.name += " cópia";
+        c.name += T(" cópia");
         masks.insert(masks.begin() + int(i) + 1, c);
         app.edited();
         ImGui::EndPopup();
         ImGui::PopID();
         break;
       }
-      if (ImGui::MenuItem("Remover")) remove = int(i);
+      if (ImGui::MenuItem(T("Remover"))) remove = int(i);
       ImGui::EndPopup();
     }
     ImGui::PopID();
@@ -1089,10 +1344,10 @@ void Ui::maskList(App &app, std::vector<Mask> &masks, int &sel, int &selPoint, V
     sel = move + dir;
     app.edited();
   }
-  ImGui::TextDisabled("Aplicadas de cima para baixo (botão direito: subir / descer).");
+  ImGui::TextDisabled("%s", T("Aplicadas de cima para baixo (botão direito: subir / descer)."));
 
   auto add = [&](Mask m) {
-    m.name = "Máscara " + std::to_string(masks.size() + 1);
+    m.name = T("Máscara ") + std::to_string(masks.size() + 1);
     if (outputSpace) { m.subtract = true; m.feather = 20; }
     masks.push_back(m);
     sel = int(masks.size()) - 1;
@@ -1100,34 +1355,34 @@ void Ui::maskList(App &app, std::vector<Mask> &masks, int &sel, int &selPoint, V
     workspace.tool = Tool::Mask;
     app.edited();
   };
-  if (ImGui::Button("+ Máscara")) add(Mask{});
+  if (ImGui::Button(T("+ Máscara"))) add(Mask{});
   ImGui::SameLine();
-  if (ImGui::Button("Forma...")) ImGui::OpenPopup("##shape");
+  if (ImGui::Button(T("Forma..."))) ImGui::OpenPopup("##shape");
   if (ImGui::BeginPopup("##shape")) {
     // Centred, a third of the area (canvas or output).
     Vec2 c{area.x * 0.5f, area.y * 0.5f};
     float r = std::min(area.x * unit.x, area.y * unit.y) / 6.0f; // pixels
     float rx = r / unit.x, ry = r / unit.y;
     Mask m;
-    if (ImGui::MenuItem("Quadrado")) {
+    if (ImGui::MenuItem(T("Quadrado"))) {
       m.points = {{c.x - rx, c.y - ry}, {c.x + rx, c.y - ry}, {c.x + rx, c.y + ry}, {c.x - rx, c.y + ry}};
       add(m);
     }
-    if (ImGui::MenuItem("Círculo")) {
+    if (ImGui::MenuItem(T("Círculo"))) {
       const float k = 0.5522847f;
       m.points = {{c.x + rx, c.y}, {c.x, c.y + ry}, {c.x - rx, c.y}, {c.x, c.y - ry}};
       m.tanIn = {{0, -ry * k}, {rx * k, 0}, {0, ry * k}, {-rx * k, 0}};
       m.tanOut = {{0, ry * k}, {-rx * k, 0}, {0, -ry * k}, {rx * k, 0}};
       add(m);
     }
-    if (ImGui::MenuItem("Triângulo")) {
+    if (ImGui::MenuItem(T("Triângulo"))) {
       m.points = {{c.x, c.y - ry}, {c.x + rx, c.y + ry}, {c.x - rx, c.y + ry}};
       add(m);
     }
     ImGui::EndPopup();
   }
   ImGui::SameLine();
-  if (ImGui::Button("Importar SVG")) {
+  if (ImGui::Button(T("Importar SVG"))) {
     auto files = platform::openFileDialog("Importar máscaras (SVG)", "SVG|*.svg|Todos|*.*", false);
     std::string text, err;
     if (!files.empty() && platform::readFile(files[0], text)) {
@@ -1142,16 +1397,16 @@ void Ui::maskList(App &app, std::vector<Mask> &masks, int &sel, int &selPoint, V
       if (!imported.empty()) {
         sel = int(masks.size()) - 1;
         app.edited();
-        app.status(std::to_string(imported.size()) + " máscara(s) importada(s) do SVG");
+        app.status(std::to_string(imported.size()) + T(" máscara(s) importada(s) do SVG"));
       } else {
-        app.status("SVG: " + err, true);
+        app.status(T("SVG: ") + err, true);
       }
     }
   }
   ImGui::SameLine();
   ImGui::BeginDisabled(masks.empty());
-  if (ImGui::Button("Exportar SVG")) {
-    std::string path = platform::saveFileDialog("Exportar máscaras (SVG)", "SVG|*.svg", "mascaras.svg");
+  if (ImGui::Button(T("Exportar SVG"))) {
+    std::string path = platform::saveFileDialog(T("Exportar máscaras (SVG)"), T("SVG|*.svg"), "mascaras.svg");
     if (!path.empty()) {
       std::vector<Mask> scaled = masks;
       for (auto &m : scaled) {
@@ -1159,31 +1414,31 @@ void Ui::maskList(App &app, std::vector<Mask> &masks, int &sel, int &selPoint, V
         for (auto &v : m.tanIn) v = {v.x * unit.x, v.y * unit.y};
         for (auto &v : m.tanOut) v = {v.x * unit.x, v.y * unit.y};
       }
-      if (platform::writeFile(path, masksToSvg(scaled, area.x * unit.x, area.y * unit.y))) app.status("Máscaras exportadas: " + path);
-      else app.status("Não foi possível salvar " + path, true);
+      if (platform::writeFile(path, masksToSvg(scaled, area.x * unit.x, area.y * unit.y))) app.status(T("Máscaras exportadas: ") + path);
+      else app.status(T("Não foi possível salvar ") + path, true);
     }
   }
   ImGui::EndDisabled();
-  helpMarker("SVG: desenhe as formas no Illustrator / Inkscape sobre uma foto do cenário no tamanho "
+  helpMarker(T("SVG: desenhe as formas no Illustrator / Inkscape sobre uma foto do cenário no tamanho "
              "do canvas (ou do projetor) e importe. Caminhos, polígonos, retângulos, círculos e "
-             "curvas viram máscaras.");
+             "curvas viram máscaras."));
 
   if (sel < 0 || sel >= int(masks.size())) return;
   Mask &m = masks[size_t(sel)];
   ImGui::SeparatorText(m.name.c_str());
   ImGui::PushID("maskprops");
-  if (inputText("Nome", m.name)) app.edited();
+  if (inputText(T("Nome"), m.name)) app.edited();
   int mode = m.subtract ? 1 : 0;
-  if (ImGui::Combo("Modo", &mode, "Mostrar pixels\0Esconder pixels\0")) { m.subtract = mode == 1; app.edited(); }
+  if (ImGui::Combo(T("Modo"), &mode, TZ("Mostrar pixels\0Esconder pixels\0"))) { m.subtract = mode == 1; app.edited(); }
   ImGui::SameLine();
-  if (ImGui::Checkbox("Invertida", &m.inverted)) app.edited();
-  helpMarker("Invertida: age fora da forma em vez de dentro.");
-  if (ImGui::SliderFloat("Opacidade", &m.opacity, 0, 1)) app.edited();
-  if (ImGui::SliderFloat("Suavizar borda (px)", &m.feather, 0, 300)) app.edited();
-  if (ImGui::DragFloat("Escala", &m.scale, 0.005f, 0.001f, 20, "%.3f")) { m.scale = std::max(0.001f, m.scale); app.edited(); }
-  ImGui::Text("%zu pontos", m.points.size());
+  if (ImGui::Checkbox(T("Invertida"), &m.inverted)) app.edited();
+  helpMarker(T("Invertida: age fora da forma em vez de dentro."));
+  if (ImGui::SliderFloat(T("Opacidade"), &m.opacity, 0, 1)) app.edited();
+  if (ImGui::SliderFloat(T("Suavizar borda (px)"), &m.feather, 0, 300)) app.edited();
+  if (ImGui::DragFloat(T("Escala"), &m.scale, 0.005f, 0.001f, 20, "%.3f")) { m.scale = std::max(0.001f, m.scale); app.edited(); }
+  ImGui::Text(T("%zu pontos"), m.points.size());
   ImGui::SameLine();
-  if (ImGui::SmallButton("Tudo curvo")) {
+  if (ImGui::SmallButton(T("Tudo curvo"))) {
     m.ensureTangents();
     size_t n = m.points.size();
     for (size_t i = 0; i < n && n >= 3; ++i) {
@@ -1194,11 +1449,430 @@ void Ui::maskList(App &app, std::vector<Mask> &masks, int &sel, int &selPoint, V
     app.edited();
   }
   ImGui::SameLine();
-  if (ImGui::SmallButton("Tudo reto")) { m.tanIn.clear(); m.tanOut.clear(); app.edited(); }
+  if (ImGui::SmallButton(T("Tudo reto"))) { m.tanIn.clear(); m.tanOut.clear(); app.edited(); }
   ImGui::SameLine();
-  if (ImGui::SmallButton("Limpar pontos")) { m.points.clear(); m.tanIn.clear(); m.tanOut.clear(); selPoint = -1; app.edited(); }
-  ImGui::TextDisabled("Alt+clique num ponto: curva / canto. Arraste as alças (Shift: só uma).");
+  if (ImGui::SmallButton(T("Limpar pontos"))) { m.points.clear(); m.tanIn.clear(); m.tanOut.clear(); selPoint = -1; app.edited(); }
+  ImGui::TextDisabled("%s", T("Alt+clique num ponto: curva / canto. Arraste as alças (Shift: só uma)."));
   ImGui::PopID();
+}
+
+static std::string timeLabel(float t) {
+  char b[32];
+  int m = int(t) / 60;
+  std::snprintf(b, sizeof(b), "%d:%05.2f", m, t - float(m * 60));
+  return b;
+}
+
+// Parameters a track can animate for a layer (plus its effects' inputs).
+static std::vector<std::pair<std::string, std::string>> trackParams(Engine &e, const Layer *l) {
+  std::vector<std::pair<std::string, std::string>> out;
+  if (!l) {
+    out = {{"master", T("Master (opacidade)")}, {"masterVolume", T("Volume master")}, {"dmxMaster", T("DMX master")},
+           {"transition", T("Fader de transição")}};
+    return out;
+  }
+  out = {{"opacity", T("Opacidade")}, {"x", T("Posição X")},  {"y", T("Posição Y")},     {"scale", T("Escala")},
+         {"rotation", T("Rotação")},  {"brightness", T("Brilho")}, {"contrast", T("Contraste")}, {"saturation", T("Saturação")},
+         {"hue", T("Matiz")},         {"volume", T("Volume")},  {"speed", T("Velocidade")}};
+  for (size_t i = 0; i < l->effects.size(); ++i) {
+    const IsfInfo *info = e.isfCatalog.info(l->effects[i].path);
+    if (!info) continue;
+    std::string pre = "effect" + std::to_string(i + 1) + "/";
+    std::string fxName = l->effects[i].name.empty() ? T("efeito") : l->effects[i].name;
+    out.push_back({pre + T("enabled"), fxName + T(" · ligado")});
+    for (auto &in : info->inputs) {
+      int n = in.size();
+      if (n == 0 || in.name == "progress") continue;
+      if (n == 1) out.push_back({pre + in.name, fxName + " · " + in.label});
+      else
+        for (int k = 0; k < n; ++k)
+          out.push_back({pre + in.name + "." + std::to_string(k), fxName + " · " + in.label + " [" + std::to_string(k) + "]"});
+    }
+  }
+  return out;
+}
+
+void Ui::timelineEditor(App &app) {
+  Engine &e = app.engine;
+  Project &p = e.project;
+  Timeline *tl = p.timeline(timelineSel_);
+  if (!tl && !p.timelines.empty()) {
+    tl = &p.timelines.front();
+    timelineSel_ = tl->id;
+  }
+  // ---- header
+  ImGui::SetNextItemWidth(170);
+  if (ImGui::BeginCombo("##tlsel", tl ? tl->name.c_str() : T("(nenhuma timeline)"))) {
+    for (auto &t : p.timelines)
+      if (ImGui::Selectable((t.name + "##" + std::to_string(t.id)).c_str(), tl && t.id == tl->id)) timelineSel_ = t.id;
+    ImGui::EndCombo();
+  }
+  ImGui::SameLine();
+  if (ImGui::Button(T("+ Timeline"))) {
+    Timeline &t = p.addTimeline();
+    timelineSel_ = t.id;
+    app.edited();
+    return;
+  }
+  if (!tl) {
+    ImGui::TextWrapped("%s", T("Uma timeline anima parâmetros no tempo com keyframes (opacidade, posição, efeitos, "
+                       "masters) e dispara comandos em marcadores. Ligue-a a uma coluna (menu da coluna → "
+                       "Timeline) ou toque por OSC: /lumen/timeline/1/play."));
+    return;
+  }
+  ImGui::SameLine();
+  ImGui::SetNextItemWidth(120);
+  if (inputText("##tlname", tl->name)) app.edited();
+  ImGui::SameLine();
+  ImGui::SetNextItemWidth(80);
+  if (ImGui::DragFloat(T("duração"), &tl->duration, 0.1f, 0.1f, 36000, "%.1f s")) { tl->duration = std::max(0.1f, tl->duration); app.edited(); }
+  ImGui::SameLine();
+  if (ImGui::Checkbox(T("loop"), &tl->loop)) app.edited();
+  if (tl->loop) {
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(70);
+    if (ImGui::DragFloat("##ls", &tl->loopStart, 0.05f, 0, tl->duration, T("de %.1f s"))) app.edited();
+    ImGui::SetItemTooltip("%s", T("Início do loop: 0 até aqui toca uma vez (introdução), depois repete daqui até o fim."));
+  } else {
+    ImGui::SameLine();
+    if (ImGui::Checkbox(T("GO no fim"), &tl->goAtEnd)) app.edited();
+  }
+  ImGui::SameLine();
+  if (ImGui::Checkbox(T("timecode"), &tl->followTimecode)) app.edited();
+  ImGui::SetItemTooltip("%s", T("Segue o timecode recebido (MTC/LTC) em vez do próprio relógio."));
+  if (tl->followTimecode) {
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(80);
+    if (ImGui::DragFloat("##tco", &tl->timecodeOffset, 0.04f, 0, 360000, T("início %.2f s"))) app.edited();
+    ImGui::SetItemTooltip("%s", T("Timecode (em segundos) em que esta timeline está no tempo 0."));
+  }
+  const TimelineRun *run = e.timelineRun(tl->id);
+  float now = run ? float(run->time) : 0.0f;
+  bool playing = run && run->playing;
+  ImGui::SameLine(0, 14);
+  if (playing) {
+    pushPrimary();
+    if (ImGui::Button(T("Pausar"))) e.pauseTimeline(tl->id);
+    popPrimary();
+  } else if (ImGui::Button(T("Tocar"))) {
+    e.playTimeline(tl->id, !run || now >= tl->duration);
+  }
+  ImGui::SameLine();
+  if (ImGui::Button(T("Parar##tl"))) { e.stopTimeline(tl->id); e.applyTimeline(*tl, 0); }
+  ImGui::SameLine();
+  ImGui::Text("%s / %s", timeLabel(now).c_str(), timeLabel(tl->duration).c_str());
+  ImGui::SameLine();
+  if (ImGui::SmallButton("...")) ImGui::OpenPopup("##tlmenu");
+  if (ImGui::BeginPopup("##tlmenu")) {
+    if (ImGui::MenuItem(T("Duplicar timeline"))) {
+      Timeline copy = *tl;
+      copy.id = p.newId();
+      copy.name += T(" cópia");
+      p.timelines.push_back(copy);
+      timelineSel_ = copy.id;
+      app.edited();
+    }
+    if (ImGui::MenuItem(T("Gravar o valor atual de todas as faixas aqui"))) {
+      for (auto &tr : tl->tracks) {
+        float v = e.getNamedParam(tr.layerId, tr.param);
+        auto it = std::find_if(tr.keys.begin(), tr.keys.end(), [&](const Keyframe &k) { return std::fabs(k.time - now) < 0.02f; });
+        if (it != tr.keys.end()) it->value = v;
+        else tr.keys.push_back({now, v, Ease::InOut});
+        std::sort(tr.keys.begin(), tr.keys.end(), [](auto &a, auto &b) { return a.time < b.time; });
+      }
+      app.edited();
+    }
+    if (ImGui::MenuItem(T("Remover timeline"))) {
+      int id = tl->id;
+      e.stopTimeline(id);
+      p.timelines.erase(std::remove_if(p.timelines.begin(), p.timelines.end(), [&](auto &t) { return t.id == id; }), p.timelines.end());
+      for (auto &c : p.columns)
+        if (c.timelineId == id) c.timelineId = -1;
+      timelineSel_ = -1;
+      app.edited();
+      ImGui::EndPopup();
+      return;
+    }
+    ImGui::EndPopup();
+  }
+
+  // ---- lanes
+  const float labelW = 220, rulerH = 22, flagH = 24, laneH = 38;
+  ImVec2 avail = ImGui::GetContentRegionAvail();
+  ImGui::BeginChild("##tlarea", {avail.x, avail.y}, ImGuiChildFlags_Borders, ImGuiWindowFlags_NoScrollWithMouse);
+  ImDrawList *dl = ImGui::GetWindowDrawList();
+  ImVec2 o = ImGui::GetCursorScreenPos();
+  float W = ImGui::GetContentRegionAvail().x - labelW;
+  if (W < 50) { ImGui::EndChild(); return; }
+  ImGuiIO &io = ImGui::GetIO();
+  // View: seconds per pixel; wheel zooms around the mouse, Shift+wheel pans.
+  if (timelineView_ <= 0 || tlViewFor_ != tl->id) {
+    timelineZoom_ = W / std::max(1.0f, tl->duration);
+    timelineView_ = 0.001f;
+    tlStart_ = 0;
+    tlViewFor_ = tl->id;
+  }
+  float x0 = o.x + labelW;
+  auto tx = [&](float t) { return x0 + (t - tlStart_) * timelineZoom_; };
+  auto xt = [&](float x) { return tlStart_ + (x - x0) / timelineZoom_; };
+  bool inArea = ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows) && io.MousePos.x > x0;
+  if (inArea && io.MouseWheel != 0) {
+    if (io.KeyShift) {
+      tlStart_ -= io.MouseWheel * 60.0f / timelineZoom_;
+    } else {
+      float at = xt(io.MousePos.x);
+      timelineZoom_ = std::clamp(timelineZoom_ * std::pow(1.2f, io.MouseWheel), 2.0f, 2000.0f);
+      tlStart_ = at - (io.MousePos.x - x0) / timelineZoom_;
+    }
+  }
+  tlStart_ = std::clamp(tlStart_, -0.5f, std::max(0.0f, tl->duration - 0.5f));
+  float tEnd = xt(x0 + W);
+
+  // Ruler.
+  dl->AddRectFilled({x0, o.y}, {x0 + W, o.y + rulerH}, IM_COL32(24, 24, 26, 255), 4);
+  float step = 0.1f;
+  for (float c : {0.1f, 0.25f, 0.5f, 1.0f, 2.0f, 5.0f, 10.0f, 15.0f, 30.0f, 60.0f, 120.0f, 300.0f, 600.0f})
+    if (c * timelineZoom_ >= 60) { step = c; break; } else step = c;
+  for (float t = std::floor(std::max(0.0f, tlStart_) / step) * step; t <= std::min(tEnd, tl->duration) + 1e-3f; t += step) {
+    float x = tx(t);
+    dl->AddLine({x, o.y + rulerH - 7}, {x, o.y + rulerH}, IM_COL32(120, 120, 120, 255));
+    dl->AddText({x + 3, o.y + 3}, IM_COL32(150, 150, 150, 255), timeLabel(t).c_str());
+  }
+  ImGui::SetCursorScreenPos({x0, o.y});
+  ImGui::InvisibleButton("##ruler", {W, rulerH});
+  if (ImGui::IsItemActive()) e.seekTimeline(tl->id, std::clamp(xt(io.MousePos.x), 0.0f, tl->duration));
+  ImGui::SetCursorScreenPos(o);
+  ImGui::TextDisabled("%s", T("roda: zoom · Shift+roda: rolar"));
+
+  // Flags lane.
+  float fy = o.y + rulerH + 2;
+  ImGui::SetCursorScreenPos({o.x, fy + 3});
+  ImGui::TextUnformatted(T("Marcadores"));
+  ImGui::SetItemTooltip("%s", T("Duplo clique na faixa cria um marcador: um comando disparado quando a timeline passa por ele."));
+  dl->AddRectFilled({x0, fy}, {x0 + W, fy + flagH}, IM_COL32(20, 20, 22, 255), 4);
+  ImGui::SetCursorScreenPos({x0, fy});
+  ImGui::InvisibleButton("##flags", {W, flagH});
+  bool flagsHovered = ImGui::IsItemHovered();
+  int hitFlag = -1;
+  for (size_t i = 0; i < tl->flags.size(); ++i) {
+    float x = tx(tl->flags[i].time);
+    if (x < x0 - 5 || x > x0 + W + 5) continue;
+    ImVec2 a{x, fy + 3}, b{x - 6, fy + flagH - 4}, c{x + 6, fy + flagH - 4};
+    dl->AddTriangleFilled(a, b, c, kAccentU32);
+    dl->AddText({x + 8, fy + 4}, IM_COL32(220, 220, 220, 255), tl->flags[i].name.empty() ? tl->flags[i].command.c_str() : tl->flags[i].name.c_str());
+    if (std::fabs(io.MousePos.x - x) < 7 && io.MousePos.y >= fy && io.MousePos.y <= fy + flagH) hitFlag = int(i);
+  }
+  if (flagsHovered && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) && hitFlag < 0) {
+    tl->flags.push_back({std::clamp(xt(io.MousePos.x), 0.0f, tl->duration), T("Marcador"), "/lumen/go"});
+    tlFlag_ = int(tl->flags.size()) - 1;
+    ImGui::OpenPopup("##flagpop");
+    app.edited();
+  } else if (flagsHovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && hitFlag >= 0) {
+    tlFlag_ = hitFlag;
+    tlDragFlag_ = true;
+  } else if (flagsHovered && ImGui::IsMouseClicked(ImGuiMouseButton_Right) && hitFlag >= 0) {
+    tlFlag_ = hitFlag;
+    ImGui::OpenPopup("##flagpop");
+  }
+  if (tlDragFlag_ && ImGui::IsMouseDown(ImGuiMouseButton_Left) && tlFlag_ >= 0 && tlFlag_ < int(tl->flags.size())) {
+    if (io.MouseDelta.x != 0) {
+      tl->flags[size_t(tlFlag_)].time = std::clamp(xt(io.MousePos.x), 0.0f, tl->duration);
+      app.edited();
+    }
+  } else {
+    tlDragFlag_ = false;
+  }
+  if (ImGui::BeginPopup("##flagpop")) {
+    if (tlFlag_ >= 0 && tlFlag_ < int(tl->flags.size())) {
+      TimelineFlag &f = tl->flags[size_t(tlFlag_)];
+      ImGui::SetNextItemWidth(200);
+      if (inputText(T("Nome"), f.name)) app.edited();
+      ImGui::SetNextItemWidth(300);
+      if (inputText(T("Comando"), f.command)) app.edited();
+      ImGui::TextDisabled("%s", T("Ex.: /lumen/go · /lumen/column/launch 3 · pjlink Sala shutter close · midi note 1 60 127"));
+      ImGui::SetNextItemWidth(120);
+      if (ImGui::DragFloat(T("Tempo"), &f.time, 0.01f, 0, tl->duration, "%.2f s")) app.edited();
+      if (ImGui::Button(T("Testar agora"))) e.runCommand(f.command);
+      ImGui::SameLine();
+      if (ImGui::Button(T("Remover"))) {
+        tl->flags.erase(tl->flags.begin() + tlFlag_);
+        tlFlag_ = -1;
+        app.edited();
+        ImGui::CloseCurrentPopup();
+      }
+    }
+    ImGui::EndPopup();
+  }
+
+  // Tracks.
+  float y = fy + flagH + 4;
+  int removeTrack = -1;
+  bool changed = false;
+  for (size_t ti = 0; ti < tl->tracks.size(); ++ti) {
+    TimelineTrack &tr = tl->tracks[ti];
+    ImGui::PushID(int(ti) + 4400);
+    const Layer *l = p.layer(tr.layerId);
+    std::string label = (tr.layerId < 0 ? std::string(T("Master")) : l ? l->name : std::string("?")) + " · ";
+    std::string pname = tr.param;
+    for (auto &[k, v] : trackParams(e, l))
+      if (k == tr.param) pname = v;
+    label += pname;
+    ImGui::SetCursorScreenPos({o.x, y + 2});
+    if (ImGui::Checkbox("##en", &tr.enabled)) app.edited();
+    ImGui::SameLine();
+    ImGui::PushClipRect({o.x, y}, {o.x + labelW - 56, y + laneH}, true);
+    ImGui::TextUnformatted(label.c_str());
+    ImGui::PopClipRect();
+    ImGui::SetCursorScreenPos({o.x + labelW - 54, y + 2});
+    if (ImGui::SmallButton("\xe2\x97\x86+")) { // ◆+ key with the current value at the playhead
+      float v = e.getNamedParam(tr.layerId, tr.param);
+      auto it = std::find_if(tr.keys.begin(), tr.keys.end(), [&](const Keyframe &k) { return std::fabs(k.time - now) < 0.02f; });
+      if (it != tr.keys.end()) it->value = v;
+      else tr.keys.push_back({now, v, Ease::InOut});
+      std::sort(tr.keys.begin(), tr.keys.end(), [](auto &a, auto &b) { return a.time < b.time; });
+      app.edited();
+    }
+    ImGui::SetItemTooltip("%s", T("Grava o valor atual do parâmetro no tempo do cursor"));
+    ImGui::SameLine();
+    if (ImGui::SmallButton("x")) removeTrack = int(ti);
+    ImGui::SetCursorScreenPos({o.x + 26, y + 20});
+    ImGui::TextDisabled("%s", tr.keys.empty() ? T("sem chaves") : (std::to_string(tr.keys.size()) + T(" chaves")).c_str());
+
+    // Lane with the curve.
+    dl->AddRectFilled({x0, y}, {x0 + W, y + laneH}, IM_COL32(18, 18, 20, 255), 5);
+    float vmin = 0, vmax = 1;
+    if (!tr.keys.empty()) {
+      vmin = vmax = tr.keys[0].value;
+      for (auto &k : tr.keys) { vmin = std::min(vmin, k.value); vmax = std::max(vmax, k.value); }
+    }
+    if (tlDragTrack_ == int(ti)) { vmin = tlDragMin_; vmax = tlDragMax_; } // stable while dragging
+    if (vmax - vmin < 1e-4f) { vmin -= 0.5f; vmax += 0.5f; }
+    auto vy = [&](float v) { return y + laneH - 5 - (v - vmin) / (vmax - vmin) * (laneH - 10); };
+    auto yv = [&](float py) { return vmin + (y + laneH - 5 - py) / (laneH - 10) * (vmax - vmin); };
+    if (!tr.keys.empty()) {
+      std::vector<ImVec2> pts;
+      for (float px = 0; px <= W; px += 3) {
+        float t = xt(x0 + px);
+        if (t < 0 || t > tl->duration) continue;
+        pts.push_back({x0 + px, vy(tr.valueAt(t))});
+      }
+      if (pts.size() > 1) dl->AddPolyline(pts.data(), int(pts.size()), IM_COL32(255, 196, 0, tr.enabled ? 170 : 60), 0, 1.5f);
+    }
+    ImGui::SetCursorScreenPos({x0, y});
+    ImGui::InvisibleButton("##lane", {W, laneH});
+    bool laneHovered = ImGui::IsItemHovered();
+    int hitKey = -1;
+    for (size_t k = 0; k < tr.keys.size(); ++k) {
+      ImVec2 c{tx(tr.keys[k].time), vy(tr.keys[k].value)};
+      if (c.x < x0 - 6 || c.x > x0 + W + 6) continue;
+      bool sel = tlKeyTrack_ == int(ti) && tlKey_ == int(k);
+      float r = sel ? 6.5f : 5.0f;
+      ImVec2 d[4] = {{c.x, c.y - r}, {c.x + r, c.y}, {c.x, c.y + r}, {c.x - r, c.y}};
+      dl->AddConvexPolyFilled(d, 4, sel ? IM_COL32(255, 255, 255, 255) : kAccentU32);
+      dl->AddPolyline(d, 4, IM_COL32(10, 10, 10, 255), ImDrawFlags_Closed, 1.0f);
+      if (std::hypot(io.MousePos.x - c.x, io.MousePos.y - c.y) < 8) hitKey = int(k);
+    }
+    if (laneHovered && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) && hitKey < 0) {
+      float t = std::clamp(xt(io.MousePos.x), 0.0f, tl->duration);
+      float v = tr.keys.empty() ? e.getNamedParam(tr.layerId, tr.param) : yv(io.MousePos.y);
+      tr.keys.push_back({t, v, Ease::InOut});
+      std::sort(tr.keys.begin(), tr.keys.end(), [](auto &a, auto &b) { return a.time < b.time; });
+      app.edited();
+      changed = true;
+    } else if (laneHovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && hitKey >= 0) {
+      tlKeyTrack_ = int(ti);
+      tlKey_ = hitKey;
+      tlDragTrack_ = int(ti);
+      tlDragMin_ = vmin;
+      tlDragMax_ = vmax;
+    } else if (laneHovered && ImGui::IsMouseClicked(ImGuiMouseButton_Right) && hitKey >= 0) {
+      tlKeyTrack_ = int(ti);
+      tlKey_ = hitKey;
+      ImGui::OpenPopup("##keypop");
+    }
+    if (tlDragTrack_ == int(ti) && ImGui::IsMouseDown(ImGuiMouseButton_Left) && tlKey_ >= 0 && tlKey_ < int(tr.keys.size())) {
+      if (io.MouseDelta.x != 0 || io.MouseDelta.y != 0) {
+        Keyframe &kf = tr.keys[size_t(tlKey_)];
+        kf.time = std::clamp(xt(io.MousePos.x), 0.0f, tl->duration);
+        if (!io.KeyShift) kf.value = yv(io.MousePos.y); // Shift: only in time
+        float t = kf.time;
+        std::sort(tr.keys.begin(), tr.keys.end(), [](auto &a, auto &b) { return a.time < b.time; });
+        for (size_t k = 0; k < tr.keys.size(); ++k)
+          if (tr.keys[k].time == t) tlKey_ = int(k);
+        app.edited();
+        changed = true;
+      }
+    } else if (tlDragTrack_ == int(ti)) {
+      tlDragTrack_ = -1;
+    }
+    if (ImGui::BeginPopup("##keypop")) {
+      if (tlKeyTrack_ == int(ti) && tlKey_ >= 0 && tlKey_ < int(tr.keys.size())) {
+        Keyframe &kf = tr.keys[size_t(tlKey_)];
+        ImGui::SetNextItemWidth(120);
+        if (ImGui::DragFloat(T("Valor"), &kf.value, 0.01f)) { app.edited(); changed = true; }
+        ImGui::SetNextItemWidth(120);
+        if (ImGui::DragFloat(T("Tempo"), &kf.time, 0.01f, 0, tl->duration, "%.2f s")) {
+          std::sort(tr.keys.begin(), tr.keys.end(), [](auto &a, auto &b) { return a.time < b.time; });
+          app.edited();
+          changed = true;
+        }
+        ImGui::TextDisabled("%s", T("Curva até a próxima chave"));
+        for (int ez = 0; ez < int(Ease::COUNT); ++ez)
+          if (ImGui::RadioButton(easeName(Ease(ez)), kf.ease == Ease(ez))) { kf.ease = Ease(ez); app.edited(); changed = true; }
+        if (ImGui::Button(T("Remover chave"))) {
+          tr.keys.erase(tr.keys.begin() + tlKey_);
+          tlKey_ = -1;
+          app.edited();
+          changed = true;
+          ImGui::CloseCurrentPopup();
+        }
+      }
+      ImGui::EndPopup();
+    }
+    ImGui::PopID();
+    y += laneH + 3;
+  }
+  if (removeTrack >= 0) {
+    tl->tracks.erase(tl->tracks.begin() + removeTrack);
+    app.edited();
+  }
+  // Loop region and playhead over all lanes.
+  if (tl->loop) dl->AddRectFilled({tx(tl->loopStart), fy}, {tx(tl->duration), y}, IM_COL32(255, 196, 0, 18));
+  dl->AddRectFilled({tx(tl->duration), o.y}, {x0 + W, y}, IM_COL32(0, 0, 0, 120));
+  float px = tx(now);
+  if (px >= x0 && px <= x0 + W) {
+    dl->AddLine({px, o.y}, {px, y}, kAccentU32, 2);
+    dl->AddTriangleFilled({px - 6, o.y}, {px + 6, o.y}, {px, o.y + 8}, kAccentU32);
+  }
+  // Editing a stopped timeline shows the result right away.
+  if (changed && !playing) e.applyTimeline(*tl, now);
+
+  // Add a track.
+  ImGui::SetCursorScreenPos({o.x, y + 4});
+  if (ImGui::Button(T("+ Faixa"))) ImGui::OpenPopup("##addtrack");
+  if (ImGui::BeginPopup("##addtrack")) {
+    auto menu = [&](const Layer *l, const char *title) {
+      if (!ImGui::BeginMenu(title)) return;
+      for (auto &[k, v] : trackParams(e, l))
+        if (ImGui::MenuItem(v.c_str())) {
+          TimelineTrack tr;
+          tr.layerId = l ? l->id : -1;
+          tr.param = k;
+          float cur = e.getNamedParam(tr.layerId, k);
+          tr.keys.push_back({0, cur, Ease::InOut});
+          tl->tracks.push_back(tr);
+          app.edited();
+        }
+      ImGui::EndMenu();
+    };
+    for (auto &l : p.layers) menu(&l, (l.name + "##" + std::to_string(l.id)).c_str());
+    menu(nullptr, T("Masters"));
+    ImGui::EndPopup();
+  }
+  ImGui::SameLine();
+  ImGui::TextDisabled("%s", T("Duplo clique na faixa: nova chave · arraste: tempo e valor (Shift: só tempo) · botão direito: curva"));
+  ImGui::Dummy({1, 8});
+  ImGui::EndChild();
 }
 
 void Ui::effectsUi(App &app, Layer &l) {
@@ -1209,13 +1883,13 @@ void Ui::effectsUi(App &app, Layer &l) {
     ImGui::PushID(int(i) + 7700);
     if (ImGui::Checkbox("##en", &fx.enabled)) app.edited();
     ImGui::SameLine();
-    std::string title = (fx.name.empty() ? std::string("efeito") : fx.name) + "###fx";
+    std::string title = (fx.name.empty() ? std::string(T("efeito")) : fx.name) + "###fx";
     bool open = ImGui::TreeNodeEx(title.c_str(), ImGuiTreeNodeFlags_DefaultOpen);
     if (ImGui::BeginPopupContextItem()) {
-      if (ImGui::MenuItem("Subir", nullptr, false, i > 0)) { move = int(i); dir = -1; }
-      if (ImGui::MenuItem("Descer", nullptr, false, i + 1 < l.effects.size())) { move = int(i); dir = 1; }
-      if (ImGui::MenuItem("Valores padrão")) { fx.params.clear(); app.edited(); }
-      if (ImGui::MenuItem("Remover")) remove = int(i);
+      if (ImGui::MenuItem(T("Subir"), nullptr, false, i > 0)) { move = int(i); dir = -1; }
+      if (ImGui::MenuItem(T("Descer"), nullptr, false, i + 1 < l.effects.size())) { move = int(i); dir = 1; }
+      if (ImGui::MenuItem(T("Valores padrão"))) { fx.params.clear(); app.edited(); }
+      if (ImGui::MenuItem(T("Remover"))) remove = int(i);
       ImGui::EndPopup();
     }
     ImGui::SameLine(ImGui::GetContentRegionAvail().x - 4);
@@ -1235,7 +1909,7 @@ void Ui::effectsUi(App &app, Layer &l) {
   if (remove >= 0) { l.effects.erase(l.effects.begin() + remove); app.edited(); }
   if (move >= 0) { std::swap(l.effects[size_t(move)], l.effects[size_t(move + dir)]); app.edited(); }
 
-  if (ImGui::Button("+ Efeito")) ImGui::OpenPopup("##addfx");
+  if (ImGui::Button(T("+ Efeito"))) ImGui::OpenPopup("##addfx");
   if (ImGui::BeginPopup("##addfx")) {
     auto add = [&](const std::string &path, const std::string &name) {
       Effect fx;
@@ -1248,7 +1922,7 @@ void Ui::effectsUi(App &app, Layer &l) {
     // Built-ins by category.
     std::map<std::string, std::vector<const IsfCatalog::Entry *>> byCat;
     for (auto &x : e.isfCatalog.builtins())
-      if (x.info.filter) byCat[x.info.categories.empty() ? "Outros" : x.info.categories.front()].push_back(&x);
+      if (x.info.filter) byCat[x.info.categories.empty() ? T("Outros") : x.info.categories.front()].push_back(&x);
     for (auto &[cat, list] : byCat) {
       if (!ImGui::BeginMenu(cat.c_str())) continue;
       for (auto *x : list) {
@@ -1258,27 +1932,27 @@ void Ui::effectsUi(App &app, Layer &l) {
       ImGui::EndMenu();
     }
     ImGui::Separator();
-    if (ImGui::MenuItem("Rastreamento de blobs (câmera)")) add(kBlobTrackerId, "Blob tracker");
-    if (ImGui::MenuItem("Abrir arquivo ISF (.fs)...")) {
+    if (ImGui::MenuItem(T("Rastreamento de blobs (câmera)"))) add(kBlobTrackerId, T("Blob tracker"));
+    if (ImGui::MenuItem(T("Abrir arquivo ISF (.fs)..."))) {
       auto files = platform::openFileDialog("Efeito ISF", "ISF|*.fs|Todos|*.*", false);
       if (!files.empty()) add(files[0], platform::toUtf8(platform::toPath(files[0]).stem()));
     }
-    if (ImGui::MenuItem("Recarregar a pasta de efeitos")) e.isfCatalog.rescan();
+    if (ImGui::MenuItem(T("Recarregar a pasta de efeitos"))) e.isfCatalog.rescan();
     ImGui::EndPopup();
   }
-  helpMarker("Efeitos são shaders ISF (o mesmo formato do Millumin, VDMX, Resolume e MadMapper), "
+  helpMarker(T("Efeitos são shaders ISF (o mesmo formato do Millumin, VDMX, Resolume e MadMapper), "
              "aplicados em ordem sobre a mídia da layer. Baixe mais em editor.isf.video ou coloque "
-             "arquivos .fs na pasta effects ao lado do lumen.exe. Via OSC: /layer:Nome/effect1/<parâmetro>.");
+             "arquivos .fs na pasta effects ao lado do lumen.exe. Via OSC: /layer:Nome/effect1/<parâmetro>."));
 }
 
 void Ui::blobUi(App &app, Layer &l) {
   Engine &e = app.engine;
-  if (ImGui::Button("Gravar fundo")) e.learnBlobBackground(l.id);
+  if (ImGui::Button(T("Gravar fundo"))) e.learnBlobBackground(l.id);
   ImGui::SameLine();
   const BlobTracker *t = e.blobTracker(l.id);
-  ImGui::TextDisabled(t && t->hasBackground() ? "(comparando com o fundo)" : "(limiar fixo)");
-  helpMarker("Gravar fundo: com a cena vazia, clique. Depois, tudo o que mudar (pessoas, objetos) "
-             "vira blob, mesmo com iluminação irregular. A câmera precisa estar parada.");
+  ImGui::TextDisabled("%s", t && t->hasBackground() ? T("(comparando com o fundo)") : T("(limiar fixo)"));
+  helpMarker(T("Gravar fundo: com a cena vazia, clique. Depois, tudo o que mudar (pessoas, objetos) "
+             "vira blob, mesmo com iluminação irregular. A câmera precisa estar parada."));
   const std::vector<Blob> *blobs = e.blobs(l.id);
   // Preview: black & white image with the blobs.
   float w = ImGui::GetContentRegionAvail().x, h = w * 9.0f / 16.0f;
@@ -1305,21 +1979,21 @@ void Ui::blobUi(App &app, Layer &l) {
       dl->AddText({a.x + 2, a.y + 1}, IM_COL32(255, 196, 0, 255), id);
     }
   ImGui::Dummy({w, h});
-  if (!t) ImGui::TextDisabled("Dispare uma câmera nesta layer para ver os blobs.");
-  ImGui::TextDisabled("%d blob(s) · endereços /blob/%s/1 x y l a, /blob/%s/1/x ...", blobs ? int(blobs->size()) : 0,
+  if (!t) ImGui::TextDisabled("%s", T("Dispare uma câmera nesta layer para ver os blobs."));
+  ImGui::TextDisabled(T("%d blob(s) · endereços /blob/%s/1 x y l a, /blob/%s/1/x ..."), blobs ? int(blobs->size()) : 0,
                       l.name.c_str(), l.name.c_str());
   // Shortcuts: follow blob 1 with a layer.
   static int target = -1;
   Project &p = e.project;
   Layer *tl = p.layer(target);
   ImGui::SetNextItemWidth(160);
-  if (ImGui::BeginCombo("##follow", tl ? tl->name.c_str() : "(layer)")) {
+  if (ImGui::BeginCombo("##follow", tl ? tl->name.c_str() : T("(layer)"))) {
     for (auto &x : p.layers)
       if (ImGui::Selectable(x.name.c_str(), x.id == target)) target = x.id;
     ImGui::EndCombo();
   }
   ImGui::SameLine();
-  if (ImGui::Button("segue o blob 1") && tl) {
+  if (ImGui::Button(T("segue o blob 1")) && tl) {
     // Position offsets in canvas pixels: blob 0..1 -> -W/2..W/2 around the layer.
     float cw = float(p.canvasWidth(tl->canvasId)), ch = float(p.canvasHeight(tl->canvasId));
     InputMapping mx, my;
@@ -1330,10 +2004,10 @@ void Ui::blobUi(App &app, Layer &l) {
     my.outMin = -ch / 2; my.outMax = ch / 2;
     p.mappings.push_back(mx);
     p.mappings.push_back(my);
-    app.status("Mapeamentos criados em Interação: o blob 1 move a layer " + tl->name);
+    app.status(T("Mapeamentos criados em Interação: o blob 1 move a layer ") + tl->name);
     app.edited();
   }
-  if (ImGui::Button("Presença liga a layer") && tl) {
+  if (ImGui::Button(T("Presença liga a layer")) && tl) {
     InputMapping m;
     m.address = "/blob/" + l.name + "/count";
     m.inMin = 0; m.inMax = 1;
@@ -1341,7 +2015,7 @@ void Ui::blobUi(App &app, Layer &l) {
     m.transformer = Transformer::Switch;
     m.smoothing = 0.9f;
     p.mappings.push_back(m);
-    app.status("Mapeamento criado: a layer " + tl->name + " aparece quando alguém é detectado");
+    app.status(T("Mapeamento criado: a layer ") + tl->name + T(" aparece quando alguém é detectado"));
     app.edited();
   }
 }
@@ -1365,7 +2039,7 @@ void Ui::inputMeshWindow(App &app) {
     flip = true; // the canvas texture is bottom-up
     float cw = float(p.canvasWidth(o->canvasId)), ch = float(p.canvasHeight(o->canvasId));
     u0 = o->srcX / cw; v0 = o->srcY / ch; u1 = (o->srcX + o->srcW) / cw; v1 = (o->srcY + o->srcH) / ch;
-    title = "Saída " + o->name;
+    title = T("Saída ") + o->name;
   } else if (Layer *l = p.layer(inputMesh_.layerId)) {
     if (inputMesh_.slice >= 0 && inputMesh_.slice < int(l->slices.size())) {
       Slice &s = l->slices[size_t(inputMesh_.slice)];
@@ -1377,17 +2051,17 @@ void Ui::inputMeshWindow(App &app) {
   }
   if (!w) { inputMesh_.open = false; return; }
   ImGui::SetNextWindowSize({720, 520}, ImGuiCond_FirstUseEver);
-  if (!ImGui::Begin(("Malha de entrada — " + title + "###inputmesh").c_str(), &inputMesh_.open)) {
+  if (!ImGui::Begin((T("Malha de entrada — ") + title + "###inputmesh").c_str(), &inputMesh_.open)) {
     ImGui::End();
     return;
   }
   int grid[2] = {w->meshCols, w->meshRows};
   ImGui::SetNextItemWidth(140);
-  if (ImGui::InputInt2("Divisão", grid)) { w->resampleMesh(grid[0], grid[1]); app.edited(); }
+  if (ImGui::InputInt2(T("Divisão"), grid)) { w->resampleMesh(grid[0], grid[1]); app.edited(); }
   ImGui::SameLine();
-  if (ImGui::Button("Grade regular")) { w->uvMesh.clear(); app.edited(); }
+  if (ImGui::Button(T("Grade regular"))) { w->uvMesh.clear(); app.edited(); }
   ImGui::SameLine();
-  ImGui::TextDisabled("Arraste os pontos para cima dos detalhes da imagem · duplo clique adiciona linha e coluna");
+  ImGui::TextDisabled("%s", T("Arraste os pontos para cima dos detalhes da imagem · duplo clique adiciona linha e coluna"));
   ImVec2 avail = ImGui::GetContentRegionAvail();
   float aspect = tex && !tex->empty() ? float(tex->width()) * (u1 - u0) / std::max(1.0f, float(tex->height()) * (v1 - v0)) : 16.0f / 9.0f;
   float bw = avail.x, bh = bw / aspect;
@@ -1400,7 +2074,7 @@ void Ui::inputMeshWindow(App &app) {
     ImVec2 a = flip ? ImVec2(u0, 1 - v0) : ImVec2(u0, v0), b = flip ? ImVec2(u1, 1 - v1) : ImVec2(u1, v1);
     dl->AddImage(texId(*tex), o, {o.x + bw, o.y + bh}, a, b);
   } else {
-    dl->AddText({o.x + 10, o.y + 10}, IM_COL32(200, 200, 200, 255), "Dispare uma mídia nesta layer para ver a imagem.");
+    dl->AddText({o.x + 10, o.y + 10}, IM_COL32(200, 200, 200, 255), T("Dispare uma mídia nesta layer para ver a imagem."));
   }
   w->ensureUvMesh();
   auto toScreen = [&](Vec2 uv) { return ImVec2{o.x + uv.x * bw, o.y + uv.y * bh}; };
@@ -1450,15 +2124,15 @@ void Ui::layerInspector(App &app) {
   Project &p = app.engine.project;
   Layer *l = p.layer(app.sel.layerId);
   if (!l) {
-    ImGui::TextWrapped("Selecione uma layer no dashboard.");
+    ImGui::TextWrapped("%s", T("Selecione uma layer no dashboard."));
     return;
   }
   ImGui::PushID(l->id);
   const float CW = float(p.canvasWidth(l->canvasId)), CH = float(p.canvasHeight(l->canvasId));
-  if (inputText("Nome", l->name)) app.edited();
+  if (inputText(T("Nome"), l->name)) app.edited();
   if (p.canvases.size() > 0) {
     int cid = l->canvasId;
-    if (canvasCombo("Canvas", p, cid)) {
+    if (canvasCombo(T("Canvas"), p, cid)) {
       // Keep the mapping proportional to the new canvas.
       float sx = float(p.canvasWidth(cid)) / CW, sy = float(p.canvasHeight(cid)) / CH;
       for (auto &sl : l->slices)
@@ -1469,64 +2143,64 @@ void Ui::layerInspector(App &app) {
       app.edited();
     }
   }
-  if (ImGui::Checkbox("Visível", &l->visible)) app.edited();
-  if (ImGui::SliderFloat("Opacidade", &l->opacity, 0, 1)) app.edited();
-  if (ImGui::SliderFloat("Volume", &l->volume, 0, 2, "%.2f")) app.edited();
+  if (ImGui::Checkbox(T("Visível"), &l->visible)) app.edited();
+  if (ImGui::SliderFloat(T("Opacidade"), &l->opacity, 0, 1)) app.edited();
+  if (ImGui::SliderFloat(T("Volume"), &l->volume, 0, 2, "%.2f")) app.edited();
   ImGui::SameLine();
-  if (ImGui::Checkbox("Mudo", &l->mute)) app.edited();
+  if (ImGui::Checkbox(T("Mudo"), &l->mute)) app.edited();
   if (const LayerState *st = app.engine.layerState(l->id); st && st->current) {
     if (st->current->hasAudio()) {
       ImGui::ProgressBar(std::min(1.0f, st->current->audioPeak()), {-1, 6}, "");
     } else if (st->current->speed != 1.0f) {
-      ImGui::TextDisabled("Áudio desligado: velocidade diferente de 1x");
+      ImGui::TextDisabled("%s", T("Áudio desligado: velocidade diferente de 1x"));
     }
     std::string hw = st->current->hwaccel();
-    if (!hw.empty()) ImGui::TextDisabled("Decodificação por hardware: %s", hw.c_str());
+    if (!hw.empty()) ImGui::TextDisabled(T("Decodificação por hardware: %s"), hw.c_str());
   }
   int blend = int(l->blend);
-  if (ImGui::Combo("Blend", &blend, "Normal\0Adição\0Multiplicar\0Tela (screen)\0"
+  if (ImGui::Combo(T("Blend"), &blend, TZ("Normal\0Adição\0Multiplicar\0Tela (screen)\0"
                                     "Matte alpha (máscara da layer de baixo)\0Matte alpha invertido\0"
-                                    "Matte luma (claro mostra)\0Matte luma invertido\0")) {
+                                    "Matte luma (claro mostra)\0Matte luma invertido\0"))) {
     l->blend = BlendMode(blend);
     app.edited();
   }
 
-  if (ImGui::CollapsingHeader("Transformação", ImGuiTreeNodeFlags_DefaultOpen)) {
+  if (ImGui::CollapsingHeader(T("Transformação"), ImGuiTreeNodeFlags_DefaultOpen)) {
     float pos[2] = {l->transform.position.x, l->transform.position.y};
-    if (ImGui::DragFloat2("Posição (px)", pos, 1.0f)) {
+    if (ImGui::DragFloat2(T("Posição (px)"), pos, 1.0f)) {
       l->transform.position = {pos[0], pos[1]};
       app.edited();
     }
-    if (ImGui::DragFloat("Escala", &l->transform.scale, 0.005f, 0.01f, 20)) app.edited();
-    if (ImGui::DragFloat("Rotação (°)", &l->transform.rotation, 0.25f, -360, 360)) app.edited();
-    if (ImGui::Button("Zerar transformação")) {
+    if (ImGui::DragFloat(T("Escala"), &l->transform.scale, 0.005f, 0.01f, 20)) app.edited();
+    if (ImGui::DragFloat(T("Rotação (°)"), &l->transform.rotation, 0.25f, -360, 360)) app.edited();
+    if (ImGui::Button(T("Zerar transformação"))) {
       l->transform = {};
       app.edited();
     }
-    helpMarker("A transformação move todas as fatias juntas. Útil para animar via OSC "
-               "sem perder o mapeamento.");
+    helpMarker(T("A transformação move todas as fatias juntas. Útil para animar via OSC "
+               "sem perder o mapeamento."));
   }
 
-  if (ImGui::CollapsingHeader("Cor / efeitos", ImGuiTreeNodeFlags_DefaultOpen)) {
-    if (ImGui::SliderFloat("Brilho", &l->fx.brightness, -1, 1)) app.edited();
-    if (ImGui::SliderFloat("Contraste", &l->fx.contrast, 0, 2)) app.edited();
-    if (ImGui::SliderFloat("Saturação", &l->fx.saturation, 0, 2)) app.edited();
-    if (ImGui::SliderFloat("Matiz (°)", &l->fx.hue, -180, 180)) app.edited();
-    if (ImGui::Checkbox("Inverter", &l->fx.invert)) app.edited();
-    if (colorEdit("Tinta", l->fx.tint)) app.edited();
-    if (ImGui::Button("Zerar efeitos")) {
+  if (ImGui::CollapsingHeader(T("Cor / efeitos"), ImGuiTreeNodeFlags_DefaultOpen)) {
+    if (ImGui::SliderFloat(T("Brilho"), &l->fx.brightness, -1, 1)) app.edited();
+    if (ImGui::SliderFloat(T("Contraste"), &l->fx.contrast, 0, 2)) app.edited();
+    if (ImGui::SliderFloat(T("Saturação"), &l->fx.saturation, 0, 2)) app.edited();
+    if (ImGui::SliderFloat(T("Matiz (°)"), &l->fx.hue, -180, 180)) app.edited();
+    if (ImGui::Checkbox(T("Inverter"), &l->fx.invert)) app.edited();
+    if (colorEdit(T("Tinta"), l->fx.tint)) app.edited();
+    if (ImGui::Button(T("Zerar efeitos"))) {
       l->fx = {};
       app.edited();
     }
   }
   if (isMatte(l->blend))
-    ImGui::TextColored({1.0f, 0.77f, 0.0f, 1}, "Matte: esta layer não aparece; ela recorta a layer logo abaixo.");
+    ImGui::TextColored({1.0f, 0.77f, 0.0f, 1}, "%s", T("Matte: esta layer não aparece; ela recorta a layer logo abaixo."));
 
-  if (ImGui::CollapsingHeader("Efeitos (shaders ISF)", ImGuiTreeNodeFlags_DefaultOpen)) effectsUi(app, *l);
+  if (ImGui::CollapsingHeader(T("Efeitos (shaders ISF)"), ImGuiTreeNodeFlags_DefaultOpen)) effectsUi(app, *l);
 
-  if (ImGui::CollapsingHeader("Fatias (slices) / mapping", ImGuiTreeNodeFlags_DefaultOpen)) {
-    ImGui::TextWrapped("Cada fatia recorta uma parte da mídia e a projeta numa superfície. "
-                       "Use as ferramentas Perspectiva (M) e Malha (G) no workspace.");
+  if (ImGui::CollapsingHeader(T("Fatias (slices) / mapping"), ImGuiTreeNodeFlags_DefaultOpen)) {
+    ImGui::TextWrapped("%s", T("Cada fatia recorta uma parte da mídia e a projeta numa superfície. "
+                       "Use as ferramentas Perspectiva (M) e Malha (G) no workspace."));
     int &si = app.sel.slice;
     si = std::clamp(si, 0, int(l->slices.size()) - 1);
     for (size_t i = 0; i < l->slices.size(); ++i) {
@@ -1536,9 +2210,9 @@ void Ui::layerInspector(App &app) {
       if (ImGui::Selectable(l->slices[i].name.c_str(), si == int(i))) si = int(i);
       ImGui::PopID();
     }
-    if (ImGui::Button("+ Fatia")) {
+    if (ImGui::Button(T("+ Fatia"))) {
       Slice s;
-      s.name = "Fatia " + std::to_string(l->slices.size() + 1);
+      s.name = T("Fatia ") + std::to_string(l->slices.size() + 1);
       float w = CW * 0.3f, h = CH * 0.3f;
       s.warp.setRect({CW * 0.35f, CH * 0.35f}, {w, h});
       l->slices.push_back(s);
@@ -1546,9 +2220,9 @@ void Ui::layerInspector(App &app) {
       app.edited();
     }
     ImGui::SameLine();
-    if (ImGui::Button("Duplicar") && si < int(l->slices.size())) {
+    if (ImGui::Button(T("Duplicar")) && si < int(l->slices.size())) {
       Slice s = l->slices[size_t(si)];
-      s.name += " cópia";
+      s.name += T(" cópia");
       s.warp.translate({30, 30});
       l->slices.push_back(s);
       si = int(l->slices.size()) - 1;
@@ -1556,7 +2230,7 @@ void Ui::layerInspector(App &app) {
     }
     ImGui::SameLine();
     ImGui::BeginDisabled(l->slices.size() <= 1);
-    if (ImGui::Button("Remover")) {
+    if (ImGui::Button(T("Remover"))) {
       l->slices.erase(l->slices.begin() + si);
       si = std::max(0, si - 1);
       app.edited();
@@ -1566,12 +2240,12 @@ void Ui::layerInspector(App &app) {
     if (si < int(l->slices.size())) {
       Slice &s = l->slices[size_t(si)];
       ImGui::SeparatorText(s.name.c_str());
-      if (inputText("Nome da fatia", s.name)) app.edited();
+      if (inputText(T("Nome da fatia"), s.name)) app.edited();
       // Surface: a mapping shared with other layers.
       {
         Surface *bound = p.surface(s.surfaceId);
-        if (ImGui::BeginCombo("Surface", bound ? bound->name.c_str() : "(mapping próprio)")) {
-          if (ImGui::Selectable("(mapping próprio)", !bound)) { s.surfaceId = -1; app.edited(); }
+        if (ImGui::BeginCombo(T("Surface"), bound ? bound->name.c_str() : T("(mapping próprio)"))) {
+          if (ImGui::Selectable(T("(mapping próprio)"), !bound)) { s.surfaceId = -1; app.edited(); }
           for (auto &sf : p.surfaces) {
             ImGui::PushID(sf.id);
             ImGui::ColorButton("##c", ImVec4(sf.color.r, sf.color.g, sf.color.b, 1),
@@ -1585,18 +2259,18 @@ void Ui::layerInspector(App &app) {
             ImGui::PopID();
           }
           ImGui::Separator();
-          if (ImGui::Selectable("+ Nova surface com este mapping")) {
+          if (ImGui::Selectable(T("+ Nova surface com este mapping"))) {
             s.surfaceId = p.addSurface(s.warp).id;
             app.edited();
           }
           ImGui::EndCombo();
         }
-        helpMarker("Surface = mapping compartilhado. Várias layers ligadas à mesma surface "
+        helpMarker(T("Surface = mapping compartilhado. Várias layers ligadas à mesma surface "
                    "seguem o mesmo mapping: quando o cenário ou o projetor muda de lugar, "
-                   "ajuste uma vez e todas acompanham.");
+                   "ajuste uma vez e todas acompanham."));
         if (bound) {
           ImGui::SameLine();
-          if (ImGui::SmallButton("Soltar")) { s.surfaceId = -1; app.edited(); }
+          if (ImGui::SmallButton(T("Soltar"))) { s.surfaceId = -1; app.edited(); }
           int users = 0;
           for (auto &L : p.layers)
             for (auto &S : L.slices) users += S.surfaceId == bound->id;
@@ -1606,9 +2280,9 @@ void Ui::layerInspector(App &app) {
           ImGui::SameLine();
           if (colorEdit("##scol", bound->color)) app.edited();
           ImGui::SameLine();
-          ImGui::TextDisabled("%d fatia(s)", users);
+          ImGui::TextDisabled(T("%d fatia(s)"), users);
           ImGui::SameLine();
-          if (ImGui::SmallButton("Apagar surface")) {
+          if (ImGui::SmallButton(T("Apagar surface"))) {
             int id = bound->id;
             p.surfaces.erase(std::remove_if(p.surfaces.begin(), p.surfaces.end(),
                                             [&](auto &x) { return x.id == id; }), p.surfaces.end());
@@ -1619,13 +2293,13 @@ void Ui::layerInspector(App &app) {
         }
       }
       float crop[4] = {s.u0, s.v0, s.u1, s.v1};
-      if (ImGui::DragFloat4("Recorte UV", crop, 0.002f, 0, 1)) {
+      if (ImGui::DragFloat4(T("Recorte UV"), crop, 0.002f, 0, 1)) {
         s.u0 = crop[0]; s.v0 = crop[1]; s.u1 = crop[2]; s.v1 = crop[3];
         app.edited();
       }
-      helpMarker("Parte da mídia usada por esta fatia: u0 v0 u1 v1 (0 a 1).");
+      helpMarker(T("Parte da mídia usada por esta fatia: u0 v0 u1 v1 (0 a 1)."));
       for (int c = 0; c < 4; ++c) {
-        const char *names[] = {"Canto sup. esq.", "Canto sup. dir.", "Canto inf. dir.", "Canto inf. esq."};
+        const char *names[] = {T("Canto sup. esq."), T("Canto sup. dir."), T("Canto inf. dir."), T("Canto inf. esq.")};
         float v[2] = {s.warp.corners[size_t(c)].x, s.warp.corners[size_t(c)].y};
         if (ImGui::DragFloat2(names[c], v, 0.5f)) {
           s.warp.corners[size_t(c)] = {v[0], v[1]};
@@ -1633,19 +2307,19 @@ void Ui::layerInspector(App &app) {
         }
       }
       int grid[2] = {s.warp.meshCols, s.warp.meshRows};
-      if (ImGui::InputInt2("Malha (col × lin)", grid)) {
+      if (ImGui::InputInt2(T("Malha (col × lin)"), grid)) {
         s.warp.resampleMesh(grid[0], grid[1]); // keeps the current warp
         app.edited();
       }
-      helpMarker("Mudar a divisão mantém a deformação atual. No workspace (ferramenta Malha), "
-                 "duplo clique adiciona uma linha e uma coluna de pontos passando pelo clique.");
-      if (ImGui::Button("Malha de entrada...")) openInputMesh(l->id, si, -1);
+      helpMarker(T("Mudar a divisão mantém a deformação atual. No workspace (ferramenta Malha), "
+                 "duplo clique adiciona uma linha e uma coluna de pontos passando pelo clique."));
+      if (ImGui::Button(T("Malha de entrada..."))) openInputMesh(l->id, si, -1);
       ImGui::SameLine();
-      ImGui::TextDisabled(s.warp.uvIsIdentity() ? "(regular)" : "(ajustada)");
-      helpMarker("Lado da mídia da malha: coloque cada ponto sobre um detalhe da imagem (janelas "
+      ImGui::TextDisabled("%s", s.warp.uvIsIdentity() ? T("(regular)") : T("(ajustada)"));
+      helpMarker(T("Lado da mídia da malha: coloque cada ponto sobre um detalhe da imagem (janelas "
                  "de uma fachada, quinas). Depois, na ferramenta Malha, leve os pontos até o "
-                 "mesmo detalhe no prédio real.");
-      if (ImGui::Button("Retângulo da mídia")) {
+                 "mesmo detalhe no prédio real."));
+      if (ImGui::Button(T("Retângulo da mídia"))) {
         // Fit the slice to the media aspect ratio, centred on the canvas.
         float aspect = 16.0f / 9.0f;
         if (const LayerState *st = app.engine.layerState(l->id); st && st->currentTex)
@@ -1657,20 +2331,20 @@ void Ui::layerInspector(App &app) {
         app.edited();
       }
       ImGui::SameLine();
-      if (ImGui::Button("Tela cheia")) {
+      if (ImGui::Button(T("Tela cheia"))) {
         s.warp.setRect({0, 0}, {CW, CH});
         app.edited();
       }
       ImGui::SameLine();
-      if (ImGui::Button("Zerar malha")) {
+      if (ImGui::Button(T("Zerar malha"))) {
         s.warp.resetMesh(s.warp.meshCols, s.warp.meshRows);
         app.edited();
       }
     }
   }
 
-  if (ImGui::CollapsingHeader("Máscaras", ImGuiTreeNodeFlags_DefaultOpen)) {
-    ImGui::TextWrapped("Ferramenta Máscara (K): clique no workspace para adicionar pontos.");
+  if (ImGui::CollapsingHeader(T("Máscaras"), ImGuiTreeNodeFlags_DefaultOpen)) {
+    ImGui::TextWrapped("%s", T("Ferramenta Máscara (K): clique no workspace para adicionar pontos."));
     maskList(app, l->masks, app.sel.mask, app.sel.maskPoint, {1, 1}, {CW, CH}, false);
   }
   ImGui::PopID();
@@ -1680,37 +2354,37 @@ void Ui::cellInspector(App &app) {
   Project &p = app.engine.project;
   int c = app.sel.cellColumn;
   if (c < 0 || c >= int(p.columns.size())) {
-    ImGui::TextWrapped("Clique numa célula do dashboard.");
+    ImGui::TextWrapped("%s", T("Clique numa célula do dashboard."));
     return;
   }
   Column &col = p.columns[size_t(c)];
   auto it = col.cells.find(app.sel.cellLayer);
   Layer *l = p.layer(app.sel.cellLayer);
   if (it == col.cells.end() || it->second.mediaId < 0 || !l) {
-    ImGui::TextWrapped("Célula vazia. Arraste uma mídia da biblioteca para ela.");
+    ImGui::TextWrapped("%s", T("Célula vazia. Arraste uma mídia da biblioteca para ela."));
     return;
   }
   Cell &cell = it->second;
   MediaItem *m = p.media(cell.mediaId);
-  ImGui::Text("Coluna %d · %s", c + 1, col.name.c_str());
-  ImGui::Text("Layer: %s", l->name.c_str());
-  ImGui::Text("Mídia: %s", m ? m->name.c_str() : "(removida)");
+  ImGui::Text(T("Coluna %d · %s"), c + 1, col.name.c_str());
+  ImGui::Text(T("Layer: %s"), l->name.c_str());
+  ImGui::Text(T("Mídia: %s"), m ? m->name.c_str() : T("(removida)"));
   ImGui::Separator();
   {
     int em = int(cell.endMode);
-    if (ImGui::Combo("No fim", &em, "Loop\0Congelar no último quadro\0Parar\0Disparar a próxima coluna\0")) {
+    if (ImGui::Combo(T("No fim"), &em, TZ("Loop\0Congelar no último quadro\0Parar\0Disparar a próxima coluna\0"))) {
       cell.setEndMode(EndMode(em));
       app.edited();
     }
-    helpMarker("Parar: a mídia some com a transição da coluna. Próxima coluna: o show segue "
-               "sozinho quando o vídeo acaba (auto-follow), bom para instalações.");
+    helpMarker(T("Parar: a mídia some com a transição da coluna. Próxima coluna: o show segue "
+               "sozinho quando o vídeo acaba (auto-follow), bom para instalações."));
   }
-  if (ImGui::DragFloat("Velocidade", &cell.speed, 0.01f, 0, 8, "%.2fx")) app.edited();
-  if (ImGui::Button("Disparar")) app.engine.launchCell(c, l->id);
+  if (ImGui::DragFloat(T("Velocidade"), &cell.speed, 0.01f, 0, 8, T("%.2fx"))) app.edited();
+  if (ImGui::Button(T("Disparar"))) app.engine.launchCell(c, l->id);
   ImGui::SameLine();
-  if (ImGui::Button("Parar layer")) app.engine.stopLayer(l->id);
+  if (ImGui::Button(T("Parar layer"))) app.engine.stopLayer(l->id);
   ImGui::SameLine();
-  if (ImGui::Button("Limpar célula")) {
+  if (ImGui::Button(T("Limpar célula"))) {
     col.cells.erase(it);
     app.edited();
   }
@@ -1720,15 +2394,15 @@ void Ui::mediaInspector(App &app) {
   Project &p = app.engine.project;
   MediaItem *m = p.media(app.sel.mediaId);
   if (!m) {
-    ImGui::TextWrapped("Selecione um item da biblioteca.");
+    ImGui::TextWrapped("%s", T("Selecione um item da biblioteca."));
     return;
   }
   ImGui::PushID(m->id);
   const Texture *thumb = app.engine.cache.thumbnail(*m, app.engine.generators, app.engine.mesh);
   float w = ImGui::GetContentRegionAvail().x;
   fittedImage(thumb, {w, w * 9.0f / 16.0f});
-  if (inputText("Nome", m->name)) app.edited();
-  ImGui::Text("Tipo: %s", mediaTypeLabel(m->type));
+  if (inputText(T("Nome"), m->name)) app.edited();
+  ImGui::Text(T("Tipo: %s"), mediaTypeLabel(m->type));
 
   if (m->type == MediaType::Generator) {
     int kind = int(m->generator);
@@ -1737,45 +2411,83 @@ void Ui::mediaInspector(App &app) {
       items += generatorName(GeneratorKind(k));
       items.push_back('\0');
     }
-    if (ImGui::Combo("Gerador", &kind, items.c_str())) {
+    if (ImGui::Combo(T("Gerador"), &kind, items.c_str())) {
       m->generator = GeneratorKind(kind);
       app.edited();
     }
     int size[2] = {m->width, m->height};
-    if (ImGui::InputInt2("Resolução", size)) {
+    if (ImGui::InputInt2(T("Resolução"), size)) {
       m->width = std::clamp(size[0], 16, 8192);
       m->height = std::clamp(size[1], 16, 8192);
       app.edited();
     }
-    if (colorEdit("Cor 1", m->color1)) app.edited();
-    if (colorEdit("Cor 2", m->color2)) app.edited();
-    const char *p1 = "Parâmetro 1", *p2 = "Parâmetro 2";
+    if (colorEdit(T("Cor 1"), m->color1)) app.edited();
+    if (colorEdit(T("Cor 2"), m->color2)) app.edited();
+    const char *p1 = T("Parâmetro 1"), *p2 = T("Parâmetro 2");
     float lo1 = 0, hi1 = 10, lo2 = 0, hi2 = 10;
     switch (m->generator) {
-    case GeneratorKind::Gradient: p1 = "Ângulo (°)"; lo1 = -180; hi1 = 180; break;
-    case GeneratorKind::Grid: p1 = "Tamanho da célula"; lo1 = 4; hi1 = 512; p2 = "Espessura"; lo2 = 0.5f; hi2 = 32; break;
-    case GeneratorKind::Plasma: p1 = "Velocidade"; p2 = "Escala"; lo2 = 0.1f; hi2 = 20; break;
-    case GeneratorKind::Stripes: p1 = "Velocidade"; lo1 = -5; hi1 = 5; p2 = "Quantidade"; lo2 = 1; hi2 = 100; break;
+    case GeneratorKind::Gradient: p1 = T("Ângulo (°)"); lo1 = -180; hi1 = 180; break;
+    case GeneratorKind::Grid: p1 = T("Tamanho da célula"); lo1 = 4; hi1 = 512; p2 = T("Espessura"); lo2 = 0.5f; hi2 = 32; break;
+    case GeneratorKind::Plasma: p1 = T("Velocidade"); p2 = T("Escala"); lo2 = 0.1f; hi2 = 20; break;
+    case GeneratorKind::Stripes: p1 = T("Velocidade"); lo1 = -5; hi1 = 5; p2 = T("Quantidade"); lo2 = 1; hi2 = 100; break;
     default: break;
     }
     if (ImGui::SliderFloat(p1, &m->param1, lo1, hi1)) app.edited();
     if (ImGui::SliderFloat(p2, &m->param2, lo2, hi2)) app.edited();
   } else if (m->type == MediaType::Live) {
-    bool changed = inputText("URL / dispositivo", m->path);
-    changed |= inputText("Formato", m->liveFormat);
-    helpMarker("dshow (Windows), v4l2 (Linux), lavfi (teste) ou vazio para streams de rede.");
-    changed |= inputText("Opções", m->liveOptions);
-    helpMarker("Opções do FFmpeg separadas por ':', ex.: video_size=1920x1080:framerate=30 "
-               "ou rtsp_transport=tcp");
+    bool changed = inputText(T("URL / dispositivo"), m->path);
+    changed |= inputText(T("Formato"), m->liveFormat);
+    helpMarker(T("dshow (Windows), v4l2 (Linux), lavfi (teste) ou vazio para streams de rede."));
+    changed |= inputText(T("Opções"), m->liveOptions);
+    helpMarker(T("Opções do FFmpeg separadas por ':', ex.: video_size=1920x1080:framerate=30 "
+               "ou rtsp_transport=tcp"));
     if (changed) {
       app.engine.cache.invalidate(m->id);
       app.edited();
     }
-    ImGui::TextDisabled("A entrada abre quando alguma layer a dispara e fecha quando ninguém a usa.");
-  } else if (m->type == MediaType::Shader) {
-    ImGui::TextWrapped("Arquivo: %s", m->path.c_str());
+    ImGui::TextDisabled("%s", T("A entrada abre quando alguma layer a dispara e fecha quando ninguém a usa."));
+  } else if (m->type == MediaType::Text) {
+    char buf[4096];
+    std::snprintf(buf, sizeof(buf), "%s", m->text.c_str());
+    ImGui::BeginDisabled(!m->path.empty());
+    if (ImGui::InputTextMultiline(T("Texto"), buf, sizeof(buf), {-1, 90})) { m->text = buf; app.edited(); }
+    ImGui::EndDisabled();
+    ImGui::TextDisabled("%s", T("OSC: /layer:<layer>/text \"novo texto\""));
+    if (ImGui::Button(m->path.empty() ? T("Ler de um arquivo .txt...") : T("Trocar arquivo..."))) {
+      auto f = platform::openFileDialog("Arquivo de texto", "Texto|*.txt|Todos|*.*", false);
+      if (!f.empty()) { m->path = f[0]; app.edited(); }
+    }
+    if (!m->path.empty()) {
+      ImGui::SameLine();
+      if (ImGui::SmallButton(T("Usar o texto acima"))) { m->path.clear(); app.edited(); }
+      ImGui::TextWrapped(T("Arquivo: %s (lido de novo quando muda)"), m->path.c_str());
+    }
+    if (ImGui::DragFloat(T("Tamanho da letra"), &m->fontSize, 0.5f, 4, 1000, T("%.0f px"))) app.edited();
+    {
+      std::string fn = m->font.empty() ? T("Fonte do sistema") : platform::toUtf8(platform::toPath(m->font).filename());
+      if (ImGui::Button((T("Fonte: ") + fn).c_str())) {
+        auto f = platform::openFileDialog("Fonte", "Fontes|*.ttf;*.otf|Todos|*.*", false);
+        if (!f.empty()) { m->font = f[0]; app.edited(); }
+      }
+      if (!m->font.empty()) { ImGui::SameLine(); if (ImGui::SmallButton(T("padrão"))) { m->font.clear(); app.edited(); } }
+    }
+    if (ImGui::Combo(T("Alinhamento"), &m->align, TZ("Esquerda\0Centro\0Direita\0"))) app.edited();
+    if (ImGui::Combo(T("Vertical"), &m->valign, TZ("Topo\0Meio\0Base\0"))) app.edited();
+    if (ImGui::DragFloat(T("Entrelinha"), &m->lineSpacing, 0.01f, 0.5f, 3)) app.edited();
+    if (colorEdit(T("Cor"), m->color1, true)) app.edited();
+    if (colorEdit(T("Fundo"), m->color2, true)) app.edited();
     int sz[2] = {m->width, m->height};
-    if (ImGui::InputInt2("Tamanho (px)", sz)) {
+    if (ImGui::InputInt2(T("Tamanho (px)"), sz)) { m->width = std::clamp(sz[0], 16, 8192); m->height = std::clamp(sz[1], 16, 8192); app.edited(); }
+  } else if (m->type == MediaType::NDI) {
+    if (inputText(T("Fonte NDI"), m->path)) { app.engine.cache.invalidate(m->id); app.edited(); }
+    if (!ndiAvailable()) ImGui::TextColored({1, 0.6f, 0.3f, 1}, "%s", ndiStatus().c_str());
+    else
+      for (auto &n : ndiSources())
+        if (ImGui::Selectable(n.c_str(), n == m->path)) { m->path = n; m->name = T("NDI: ") + n; app.engine.cache.invalidate(m->id); app.edited(); }
+  } else if (m->type == MediaType::Shader) {
+    ImGui::TextWrapped(T("Arquivo: %s"), m->path.c_str());
+    int sz[2] = {m->width, m->height};
+    if (ImGui::InputInt2(T("Tamanho (px)"), sz)) {
       m->width = std::clamp(sz[0], 16, 8192);
       m->height = std::clamp(sz[1], 16, 8192);
       app.edited();
@@ -1783,41 +2495,41 @@ void Ui::mediaInspector(App &app) {
     if (const IsfInfo *info = app.engine.isfCatalog.info(m->path)) {
       if (!info->description.empty()) ImGui::TextDisabled("%s", info->description.c_str());
       if (isfParamsUi(*info, m->shaderParams)) app.edited();
-      if (ImGui::SmallButton("Valores padrão")) { m->shaderParams.clear(); app.edited(); }
+      if (ImGui::SmallButton(T("Valores padrão"))) { m->shaderParams.clear(); app.edited(); }
     } else {
       ImGui::TextColored({1, 0.4f, 0.4f, 1}, "%s", app.engine.isfCatalog.error(m->path).c_str());
     }
-    ImGui::TextDisabled("Edite o arquivo .fs em qualquer editor: o Lumen recarrega sozinho.");
+    ImGui::TextDisabled("%s", T("Edite o arquivo .fs em qualquer editor: o Lumen recarrega sozinho."));
   } else if (m->type == MediaType::Canvas) {
     int cid = m->canvasRef;
-    if (canvasCombo("Canvas mostrado", p, cid)) {
+    if (canvasCombo(T("Canvas mostrado"), p, cid)) {
       m->canvasRef = cid;
-      m->name = "Canvas: " + p.canvasLabel(cid);
+      m->name = T("Canvas: ") + p.canvasLabel(cid);
       app.edited();
     }
-    helpMarker("Coloque esta mídia numa layer de outro canvas: posição, escala, rotação e mapping "
-               "da layer posicionam o canvas inteiro. Um canvas que mostra a si mesmo cria um eco.");
+    helpMarker(T("Coloque esta mídia numa layer de outro canvas: posição, escala, rotação e mapping "
+               "da layer posicionam o canvas inteiro. Um canvas que mostra a si mesmo cria um eco."));
   } else if (m->type == MediaType::Spout) {
-    if (inputText("Sender", m->path)) {
+    if (inputText(T("Sender"), m->path)) {
       app.engine.cache.invalidate(m->id);
       app.edited();
     }
-    helpMarker("Nome do sender Spout. Vazio = o sender ativo.");
-    if (!spoutAvailable()) ImGui::TextColored({1, 0.6f, 0.3f, 1}, "Spout só funciona no Windows.");
+    helpMarker(T("Nome do sender Spout. Vazio = o sender ativo."));
+    if (!spoutAvailable()) ImGui::TextColored({1, 0.6f, 0.3f, 1}, "%s", T("Spout só funciona no Windows."));
   } else {
-    ImGui::TextWrapped("Arquivo: %s", m->path.c_str());
+    ImGui::TextWrapped(T("Arquivo: %s"), m->path.c_str());
     if (const MediaInfo *info = app.engine.cache.info(*m)) {
-      ImGui::Text("Resolução: %d × %d", info->width, info->height);
+      ImGui::Text(T("Resolução: %d × %d"), info->width, info->height);
       if (m->type == MediaType::Video) {
-        ImGui::Text("Duração: %.2f s   ·   %.2f fps", info->duration, info->fps);
-        ImGui::Text("Codec: %s%s", info->codec.c_str(), info->hasAudio ? "   (com áudio)" : "");
+        ImGui::Text(T("Duração: %.2f s   ·   %.2f fps"), info->duration, info->fps);
+        ImGui::Text(T("Codec: %s%s"), info->codec.c_str(), info->hasAudio ? T("   (com áudio)") : "");
         if (info->codec == "hap" && !FrameUploader::supportsS3tc())
-          ImGui::TextDisabled("Esta GPU não aceita HAP comprimido: decodificando na CPU.");
+          ImGui::TextDisabled("%s", T("Esta GPU não aceita HAP comprimido: decodificando na CPU."));
       }
     } else {
-      ImGui::TextColored({1, 0.4f, 0.4f, 1}, "Não foi possível abrir este arquivo.");
+      ImGui::TextColored({1, 0.4f, 0.4f, 1}, "%s", T("Não foi possível abrir este arquivo."));
     }
-    if (ImGui::Button("Trocar arquivo...")) {
+    if (ImGui::Button(T("Trocar arquivo..."))) {
       auto files = platform::openFileDialog("Trocar arquivo", "Mídia|*.mp4;*.mov;*.mkv;*.avi;*.webm;*.png;*.jpg;*.jpeg|Todos|*.*", false);
       if (!files.empty()) {
         m->path = files[0];
@@ -1832,43 +2544,43 @@ void Ui::mediaInspector(App &app) {
 
 void Ui::outputInspector(App &app) {
   Project &p = app.engine.project;
-  if (ImGui::CollapsingHeader("Assistente de blend (vários projetores)")) {
+  if (ImGui::CollapsingHeader(T("Assistente de blend (vários projetores)"))) {
     static BlendLayoutParams bp;
     static int firstMonitor = 1; // monitor 2: the control screen is usually monitor 1
     static bool scale = true;
-    ImGui::TextWrapped("Monta as saídas, as regiões do canvas e as bordas suaves de uma grade de "
-                       "projetores sobrepostos.");
+    ImGui::TextWrapped("%s", T("Monta as saídas, as regiões do canvas e as bordas suaves de uma grade de "
+                       "projetores sobrepostos."));
     ImGui::SetNextItemWidth(120);
-    ImGui::InputInt("Colunas", &bp.cols);
+    ImGui::InputInt(T("Colunas"), &bp.cols);
     ImGui::SameLine();
     ImGui::SetNextItemWidth(120);
-    ImGui::InputInt("Linhas", &bp.rows);
+    ImGui::InputInt(T("Linhas"), &bp.rows);
     bp.cols = std::clamp(bp.cols, 1, 16);
     bp.rows = std::clamp(bp.rows, 1, 16);
     int res[2] = {bp.projW, bp.projH};
-    if (ImGui::InputInt2("Resolução do projetor", res)) {
+    if (ImGui::InputInt2(T("Resolução do projetor"), res)) {
       bp.projW = std::clamp(res[0], 16, 16384);
       bp.projH = std::clamp(res[1], 16, 16384);
     }
     float ov[2] = {bp.overlapX * 100, bp.overlapY * 100};
-    if (ImGui::DragFloat2("Sobreposição % (horiz/vert)", ov, 0.1f, 0, 50, "%.1f%%")) {
+    if (ImGui::DragFloat2(T("Sobreposição % (horiz/vert)"), ov, 0.1f, 0, 50, "%.1f%%")) {
       bp.overlapX = ov[0] / 100;
       bp.overlapY = ov[1] / 100;
     }
-    helpMarker("Quanto da largura de cada projetor se sobrepõe ao vizinho. 10–20% é o comum.");
+    helpMarker(T("Quanto da largura de cada projetor se sobrepõe ao vizinho. 10–20% é o comum."));
     auto mons = OutputManager::monitors();
-    std::string mlabel = firstMonitor < 0 ? "Janelas (teste)" : "A partir do monitor " + std::to_string(firstMonitor + 1);
-    if (ImGui::BeginCombo("Monitores", mlabel.c_str())) {
-      if (ImGui::Selectable("Janelas (teste)", firstMonitor < 0)) firstMonitor = -1;
+    std::string mlabel = firstMonitor < 0 ? T("Janelas (teste)") : T("A partir do monitor ") + std::to_string(firstMonitor + 1);
+    if (ImGui::BeginCombo(T("Monitores"), mlabel.c_str())) {
+      if (ImGui::Selectable(T("Janelas (teste)"), firstMonitor < 0)) firstMonitor = -1;
       for (size_t i = 0; i < mons.size(); ++i) {
-        std::string l = "A partir do monitor " + std::to_string(i + 1) + " (" + mons[i].name + ")";
+        std::string l = T("A partir do monitor ") + std::to_string(i + 1) + " (" + mons[i].name + ")";
         if (ImGui::Selectable(l.c_str(), firstMonitor == int(i))) firstMonitor = int(i);
       }
       ImGui::EndCombo();
     }
-    ImGui::Checkbox("Escalar o mapping atual para o novo canvas", &scale);
+    ImGui::Checkbox(T("Escalar o mapping atual para o novo canvas"), &scale);
     BlendLayout preview = computeBlendLayout(bp);
-    ImGui::Text("Canvas: %d × %d  ·  sobreposição: %d × %d px  ·  %d saídas", preview.canvasW,
+    ImGui::Text(T("Canvas: %d × %d  ·  sobreposição: %d × %d px  ·  %d saídas"), preview.canvasW,
                 preview.canvasH, preview.overlapPxX, preview.overlapPxY, int(preview.projectors.size()));
     // Small diagram of the layout.
     {
@@ -1884,36 +2596,36 @@ void Ui::outputInspector(App &app) {
         dl->AddRectFilled(a, z, col);
         dl->AddRect(a, z, IM_COL32(255, 255, 255, 160));
         char t[24];
-        std::snprintf(t, sizeof(t), "%zu", i + 1);
+        std::snprintf(t, sizeof(t), T("%zu"), i + 1);
         dl->AddText({a.x + 4, a.y + 2}, IM_COL32(255, 255, 255, 230), t);
       }
       ImGui::Dummy({W, H + 4});
     }
-    if (ImGui::Button("Aplicar")) {
+    if (ImGui::Button(T("Aplicar"))) {
       applyBlendLayout(p, bp, firstMonitor, scale);
       if (!p.outputs.empty()) app.sel.outputId = p.outputs.front().id;
       app.edited();
-      app.status("Blend aplicado: " + std::to_string(p.outputs.size()) + " saídas");
+      app.status(T("Blend aplicado: ") + std::to_string(p.outputs.size()) + T(" saídas"));
     }
     ImGui::SameLine();
-    ImGui::TextDisabled("Depois: padrão \"Grade de blend\" para alinhar");
+    ImGui::TextDisabled("%s", T("Depois: padrão \"Grade de blend\" para alinhar"));
   }
-  if (ImGui::Button("Identificar saídas")) app.outputs.identify();
-  ImGui::SetItemTooltip("Mostra o número de cada saída por alguns segundos");
+  if (ImGui::Button(T("Identificar saídas"))) app.outputs.identify();
+  ImGui::SetItemTooltip("%s", T("Mostra o número de cada saída por alguns segundos"));
   ImGui::SameLine();
-  if (ImGui::Button("Grade em todas")) {
+  if (ImGui::Button(T("Grade em todas"))) {
     bool any = std::any_of(p.outputs.begin(), p.outputs.end(), [](auto &x) { return x.pattern == TestPattern::BlendGrid; });
     for (auto &x : p.outputs) x.pattern = any ? TestPattern::None : TestPattern::BlendGrid;
     app.edited();
   }
-  ImGui::SetItemTooltip("Liga/desliga a grade de alinhamento em todos os projetores");
+  ImGui::SetItemTooltip("%s", T("Liga/desliga a grade de alinhamento em todos os projetores"));
   ImGui::Separator();
   for (auto &o : p.outputs) {
     ImGui::PushID(o.id);
     if (ImGui::Selectable(o.name.c_str(), app.sel.outputId == o.id)) app.sel.outputId = o.id;
     ImGui::PopID();
   }
-  if (ImGui::Button("+ Saída")) {
+  if (ImGui::Button(T("+ Saída"))) {
     OutputConfig &o = p.addOutput();
     app.sel.outputId = o.id;
     app.edited();
@@ -1925,7 +2637,7 @@ void Ui::outputInspector(App &app) {
   }
   if (!o) return;
   ImGui::SameLine();
-  if (ImGui::Button("Remover saída")) {
+  if (ImGui::Button(T("Remover saída"))) {
     int id = o->id;
     p.outputs.erase(std::remove_if(p.outputs.begin(), p.outputs.end(), [&](auto &x) { return x.id == id; }),
                     p.outputs.end());
@@ -1937,60 +2649,75 @@ void Ui::outputInspector(App &app) {
 
   ImGui::PushID(o->id);
   ImGui::SeparatorText(o->name.c_str());
-  if (inputText("Nome", o->name)) app.edited();
-  if (ImGui::Checkbox("Ativa", &o->enabled)) app.edited();
+  if (inputText(T("Nome"), o->name)) app.edited();
+  if (ImGui::Checkbox(T("Ativa"), &o->enabled)) app.edited();
   int pat = int(o->pattern);
   ImGui::SetNextItemWidth(200);
-  if (ImGui::Combo("Padrão de teste", &pat, "Nenhum (conteúdo)\0Test card da saída\0Grade de blend (contínua)\0Branco\0Preto\0")) {
+  if (ImGui::Combo(T("Padrão de teste"), &pat, TZ("Nenhum (conteúdo)\0Test card da saída\0Grade de blend (contínua)\0Branco\0Preto\0"))) {
     o->pattern = TestPattern(pat);
     app.edited();
   }
-  helpMarker("Test card: foco e identificação. Grade de blend: desenhada no canvas, continua de um "
+  helpMarker(T("Test card: foco e identificação. Grade de blend: desenhada no canvas, continua de um "
              "projetor para o outro (alinhe até as linhas coincidirem). Branco: ajuste as bordas "
-             "até a emenda sumir. Preto: ajuste o nível de preto.");
+             "até a emenda sumir. Preto: ajuste o nível de preto."));
 
   auto mons = OutputManager::monitors();
-  std::string current = o->monitor < 0 ? "Janela (teste)" : "Monitor " + std::to_string(o->monitor + 1);
-  if (ImGui::BeginCombo("Destino", current.c_str())) {
-    if (ImGui::Selectable("Janela (teste)", o->monitor < 0)) { o->monitor = -1; app.edited(); }
+  std::string current = o->monitor < 0 ? T("Janela (teste)") : T("Monitor ") + std::to_string(o->monitor + 1);
+  if (ImGui::BeginCombo(T("Destino"), current.c_str())) {
+    if (ImGui::Selectable(T("Janela (teste)"), o->monitor < 0)) { o->monitor = -1; app.edited(); }
     for (size_t i = 0; i < mons.size(); ++i) {
       char label[200];
-      std::snprintf(label, sizeof(label), "Monitor %zu: %s (%dx%d)", i + 1, mons[i].name.c_str(), mons[i].w, mons[i].h);
+      std::snprintf(label, sizeof(label), T("Monitor %zu: %s (%dx%d)"), i + 1, mons[i].name.c_str(), mons[i].w, mons[i].h);
       if (ImGui::Selectable(label, o->monitor == int(i))) { o->monitor = int(i); app.edited(); }
     }
     ImGui::EndCombo();
   }
-  helpMarker("Em um monitor a saída ocupa a tela inteira, sem bordas. Desative o espelhamento "
-             "de telas no Windows (Win+P → Estender).");
+  helpMarker(T("Em um monitor a saída ocupa a tela inteira, sem bordas. Desative o espelhamento "
+             "de telas no Windows (Win+P → Estender)."));
   if (p.canvases.size() > 0) {
     int cid = o->canvasId;
-    if (canvasCombo("Canvas", p, cid)) {
+    if (canvasCombo(T("Canvas"), p, cid)) {
       o->canvasId = cid;
       o->srcX = o->srcY = 0;
       o->srcW = float(p.canvasWidth(cid));
       o->srcH = float(p.canvasHeight(cid));
       app.edited();
     }
-    helpMarker("Qual canvas esta saída mostra. Ex.: um canvas 3840×2160 para o processador de LED "
-               "e o canvas principal para os projetores.");
+    helpMarker(T("Qual canvas esta saída mostra. Ex.: um canvas 3840×2160 para o processador de LED "
+               "e o canvas principal para os projetores."));
   }
-  ImGui::SeparatorText("Spout desta saída");
+  ImGui::SeparatorText(T("NDI desta saída"));
+  {
+    bool on = !o->ndiName.empty();
+    if (ImGui::Checkbox(T("Enviar por NDI"), &on)) { o->ndiName = on ? T("Lumen ") + o->name : ""; app.edited(); }
+    if (on) {
+      ImGui::SetNextItemWidth(200);
+      if (inputText(T("Nome NDI"), o->ndiName)) app.edited();
+      if (ImGui::Checkbox(T("Sem janela (só Spout / NDI)##ndi"), &o->windowless)) app.edited();
+      if (!ndiAvailable()) ImGui::TextColored({1, 0.6f, 0.3f, 1}, "%s", ndiStatus().c_str());
+      std::string st = app.outputs.spoutStatus(o->id);
+      if (!st.empty()) ImGui::TextDisabled("%s", st.c_str());
+    }
+    helpMarker(T("Envia a imagem final desta saída pela rede (NDI): para outro computador, um "
+               "processador de LED, uma mesa de corte ou OBS. Precisa do NDI Runtime (NDI Tools)."));
+  }
+  ImGui::SeparatorText(T("Spout desta saída"));
   {
     bool on = !o->spoutName.empty();
-    if (ImGui::Checkbox("Enviar por Spout", &on)) {
-      o->spoutName = on ? "Lumen " + o->name : "";
+    if (ImGui::Checkbox(T("Enviar por Spout"), &on)) {
+      o->spoutName = on ? T("Lumen ") + o->name : "";
       if (!on) o->windowless = false;
       app.edited();
     }
-    helpMarker("Envia a imagem final desta saída (com warp, blend e cor) para outro programa ou "
-               "para um processador de LED / NDI (via Spout to NDI). Funciona quando as saídas estão abertas.");
+    helpMarker(T("Envia a imagem final desta saída (com warp, blend e cor) para outro programa ou "
+               "para um processador de LED / NDI (via Spout to NDI). Funciona quando as saídas estão abertas."));
     if (on) {
       ImGui::SetNextItemWidth(200);
-      if (inputText("Nome do Spout", o->spoutName)) app.edited();
-      if (ImGui::Checkbox("Sem janela (só Spout)", &o->windowless)) app.edited();
+      if (inputText(T("Nome do Spout"), o->spoutName)) app.edited();
+      if (ImGui::Checkbox(T("Sem janela (só Spout)"), &o->windowless)) app.edited();
       if (o->windowless) {
         int sz[2] = {o->winW, o->winH};
-        if (ImGui::InputInt2("Tamanho (px)", sz)) {
+        if (ImGui::InputInt2(T("Tamanho (px)"), sz)) {
           o->winW = std::max(16, sz[0]);
           o->winH = std::max(16, sz[1]);
           app.edited();
@@ -2002,58 +2729,58 @@ void Ui::outputInspector(App &app) {
   }
   if (o->monitor < 0) {
     int sz[2] = {o->winW, o->winH};
-    if (ImGui::InputInt2("Tamanho da janela", sz)) {
+    if (ImGui::InputInt2(T("Tamanho da janela"), sz)) {
       o->winW = std::max(64, sz[0]);
       o->winH = std::max(64, sz[1]);
       app.edited();
     }
   }
 
-  ImGui::SeparatorText("Região do canvas");
+  ImGui::SeparatorText(T("Região do canvas"));
   float src[4] = {o->srcX, o->srcY, o->srcW, o->srcH};
-  if (ImGui::DragFloat4("x y larg alt", src, 1.0f)) {
+  if (ImGui::DragFloat4(T("x y larg alt"), src, 1.0f)) {
     o->srcX = src[0]; o->srcY = src[1];
     o->srcW = std::max(1.0f, src[2]); o->srcH = std::max(1.0f, src[3]);
     app.edited();
   }
   const float OW = float(p.canvasWidth(o->canvasId)), OH = float(p.canvasHeight(o->canvasId));
-  if (ImGui::Button("Canvas inteiro")) {
+  if (ImGui::Button(T("Canvas inteiro"))) {
     o->srcX = o->srcY = 0;
     o->srcW = OW;
     o->srcH = OH;
     app.edited();
   }
   ImGui::SameLine();
-  if (ImGui::Button("Metade esq.")) {
+  if (ImGui::Button(T("Metade esq."))) {
     o->srcX = 0; o->srcY = 0; o->srcW = OW * 0.5f; o->srcH = OH;
     app.edited();
   }
   ImGui::SameLine();
-  if (ImGui::Button("Metade dir.")) {
+  if (ImGui::Button(T("Metade dir."))) {
     o->srcX = OW * 0.5f; o->srcY = 0; o->srcW = OW * 0.5f; o->srcH = OH;
     app.edited();
   }
-  if (ImGui::Button("Blend automático pelas sobreposições")) {
+  if (ImGui::Button(T("Blend automático pelas sobreposições"))) {
     int n = autoBlendOverlaps(p, o->canvasId);
-    app.status(std::to_string(n) + " emenda(s) com soft edge calculado pelas regiões das saídas");
+    app.status(std::to_string(n) + T(" emenda(s) com soft edge calculado pelas regiões das saídas"));
     app.edited();
   }
-  helpMarker("Para projetores fora de uma grade (tamanhos ou posições diferentes): ajuste a região "
-             "de cada saída no canvas e o Lumen calcula as bordas suaves de cada sobreposição.");
+  helpMarker(T("Para projetores fora de uma grade (tamanhos ou posições diferentes): ajuste a região "
+             "de cada saída no canvas e o Lumen calcula as bordas suaves de cada sobreposição."));
 
-  ImGui::SeparatorText("Warp da saída");
+  ImGui::SeparatorText(T("Warp da saída"));
   bool viewing = workspace.viewOutputId == o->id;
-  if (ImGui::Checkbox("Editar no workspace", &viewing)) workspace.viewOutputId = viewing ? o->id : -1;
-  helpMarker("Mostra esta saída no workspace. Use Perspectiva (M) ou Malha (G) para corrigir "
-             "a geometria do projetor inteiro (keystone / superfícies curvas).");
+  if (ImGui::Checkbox(T("Editar no workspace"), &viewing)) workspace.viewOutputId = viewing ? o->id : -1;
+  helpMarker(T("Mostra esta saída no workspace. Use Perspectiva (M) ou Malha (G) para corrigir "
+             "a geometria do projetor inteiro (keystone / superfícies curvas)."));
   int grid[2] = {o->warp.meshCols, o->warp.meshRows};
-  if (ImGui::InputInt2("Malha (col × lin)", grid)) {
+  if (ImGui::InputInt2(T("Malha (col × lin)"), grid)) {
     o->warp.resampleMesh(grid[0], grid[1]); // keeps the current warp
     app.edited();
   }
   ImGui::SameLine();
-  if (ImGui::Button("Malha de entrada...")) openInputMesh(-1, 0, o->id);
-  if (ImGui::Button("Zerar warp")) {
+  if (ImGui::Button(T("Malha de entrada..."))) openInputMesh(-1, 0, o->id);
+  if (ImGui::Button(T("Zerar warp"))) {
     o->warp.setRect({0, 0}, {1, 1});
     o->warp.resetMesh(2, 2);
     app.edited();
@@ -2066,82 +2793,82 @@ void Ui::outputInspector(App &app) {
 }
 
 void Ui::softEdgeControls(App &app, OutputConfig *o) {
-  ImGui::SeparatorText("Soft edge (blend entre projetores)");
+  ImGui::SeparatorText(T("Soft edge (blend entre projetores)"));
   bool se = false;
-  se |= ImGui::SliderFloat("Esquerda", &o->softEdge.left, 0, 0.5f);
-  se |= ImGui::SliderFloat("Direita", &o->softEdge.right, 0, 0.5f);
-  se |= ImGui::SliderFloat("Topo", &o->softEdge.top, 0, 0.5f);
-  se |= ImGui::SliderFloat("Base", &o->softEdge.bottom, 0, 0.5f);
-  se |= ImGui::SliderFloat("Gamma", &o->softEdge.gamma, 0.5f, 4);
-  se |= ImGui::SliderFloat("Curva", &o->softEdge.power, 0.5f, 6);
+  se |= ImGui::SliderFloat(T("Esquerda"), &o->softEdge.left, 0, 0.5f);
+  se |= ImGui::SliderFloat(T("Direita"), &o->softEdge.right, 0, 0.5f);
+  se |= ImGui::SliderFloat(T("Topo"), &o->softEdge.top, 0, 0.5f);
+  se |= ImGui::SliderFloat(T("Base"), &o->softEdge.bottom, 0, 0.5f);
+  se |= ImGui::SliderFloat(T("Gamma"), &o->softEdge.gamma, 0.5f, 4);
+  se |= ImGui::SliderFloat(T("Curva"), &o->softEdge.power, 0.5f, 6);
   if (se) app.edited();
-  helpMarker("Para dois projetores lado a lado com sobreposição: cada um mostra uma região do "
+  helpMarker(T("Para dois projetores lado a lado com sobreposição: cada um mostra uma região do "
              "canvas que inclui a faixa sobreposta, e a borda é suavizada com a mesma largura. "
-             "O Assistente de blend calcula tudo isso.");
+             "O Assistente de blend calcula tudo isso."));
 
 }
 
 void Ui::blackAndColorControls(App &app, OutputConfig *o) {
-  ImGui::SeparatorText("Nível de preto");
+  ImGui::SeparatorText(T("Nível de preto"));
   {
     float bl[3] = {o->blackLevel.r, o->blackLevel.g, o->blackLevel.b};
     static std::map<int, bool> perChannel; // UI state only
     bool linked = !perChannel[o->id] && bl[0] == bl[1] && bl[1] == bl[2];
     if (linked) {
-      if (ImGui::SliderFloat("Compensação", &bl[0], 0, 0.1f, "%.4f", ImGuiSliderFlags_Logarithmic)) {
+      if (ImGui::SliderFloat(T("Compensação"), &bl[0], 0, 0.1f, "%.4f", ImGuiSliderFlags_Logarithmic)) {
         o->blackLevel = {bl[0], bl[0], bl[0], 1};
         app.edited();
       }
-    } else if (ImGui::SliderFloat3("Compensação RGB", bl, 0, 0.1f, "%.4f", ImGuiSliderFlags_Logarithmic)) {
+    } else if (ImGui::SliderFloat3(T("Compensação RGB"), bl, 0, 0.1f, "%.4f", ImGuiSliderFlags_Logarithmic)) {
       o->blackLevel = {bl[0], bl[1], bl[2], 1};
       app.edited();
     }
-    if (ImGui::SmallButton(linked ? "Ajustar por cor" : "Unificar")) {
+    if (ImGui::SmallButton(linked ? T("Ajustar por cor") : T("Unificar"))) {
       perChannel[o->id] = linked;
       if (!linked) {
         o->blackLevel = {bl[0], bl[0], bl[0], 1};
         app.edited();
       }
     }
-    helpMarker("Projetores não mostram preto puro: na sobreposição os dois \"pretos\" somam e aparece "
+    helpMarker(T("Projetores não mostram preto puro: na sobreposição os dois \"pretos\" somam e aparece "
                "uma faixa cinza nas cenas escuras. Use o padrão Preto e aumente até o resto da imagem "
-               "ficar igual à faixa. Valores típicos: 0.002 a 0.02.");
+               "ficar igual à faixa. Valores típicos: 0.002 a 0.02."));
   }
 
-  ImGui::SeparatorText("Cor do projetor");
+  ImGui::SeparatorText(T("Cor do projetor"));
   {
     bool c = false;
-    c |= ImGui::SliderFloat("Brilho##out", &o->color.brightness, 0, 2);
-    c |= ImGui::SliderFloat("Contraste##out", &o->color.contrast, 0, 2);
-    c |= ImGui::SliderFloat("Gamma##out", &o->color.gamma, 0.3f, 3);
+    c |= ImGui::SliderFloat(T("Brilho##out"), &o->color.brightness, 0, 2);
+    c |= ImGui::SliderFloat(T("Contraste##out"), &o->color.contrast, 0, 2);
+    c |= ImGui::SliderFloat(T("Gamma##out"), &o->color.gamma, 0.3f, 3);
     float g[3] = {o->color.gain.r, o->color.gain.g, o->color.gain.b};
-    if (ImGui::SliderFloat3("Ganho R G B", g, 0, 2)) {
+    if (ImGui::SliderFloat3(T("Ganho R G B"), g, 0, 2)) {
       o->color.gain = {g[0], g[1], g[2], 1};
       c = true;
     }
-    if (ImGui::SmallButton("Zerar cor")) {
+    if (ImGui::SmallButton(T("Zerar cor"))) {
       o->color = {};
       c = true;
     }
     if (c) app.edited();
-    helpMarker("Iguale projetores diferentes (ou com lâmpadas de idades diferentes): mostre Branco em "
-               "todos e reduza o ganho do canal que estiver sobrando.");
+    helpMarker(T("Iguale projetores diferentes (ou com lâmpadas de idades diferentes): mostre Branco em "
+               "todos e reduza o ganho do canal que estiver sobrando."));
   }
 
-  ImGui::SeparatorText("Sincronia");
-  if (ImGui::SliderInt("Atraso (quadros)", &o->delayFrames, 0, 8)) app.edited();
-  helpMarker("Projetores de modelos diferentes têm latências diferentes. Atrase os mais rápidos "
-             "até a imagem andar junta na emenda (filme em câmera lenta com o celular para conferir).");
-  if (ImGui::Checkbox("Mostrar controles no projetor (Ctrl+Shift+D)", &app.showOutputControls)) {}
-  helpMarker("Desenha os cantos e a malha da saída selecionada na própria projeção, para ajustar "
-             "olhando a parede.");
+  ImGui::SeparatorText(T("Sincronia"));
+  if (ImGui::SliderInt(T("Atraso (quadros)"), &o->delayFrames, 0, 8)) app.edited();
+  helpMarker(T("Projetores de modelos diferentes têm latências diferentes. Atrase os mais rápidos "
+             "até a imagem andar junta na emenda (filme em câmera lenta com o celular para conferir)."));
+  if (ImGui::Checkbox(T("Mostrar controles no projetor (Ctrl+Shift+D)"), &app.showOutputControls)) {}
+  helpMarker(T("Desenha os cantos e a malha da saída selecionada na própria projeção, para ajustar "
+             "olhando a parede."));
 
 }
 
 void Ui::outputMaskControls(App &app, OutputConfig *o, Workspace &ws) {
-  ImGui::SeparatorText("Máscaras da saída");
-  ImGui::TextWrapped("Recortam a imagem deste projetor (obstáculos, bordas irregulares, cúpulas). "
-                     "Edite no workspace com a saída em vista e a ferramenta Máscara (K).");
+  ImGui::SeparatorText(T("Máscaras da saída"));
+  ImGui::TextWrapped("%s", T("Recortam a imagem deste projetor (obstáculos, bordas irregulares, cúpulas). "
+                     "Edite no workspace com a saída em vista e a ferramenta Máscara (K)."));
   {
     float w = float(o->winW), h = float(o->winH);
     auto mons = OutputManager::monitors();
@@ -2161,25 +2888,25 @@ void Ui::outputMaskControls(App &app, OutputConfig *o, Workspace &ws) {
 void Ui::interactionInspector(App &app) {
   Engine &e = app.engine;
   Project &p = e.project;
-  ImGui::SeparatorText("Entrada OSC");
-  bool changed = ImGui::Checkbox("Ativar OSC", &p.oscEnabled);
+  ImGui::SeparatorText(T("Entrada OSC"));
+  bool changed = ImGui::Checkbox(T("Ativar OSC"), &p.oscEnabled);
   ImGui::SetNextItemWidth(120);
-  changed |= ImGui::InputInt("Porta UDP", &p.oscPort);
+  changed |= ImGui::InputInt(T("Porta UDP"), &p.oscPort);
   if (changed) {
     p.oscPort = std::clamp(p.oscPort, 1, 65535);
     e.restartOsc();
     app.edited();
   }
   if (e.oscServer().running())
-    ImGui::TextColored({0.4f, 0.9f, 0.5f, 1}, "Escutando na porta %d", e.oscServer().port());
+    ImGui::TextColored({0.4f, 0.9f, 0.5f, 1}, T("Escutando na porta %d"), e.oscServer().port());
   else if (!e.oscError().empty())
-    ImGui::TextColored({1, 0.4f, 0.4f, 1}, "Erro: %s", e.oscError().c_str());
+    ImGui::TextColored({1, 0.4f, 0.4f, 1}, T("Erro: %s"), e.oscError().c_str());
   else
-    ImGui::TextDisabled("Desativado");
+    ImGui::TextDisabled("%s", T("Desativado"));
 
-  ImGui::SeparatorText("Saída OSC (feedback e ações)");
-  ImGui::TextWrapped("Destinos que recebem /lumen/status/column ao trocar de cue e as ações OSC das "
-                     "colunas (botão direito no cabeçalho da coluna).");
+  ImGui::SeparatorText(T("Saída OSC (feedback e ações)"));
+  ImGui::TextWrapped("%s", T("Destinos que recebem /lumen/status/column ao trocar de cue e as ações OSC das "
+                     "colunas (botão direito no cabeçalho da coluna)."));
   int removeTarget = -1;
   for (size_t i = 0; i < p.oscTargets.size(); ++i) {
     OscTarget &t = p.oscTargets[i];
@@ -2192,7 +2919,7 @@ void Ui::interactionInspector(App &app) {
     ImGui::SetNextItemWidth(90);
     if (ImGui::InputInt("##port", &t.port, 0)) { t.port = std::clamp(t.port, 1, 65535); app.edited(); }
     ImGui::SameLine();
-    if (ImGui::Checkbox("Status", &t.feedback)) app.edited();
+    if (ImGui::Checkbox(T("Status"), &t.feedback)) app.edited();
     ImGui::SameLine();
     if (ImGui::SmallButton("x")) removeTarget = int(i);
     ImGui::PopID();
@@ -2201,63 +2928,232 @@ void Ui::interactionInspector(App &app) {
     p.oscTargets.erase(p.oscTargets.begin() + removeTarget);
     app.edited();
   }
-  if (ImGui::Button("+ Destino OSC")) {
+  if (ImGui::Button(T("+ Destino OSC"))) {
     p.oscTargets.push_back({});
     app.edited();
   }
   if (e.oscSent() > 0) {
     ImGui::SameLine();
-    ImGui::TextDisabled("%d mensagens enviadas", e.oscSent());
+    ImGui::TextDisabled(T("%d mensagens enviadas"), e.oscSent());
   }
 
-  ImGui::SeparatorText("MIDI");
+  ImGui::SeparatorText(T("MIDI"));
   if (!e.midi().available()) {
-    ImGui::TextDisabled("Compilado sem suporte a MIDI");
+    ImGui::TextDisabled("%s", T("Compilado sem suporte a MIDI"));
   } else {
-    if (ImGui::Checkbox("Ativar MIDI", &p.midiEnabled)) {
+    if (ImGui::Checkbox(T("Ativar MIDI"), &p.midiEnabled)) {
       e.restartMidi();
       app.edited();
     }
     auto ports = e.midi().ports();
-    if (ports.empty()) ImGui::TextDisabled("Nenhum controlador conectado (procura a cada 3 s)");
+    if (ports.empty()) ImGui::TextDisabled("%s", T("Nenhum controlador conectado (procura a cada 3 s)"));
     for (auto &port : ports) ImGui::BulletText("%s", port.c_str());
-    ImGui::TextDisabled("MIDI chega como /midi/cc/<canal>/<n>, /midi/note/<canal>/<nota>: use \"Aprender\".");
+    ImGui::TextDisabled("%s", T("MIDI chega como /midi/cc/<canal>/<n>, /midi/note/<canal>/<nota>: use \"Aprender\"."));
   }
 
-  ImGui::SeparatorText("Teclado");
-  if (ImGui::Checkbox("Teclas como entrada (/key/<tecla>)", &p.keyboardInput)) app.edited();
-  helpMarker("Cada tecla vira /key/a, /key/1, /key/f1, /key/left... com valor 1 ao apertar e 0 ao "
-             "soltar, também com as janelas de saída em foco. Use num mapeamento: ex. a tecla A "
-             "dispara a coluna 3. Espaço, Esc e B continuam com as funções do programa.");
+  ImGui::SeparatorText(T("Timecode"));
+  {
+    TimecodeConfig &tc = p.timecode;
+    int src = int(tc.source);
+    if (ImGui::Combo(T("Receber"), &src, TZ("Desligado\0MTC (MIDI Time Code)\0LTC (áudio)\0"))) {
+      tc.source = TimecodeSource(src);
+      app.edited();
+    }
+    if (tc.source == TimecodeSource::LTC) {
+      static std::vector<std::string> caps;
+      static double capsAt = -10;
+      if (ImGui::GetTime() - capsAt > 5) { caps = LtcCapture::devices(); capsAt = ImGui::GetTime(); }
+      if (ImGui::BeginCombo(T("Entrada de áudio"), tc.ltcDevice.empty() ? T("Padrão do sistema") : tc.ltcDevice.c_str())) {
+        if (ImGui::Selectable(T("Padrão do sistema"), tc.ltcDevice.empty())) { tc.ltcDevice.clear(); app.edited(); }
+        for (auto &d : caps)
+          if (ImGui::Selectable(d.c_str(), d == tc.ltcDevice)) { tc.ltcDevice = d; app.edited(); }
+        ImGui::EndCombo();
+      }
+      ImGui::SetNextItemWidth(100);
+      if (ImGui::InputInt(T("Canal (0 = esquerdo)"), &tc.ltcChannel)) { tc.ltcChannel = std::clamp(tc.ltcChannel, 0, 7); app.edited(); }
+      ImGui::ProgressBar(std::min(1.0f, e.ltcInput().level()), {-1, 5}, "");
+    }
+    if (tc.source != TimecodeSource::Off) {
+      ImGui::SetNextItemWidth(100);
+      if (ImGui::DragFloat(T("Roda livre (s)"), &tc.freewheel, 0.05f, 0, 10)) app.edited();
+      helpMarker(T("Se o sinal cair, o relógio continua sozinho por este tempo (evita parar o show "
+                 "num cabo com mau contato)."));
+      if (e.timecodeValid())
+        ImGui::TextColored(kAccent, T("%s  (%.2f fps)"), Timecode::fromSeconds(e.timecodeSeconds(), e.timecodeFps()).str().c_str(),
+                           e.timecodeFps());
+      else
+        ImGui::TextDisabled("%s", T("Sem sinal"));
+      if (!e.timecodeError().empty()) ImGui::TextColored({1, 0.4f, 0.4f, 1}, "%s", e.timecodeError().c_str());
+      ImGui::TextDisabled("%s", T("Use: timeline → \"timecode\", ou coluna → Disparar no timecode."));
+    }
+    if (ImGui::Checkbox(T("Gerar timecode a partir de uma timeline"), &tc.generate)) app.edited();
+    if (tc.generate) {
+      const Timeline *gt = p.timeline(tc.genTimelineId);
+      if (ImGui::BeginCombo(T("Timeline##gen"), gt ? gt->name.c_str() : T("(escolha)"))) {
+        for (auto &t : p.timelines)
+          if (ImGui::Selectable(t.name.c_str(), t.id == tc.genTimelineId)) { tc.genTimelineId = t.id; app.edited(); }
+        ImGui::EndCombo();
+      }
+      static char start[32] = "";
+      std::string cur = Timecode::fromSeconds(tc.genStart, tc.genFps).str();
+      if (!ImGui::IsAnyItemActive()) std::snprintf(start, sizeof(start), "%s", cur.c_str());
+      ImGui::SetNextItemWidth(120);
+      if (ImGui::InputText(T("Início"), start, sizeof(start), ImGuiInputTextFlags_EnterReturnsTrue)) {
+        double v;
+        if (parseTimecode(start, tc.genFps, v)) { tc.genStart = v; app.edited(); }
+      }
+      int fpsI = tc.genFps < 24.5 ? 0 : tc.genFps < 27 ? 1 : tc.genFps < 29.99 ? 2 : 3;
+      ImGui::SetNextItemWidth(120);
+      if (ImGui::Combo(T("fps##gen"), &fpsI, TZ("24\00025\00029.97 drop\00030\0"))) {
+        static const double f[] = {24, 25, 29.97, 30};
+        tc.genFps = f[fpsI];
+        app.edited();
+      }
+      if (ImGui::Checkbox(T("MTC na porta MIDI"), &tc.genMtc)) app.edited();
+      if (tc.genMtc) {
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(120);
+        if (inputText("##mtcport", tc.genMtcPort)) app.edited();
+        ImGui::SetItemTooltip("%s", T("Parte do nome da porta MIDI (vazio = a primeira)"));
+      }
+      if (ImGui::Checkbox(T("LTC no áudio"), &tc.genLtc)) app.edited();
+      if (tc.genLtc) {
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(100);
+        if (ImGui::Combo("##ltcch", &tc.genLtcChannel, TZ("esquerdo\0direito\0os dois\0"))) app.edited();
+      }
+      if (e.generatingTimecode())
+        ImGui::TextColored(kAccent, T("Gerando %s"), Timecode::fromSeconds(e.generatedTimecode(), tc.genFps).str().c_str());
+      else
+        ImGui::TextDisabled("%s", T("Gera enquanto a timeline estiver tocando."));
+    }
+  }
 
-  ImGui::SeparatorText("DMX de entrada (mesa de luz)");
+  ImGui::SeparatorText(T("Serial (Arduino)"));
+  {
+    auto &si = p.serialIn;
+    bool ch = ImGui::Checkbox(T("Receber da porta serial"), &si.enabled);
+    static std::vector<std::string> ports;
+    static double portsAt = -10;
+    if (ImGui::GetTime() - portsAt > 3) { ports = serialPorts(); portsAt = ImGui::GetTime(); }
+    ImGui::SetNextItemWidth(140);
+    if (ImGui::BeginCombo(T("Porta"), si.port.empty() ? T("(escolha)") : si.port.c_str())) {
+      for (auto &pt : ports)
+        if (ImGui::Selectable(pt.c_str(), pt == si.port)) { si.port = pt; ch = true; }
+      if (ports.empty()) ImGui::TextDisabled("%s", T("Nenhuma porta encontrada"));
+      ImGui::EndCombo();
+    }
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(90);
+    ch |= ImGui::InputInt(T("baud"), &si.baud, 0);
+    if (ch) app.edited();
+    if (e.serialInput().running()) ImGui::TextColored(kAccent, T("Lendo %s"), e.serialInput().port().c_str());
+    else if (!e.serialError().empty()) ImGui::TextColored({1, 0.4f, 0.4f, 1}, "%s", e.serialError().c_str());
+    helpMarker(T("Cada linha que o Arduino envia vira uma entrada: \"A0 512\" chega como /serial/A0 512, "
+               "\"botao 1\" como /serial/botao 1, \"12 34\" como /serial 12 34. Use num mapeamento "
+               "(Aprender funciona). Exemplo de código em docs/DISPOSITIVOS.md."));
+  }
+
+  ImGui::SeparatorText(T("Projetores (PJLink)"));
+  {
+    int removePj = -1;
+    for (size_t i = 0; i < p.projectors.size(); ++i) {
+      PjlinkProjector &pj = p.projectors[i];
+      ImGui::PushID(int(i) + 8800);
+      ImGui::SetNextItemWidth(100);
+      if (inputText("##n", pj.name)) app.edited();
+      ImGui::SameLine();
+      ImGui::SetNextItemWidth(110);
+      if (inputText("##h", pj.host)) app.edited();
+      ImGui::SameLine();
+      ImGui::SetNextItemWidth(70);
+      if (ImGui::InputTextWithHint("##pw", T("senha"), pj.password.data(), pj.password.capacity() + 1,
+                                   ImGuiInputTextFlags_Password | ImGuiInputTextFlags_CallbackResize,
+                                   [](ImGuiInputTextCallbackData *d) {
+                                     if (d->EventFlag == ImGuiInputTextFlags_CallbackResize) {
+                                       auto *str = static_cast<std::string *>(d->UserData);
+                                       str->resize(size_t(d->BufTextLen));
+                                       d->Buf = str->data();
+                                     }
+                                     return 0;
+                                   }, &pj.password))
+        app.edited();
+      ImGui::SameLine();
+      if (ImGui::SmallButton("x")) removePj = int(i);
+      if (ImGui::SmallButton(T("Ligar"))) e.runCommand("pjlink " + pj.host + " power on");
+      ImGui::SameLine();
+      if (ImGui::SmallButton(T("Desligar"))) e.runCommand("pjlink " + pj.host + " power off");
+      ImGui::SameLine();
+      if (ImGui::SmallButton(T("Fechar obturador"))) e.runCommand("pjlink " + pj.host + " shutter close");
+      ImGui::SameLine();
+      if (ImGui::SmallButton(T("Abrir"))) e.runCommand("pjlink " + pj.host + " shutter open");
+      ImGui::SameLine();
+      if (ImGui::SmallButton("?")) e.runCommand("pjlink " + pj.host + " status");
+      std::string st = e.devices.projectorStatus(pj.host);
+      if (!st.empty()) { ImGui::SameLine(); ImGui::TextDisabled("%s", st.c_str()); }
+      ImGui::PopID();
+    }
+    if (removePj >= 0) { p.projectors.erase(p.projectors.begin() + removePj); app.edited(); }
+    if (ImGui::Button(T("+ Projetor"))) {
+      PjlinkProjector pj;
+      pj.name = T("Projetor ") + std::to_string(p.projectors.size() + 1);
+      pj.host = "192.168.0.100";
+      p.projectors.push_back(pj);
+      app.edited();
+    }
+    helpMarker(T("Projetores com PJLink na rede (Epson, Panasonic, NEC, Sony, Optoma, Christie...). "
+               "Nas colunas, na agenda ou nos marcadores da timeline use: pjlink <nome> power on, "
+               "pjlink <nome> shutter close... Ex.: a agenda liga os projetores às 9:00."));
+  }
+
+  ImGui::SeparatorText(T("Testar um comando"));
+  {
+    static char cmd[256] = "midi note 1 60 127";
+    ImGui::SetNextItemWidth(260);
+    bool go = ImGui::InputText("##cmd", cmd, sizeof(cmd), ImGuiInputTextFlags_EnterReturnsTrue);
+    ImGui::SameLine();
+    if (ImGui::Button(T("Enviar")) || go) e.runCommand(cmd);
+    static std::vector<std::string> outs;
+    static double outsAt = -10;
+    if (ImGui::GetTime() - outsAt > 3) { outs = e.devices.midiOutPorts(); outsAt = ImGui::GetTime(); }
+    ImGui::TextDisabled(T("Saídas MIDI: %s"), outs.empty() ? T("nenhuma") : outs.front().c_str());
+    if (outs.size() > 1) ImGui::SetItemTooltip(T("%zu portas; use midi@nome para escolher"), outs.size());
+  }
+
+  ImGui::SeparatorText(T("Teclado"));
+  if (ImGui::Checkbox(T("Teclas como entrada (/key/<tecla>)"), &p.keyboardInput)) app.edited();
+  helpMarker(T("Cada tecla vira /key/a, /key/1, /key/f1, /key/left... com valor 1 ao apertar e 0 ao "
+             "soltar, também com as janelas de saída em foco. Use num mapeamento: ex. a tecla A "
+             "dispara a coluna 3. Espaço, Esc e B continuam com as funções do programa."));
+
+  ImGui::SeparatorText(T("DMX de entrada (mesa de luz)"));
   {
     DmxInputConfig &d = p.dmxInput;
-    bool ch = ImGui::Checkbox("Receber DMX", &d.enabled);
+    bool ch = ImGui::Checkbox(T("Receber DMX"), &d.enabled);
     int proto = int(d.protocol);
     ImGui::SameLine();
     ImGui::SetNextItemWidth(110);
     ch |= ImGui::Combo("##dmxproto", &proto, "Art-Net\0sACN\0");
     d.protocol = DmxProtocol(proto);
     ImGui::SetNextItemWidth(90);
-    ch |= ImGui::InputInt("Universo inicial", &d.universe);
+    ch |= ImGui::InputInt(T("Universo inicial"), &d.universe);
     ImGui::SetNextItemWidth(90);
-    ch |= ImGui::InputInt("Quantidade", &d.count);
+    ch |= ImGui::InputInt(T("Quantidade"), &d.count);
     d.universe = std::clamp(d.universe, 0, 32767);
     d.count = std::clamp(d.count, 1, 64);
     if (ch) { e.restartDmxInput(); app.edited(); }
     if (e.dmxInput().running())
-      ImGui::TextColored({0.4f, 0.9f, 0.5f, 1}, "Recebendo (%d pacotes). Canais chegam como %s/<universo>/<canal> (0-255).",
+      ImGui::TextColored({0.4f, 0.9f, 0.5f, 1}, T("Recebendo (%d pacotes). Canais chegam como %s/<universo>/<canal> (0-255)."),
                          e.dmxInput().packets(), d.protocol == DmxProtocol::ArtNet ? "/artnet" : "/sacn");
     else if (!e.dmxInputError().empty())
-      ImGui::TextColored({1, 0.4f, 0.4f, 1}, "Erro: %s", e.dmxInputError().c_str());
-    helpMarker("Uma mesa de luz (grandMA, Chamsys, Hog...) controla o Lumen: ligue um canal à "
-               "opacidade de uma layer, ou dispare colunas com um canal (valor acima de 127).");
+      ImGui::TextColored({1, 0.4f, 0.4f, 1}, T("Erro: %s"), e.dmxInputError().c_str());
+    helpMarker(T("Uma mesa de luz (grandMA, Chamsys, Hog...) controla o Lumen: ligue um canal à "
+               "opacidade de uma layer, ou dispare colunas com um canal (valor acima de 127)."));
   }
 
-  ImGui::SeparatorText("Mapeamentos (sensor → parâmetro)");
-  ImGui::TextWrapped("Ligue qualquer mensagem OSC (TouchOSC, TouchDesigner, Arduino, sensores...) "
-                     "a um parâmetro. Clique em \"Aprender\" e envie a mensagem.");
+  ImGui::SeparatorText(T("Mapeamentos (sensor → parâmetro)"));
+  ImGui::TextWrapped("%s", T("Ligue qualquer mensagem OSC (TouchOSC, TouchDesigner, Arduino, sensores...) "
+                     "a um parâmetro. Clique em \"Aprender\" e envie a mensagem."));
   int remove = -1;
   for (size_t i = 0; i < p.mappings.size(); ++i) {
     InputMapping &m = p.mappings[i];
@@ -2265,21 +3161,21 @@ void Ui::interactionInspector(App &app) {
     char header[256];
     std::snprintf(header, sizeof(header), "%s → %s###map", m.address.c_str(), mappingTargetName(m.target));
     if (ImGui::CollapsingHeader(header, ImGuiTreeNodeFlags_DefaultOpen)) {
-      if (ImGui::Checkbox("Ativo", &m.enabled)) app.edited();
+      if (ImGui::Checkbox(T("Ativo"), &m.enabled)) app.edited();
       ImGui::SameLine();
       bool learning = e.learnMapping == int(i);
       if (learning) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.9f, 0.3f, 0.3f, 1));
-      if (ImGui::Button(learning ? "Aguardando mensagem..." : "Aprender"))
+      if (ImGui::Button(learning ? T("Aguardando mensagem...") : T("Aprender")))
         e.learnMapping = learning ? -1 : int(i);
       if (learning) ImGui::PopStyleColor();
       ImGui::SameLine();
-      if (ImGui::Button("Remover")) remove = int(i);
-      if (inputText("Endereço", m.address)) app.edited();
-      helpMarker("Aceita curingas OSC: /sensor/* , /pad/[1-4]");
-      if (ImGui::InputInt("Argumento #", &m.argIndex)) { m.argIndex = std::max(0, m.argIndex); app.edited(); }
-      if (ImGui::Button("Calibrar")) { calibrating_ = int(i); calMin_ = 1e30f; calMax_ = -1e30f; }
-      helpMarker("Mexa o sensor ou fader até os extremos: a faixa de entrada é ajustada sozinha. "
-                 "Clique de novo para terminar.");
+      if (ImGui::Button(T("Remover"))) remove = int(i);
+      if (inputText(T("Endereço"), m.address)) app.edited();
+      helpMarker(T("Aceita curingas OSC: /sensor/* , /pad/[1-4]"));
+      if (ImGui::InputInt(T("Argumento #"), &m.argIndex)) { m.argIndex = std::max(0, m.argIndex); app.edited(); }
+      if (ImGui::Button(T("Calibrar"))) { calibrating_ = int(i); calMin_ = 1e30f; calMax_ = -1e30f; }
+      helpMarker(T("Mexa o sensor ou fader até os extremos: a faixa de entrada é ajustada sozinha. "
+                 "Clique de novo para terminar."));
       if (calibrating_ == int(i)) {
         for (auto &msg : e.frameInputs())
           if (oscMatch(m.address.c_str(), msg.address.c_str()) && size_t(m.argIndex) < msg.args.size()) {
@@ -2289,59 +3185,59 @@ void Ui::interactionInspector(App &app) {
           }
         ImGui::SameLine();
         if (calMax_ >= calMin_) ImGui::Text("%.2f .. %.2f", calMin_, calMax_);
-        else ImGui::TextDisabled("aguardando valores...");
+        else ImGui::TextDisabled("%s", T("aguardando valores..."));
         ImGui::SameLine();
-        if (ImGui::Button("Concluir")) {
+        if (ImGui::Button(T("Concluir"))) {
           if (calMax_ > calMin_) { m.inMin = calMin_; m.inMax = calMax_; app.edited(); }
           calibrating_ = -1;
         }
       }
       float in[2] = {m.inMin, m.inMax};
-      if (ImGui::DragFloat2("Entrada min/max", in, 0.01f)) { m.inMin = in[0]; m.inMax = in[1]; app.edited(); }
+      if (ImGui::DragFloat2(T("Entrada min/max"), in, 0.01f)) { m.inMin = in[0]; m.inMax = in[1]; app.edited(); }
       int t = int(m.target);
       std::string items;
       for (int k = 0; k < int(MappingTarget::COUNT); ++k) {
         items += mappingTargetName(MappingTarget(k));
         items.push_back('\0');
       }
-      if (ImGui::Combo("Alvo", &t, items.c_str())) { m.target = MappingTarget(t); app.edited(); }
+      if (ImGui::Combo(T("Alvo"), &t, items.c_str())) { m.target = MappingTarget(t); app.edited(); }
       if (!mappingTargetIsTrigger(m.target)) {
         int tr = int(m.transformer);
-        if (ImGui::Combo("Transformação", &tr, "Linear (segue a entrada)\0Chave (alto = máx, baixo = mín)\0"
-                                                  "Alternar (cada toque troca mín/máx)\0Acumular (cada toque soma o passo)\0")) {
+        if (ImGui::Combo(T("Transformação"), &tr, TZ("Linear (segue a entrada)\0Chave (alto = máx, baixo = mín)\0"
+                                                  "Alternar (cada toque troca mín/máx)\0Acumular (cada toque soma o passo)\0"))) {
           m.transformer = Transformer(tr);
           app.edited();
         }
-        if (m.transformer == Transformer::Accumulator && ImGui::DragFloat("Passo", &m.step, 0.01f)) app.edited();
+        if (m.transformer == Transformer::Accumulator && ImGui::DragFloat(T("Passo"), &m.step, 0.01f)) app.edited();
       }
       int cols[2] = {m.firstColumn, m.lastColumn};
-      if (ImGui::InputInt2("Só nas colunas (de/até)", cols)) {
+      if (ImGui::InputInt2(T("Só nas colunas (de/até)"), cols)) {
         m.firstColumn = std::max(0, cols[0]);
         m.lastColumn = std::max(0, cols[1]);
         app.edited();
       }
-      helpMarker("0 0 = sempre ativo. Ex.: 3 7 = o sensor só age enquanto uma coluna de 3 a 7 "
-                 "estiver no ar.");
+      helpMarker(T("0 0 = sempre ativo. Ex.: 3 7 = o sensor só age enquanto uma coluna de 3 a 7 "
+                 "estiver no ar."));
       if (mappingTargetNeedsLayer(m.target)) {
         Layer *l = p.layer(m.layerId);
-        if (ImGui::BeginCombo("Layer", l ? l->name.c_str() : "(escolha)")) {
+        if (ImGui::BeginCombo(T("Layer"), l ? l->name.c_str() : T("(escolha)"))) {
           for (auto &ly : p.layers)
             if (ImGui::Selectable(ly.name.c_str(), ly.id == m.layerId)) { m.layerId = ly.id; app.edited(); }
           ImGui::EndCombo();
         }
         float out[2] = {m.outMin, m.outMax};
-        if (ImGui::DragFloat2("Saída min/max", out, 0.01f)) { m.outMin = out[0]; m.outMax = out[1]; app.edited(); }
-        if (ImGui::SliderFloat("Suavização", &m.smoothing, 0, 0.99f)) app.edited();
+        if (ImGui::DragFloat2(T("Saída min/max"), out, 0.01f)) { m.outMin = out[0]; m.outMax = out[1]; app.edited(); }
+        if (ImGui::SliderFloat(T("Suavização"), &m.smoothing, 0, 0.99f)) app.edited();
       } else if (!mappingTargetIsTrigger(m.target)) {
         float out[2] = {m.outMin, m.outMax};
-        if (ImGui::DragFloat2("Saída min/max", out, 0.01f)) { m.outMin = out[0]; m.outMax = out[1]; app.edited(); }
-        if (ImGui::SliderFloat("Suavização", &m.smoothing, 0, 0.99f)) app.edited();
+        if (ImGui::DragFloat2(T("Saída min/max"), out, 0.01f)) { m.outMin = out[0]; m.outMax = out[1]; app.edited(); }
+        if (ImGui::SliderFloat(T("Suavização"), &m.smoothing, 0, 0.99f)) app.edited();
       } else if (m.target == MappingTarget::LaunchColumn) {
         int colN = int(m.outMin);
-        if (ImGui::InputInt("Coluna (1..n)", &colN)) { m.outMin = float(std::max(1, colN)); app.edited(); }
-        ImGui::TextDisabled("Dispara quando o valor passa da metade da faixa.");
+        if (ImGui::InputInt(T("Coluna (1..n)"), &colN)) { m.outMin = float(std::max(1, colN)); app.edited(); }
+        ImGui::TextDisabled("%s", T("Dispara quando o valor passa da metade da faixa."));
       } else {
-        ImGui::TextDisabled("Dispara quando o valor passa da metade da faixa.");
+        ImGui::TextDisabled("%s", T("Dispara quando o valor passa da metade da faixa."));
       }
     }
     ImGui::PopID();
@@ -2351,16 +3247,16 @@ void Ui::interactionInspector(App &app) {
     if (e.learnMapping == remove) e.learnMapping = -1;
     app.edited();
   }
-  if (ImGui::Button("+ Mapeamento")) {
+  if (ImGui::Button(T("+ Mapeamento"))) {
     InputMapping m;
     m.layerId = app.sel.layerId >= 0 ? app.sel.layerId : (p.layers.empty() ? -1 : p.layers.front().id);
     p.mappings.push_back(m);
     app.edited();
   }
 
-  ImGui::SeparatorText("Agenda (instalações)");
+  ImGui::SeparatorText(T("Agenda (instalações)"));
   {
-    ImGui::TextWrapped("Ações em horários fixos, ex.: liga a coluna 1 às 9:00 e faz blackout às 22:00.");
+    ImGui::TextWrapped("%s", T("Ações em horários fixos, ex.: liga a coluna 1 às 9:00 e faz blackout às 22:00."));
     int removeEntry = -1;
     for (size_t i = 0; i < p.schedule.size(); ++i) {
       ScheduleEntry &se = p.schedule[i];
@@ -2377,7 +3273,7 @@ void Ui::interactionInspector(App &app) {
       ImGui::SameLine();
       int act = int(se.action);
       ImGui::SetNextItemWidth(130);
-      if (ImGui::Combo("##act", &act, "Disparar coluna\0GO (próxima)\0Parar tudo\0Blackout liga\0Blackout desliga\0")) {
+      if (ImGui::Combo("##act", &act, TZ("Disparar coluna\0GO (próxima)\0Parar tudo\0Blackout liga\0Blackout desliga\0Comando\0"))) {
         se.action = ScheduleAction(act);
         app.edited();
       }
@@ -2385,10 +3281,18 @@ void Ui::interactionInspector(App &app) {
         ImGui::SameLine();
         ImGui::SetNextItemWidth(70);
         if (ImGui::InputInt("##col", &se.column)) { se.column = std::max(1, se.column); app.edited(); }
+      } else if (se.action == ScheduleAction::Command) {
+        ImGui::SetNextItemWidth(260);
+        if (inputText("##scmd", se.command)) app.edited();
+        ImGui::SetItemTooltip("%s", T("Ex.: pjlink Sala power on"));
       }
       ImGui::SameLine();
       if (ImGui::SmallButton("x")) removeEntry = int(i);
-      static const char *dn[] = {"D", "S", "T", "Q", "Q", "S", "S"};
+      const char *dn[] = {"D", "S", "T", "Q", "Q", "S", "S"};
+      if (language() == Language::English) {
+        static const char *en[] = {"S", "M", "T", "W", "T", "F", "S"};
+        std::copy(en, en + 7, dn);
+      }
       for (int d = 0; d < 7; ++d) {
         ImGui::PushID(d);
         bool on = se.days & (1 << d);
@@ -2405,49 +3309,49 @@ void Ui::interactionInspector(App &app) {
       p.schedule.erase(p.schedule.begin() + removeEntry);
       app.edited();
     }
-    if (ImGui::Button("+ Horário")) {
+    if (ImGui::Button(T("+ Horário"))) {
       p.schedule.push_back({});
       app.edited();
     }
   }
 
-  ImGui::SeparatorText("Monitor OSC");
-  if (ImGui::SmallButton("Limpar")) e.oscLog.clear();
+  ImGui::SeparatorText(T("Monitor OSC"));
+  if (ImGui::SmallButton(T("Limpar"))) e.oscLog.clear();
   ImGui::BeginChild("##osclog", {0, 180}, ImGuiChildFlags_Borders);
   for (auto &line : e.oscLog) ImGui::TextUnformatted(line.c_str());
   if (ImGui::GetScrollY() >= ImGui::GetScrollMaxY() - 4) ImGui::SetScrollHereY(1.0f);
   ImGui::EndChild();
-  ImGui::TextDisabled("Linhas com \"?\" não correspondem a comandos /lumen/...");
+  ImGui::TextDisabled("%s", T("Linhas com \"?\" não correspondem a comandos /lumen/..."));
 }
 
 void Ui::ledInspector(App &app) {
   Engine &e = app.engine;
   Project &p = e.project;
 
-  ImGui::SeparatorText("Controladores (Art-Net / sACN)");
+  ImGui::SeparatorText(T("Controladores (Art-Net / sACN)"));
   for (auto &d : p.dmxDevices) {
     ImGui::PushID(d.id);
     if (ImGui::Checkbox("##en", &d.enabled)) app.edited();
     ImGui::SameLine();
     char label[200];
     std::snprintf(label, sizeof(label), "%s  (%s %s)", d.name.c_str(),
-                  d.protocol == DmxProtocol::ArtNet ? "Art-Net" : "sACN",
-                  d.host.empty() ? (d.protocol == DmxProtocol::ArtNet ? "broadcast" : "multicast") : d.host.c_str());
+                  d.protocol == DmxProtocol::ArtNet ? T("Art-Net") : T("sACN"),
+                  d.host.empty() ? (d.protocol == DmxProtocol::ArtNet ? T("broadcast") : T("multicast")) : d.host.c_str());
     if (ImGui::Selectable(label, app.sel.dmxDeviceId == d.id)) app.sel.dmxDeviceId = d.id;
     ImGui::PopID();
   }
-  if (ImGui::Button("+ Art-Net")) {
+  if (ImGui::Button(T("+ Art-Net"))) {
     app.sel.dmxDeviceId = p.addDmxDevice(DmxProtocol::ArtNet).id;
     app.edited();
   }
   ImGui::SameLine();
-  if (ImGui::Button("+ sACN")) {
+  if (ImGui::Button(T("+ sACN"))) {
     app.sel.dmxDeviceId = p.addDmxDevice(DmxProtocol::SACN).id;
     app.edited();
   }
   if (DmxDevice *d = p.dmxDevice(app.sel.dmxDeviceId)) {
     ImGui::SameLine();
-    if (ImGui::Button("Remover controlador")) {
+    if (ImGui::Button(T("Remover controlador"))) {
       int id = d->id;
       p.dmxDevices.erase(std::remove_if(p.dmxDevices.begin(), p.dmxDevices.end(), [&](auto &x) { return x.id == id; }),
                          p.dmxDevices.end());
@@ -2455,35 +3359,35 @@ void Ui::ledInspector(App &app) {
       app.edited();
     } else {
       ImGui::PushID(d->id);
-      if (inputText("Nome##dev", d->name)) app.edited();
+      if (inputText(T("Nome##dev"), d->name)) app.edited();
       int proto = int(d->protocol);
-      if (ImGui::Combo("Protocolo", &proto, "Art-Net\0sACN (E1.31)\0")) { d->protocol = DmxProtocol(proto); app.edited(); }
-      if (inputText("IP do controlador", d->host)) app.edited();
-      helpMarker("Vazio = broadcast (Art-Net) ou multicast (sACN). Prefira o IP do controlador "
-                 "(unicast): menos tráfego na rede. Ex.: 2.0.0.10 ou 192.168.1.50");
-      if (ImGui::SliderInt("Taxa (pacotes/s)", &d->rate, 1, 60)) app.edited();
+      if (ImGui::Combo(T("Protocolo"), &proto, TZ("Art-Net\0sACN (E1.31)\0"))) { d->protocol = DmxProtocol(proto); app.edited(); }
+      if (inputText(T("IP do controlador"), d->host)) app.edited();
+      helpMarker(T("Vazio = broadcast (Art-Net) ou multicast (sACN). Prefira o IP do controlador "
+                 "(unicast): menos tráfego na rede. Ex.: 2.0.0.10 ou 192.168.1.50"));
+      if (ImGui::SliderInt(T("Taxa (pacotes/s)"), &d->rate, 1, 60)) app.edited();
       ImGui::PopID();
     }
   }
 
-  ImGui::SeparatorText("Fitas / matrizes de LED");
+  ImGui::SeparatorText(T("Fitas / matrizes de LED"));
   int removeId = -1;
   for (auto &m : p.ledMappings) {
     ImGui::PushID(m.id);
     if (ImGui::Checkbox("##en", &m.enabled)) app.edited();
-    ImGui::SetItemTooltip("Desligada não envia nada");
+    ImGui::SetItemTooltip("%s", T("Desligada não envia nada"));
     ImGui::SameLine();
     if (ImGui::Checkbox("##lock", &m.locked)) app.edited();
-    ImGui::SetItemTooltip("Travada: continua enviando, mas não dá para mover no workspace");
+    ImGui::SetItemTooltip("%s", T("Travada: continua enviando, mas não dá para mover no workspace"));
     ImGui::SameLine();
     char label[200];
-    std::snprintf(label, sizeof(label), "%s  (%d×%d %s)", m.name.c_str(), m.cols, m.rows, ledFormatName(m.format));
+    std::snprintf(label, sizeof(label), T("%s  (%d×%d %s)"), m.name.c_str(), m.cols, m.rows, ledFormatName(m.format));
     if (ImGui::Selectable(label, app.sel.ledId == m.id)) {
       app.sel.ledId = m.id;
       workspace.tool = Tool::Led;
     }
     if (ImGui::BeginPopupContextItem()) {
-      if (ImGui::MenuItem("Remover")) removeId = m.id;
+      if (ImGui::MenuItem(T("Remover"))) removeId = m.id;
       ImGui::EndPopup();
     }
     ImGui::PopID();
@@ -2493,7 +3397,7 @@ void Ui::ledInspector(App &app) {
                         p.ledMappings.end());
     app.edited();
   }
-  if (ImGui::Button("+ Fita de LED")) {
+  if (ImGui::Button(T("+ Fita de LED"))) {
     if (p.dmxDevices.empty()) p.addDmxDevice(DmxProtocol::ArtNet);
     LedMapping &nm = p.addLedMapping();
     if (workspace.viewOutputId < 0 && workspace.viewCanvas != 0) {
@@ -2507,15 +3411,15 @@ void Ui::ledInspector(App &app) {
     app.edited();
   }
   ImGui::SameLine();
-  ImGui::TextDisabled("Ferramenta LED (L) para posicionar");
+  ImGui::TextDisabled("%s", T("Ferramenta LED (L) para posicionar"));
 
   if (LedMapping *m = p.ledMapping(app.sel.ledId)) {
     ImGui::PushID(m->id);
     ImGui::SeparatorText(m->name.c_str());
-    if (inputText("Nome", m->name)) app.edited();
+    if (inputText(T("Nome"), m->name)) app.edited();
     if (!p.canvases.empty()) {
       int cid = m->canvasId;
-      if (canvasCombo("Canvas", p, cid)) {
+      if (canvasCombo(T("Canvas"), p, cid)) {
         m->canvasId = cid;
         workspace.viewCanvas = cid;
         workspace.viewOutputId = -1;
@@ -2523,82 +3427,82 @@ void Ui::ledInspector(App &app) {
       }
     }
     DmxDevice *dev = p.dmxDevice(m->deviceId);
-    if (ImGui::BeginCombo("Controlador", dev ? dev->name.c_str() : "(nenhum)")) {
+    if (ImGui::BeginCombo(T("Controlador"), dev ? dev->name.c_str() : T("(nenhum)"))) {
       for (auto &d : p.dmxDevices)
         if (ImGui::Selectable(d.name.c_str(), d.id == m->deviceId)) { m->deviceId = d.id; app.edited(); }
       ImGui::EndCombo();
     }
     int size[2] = {m->cols, m->rows};
-    if (ImGui::InputInt2("LEDs (col × lin)", size)) {
+    if (ImGui::InputInt2(T("LEDs (col × lin)"), size)) {
       m->cols = std::clamp(size[0], 1, 4096);
       m->rows = std::clamp(size[1], 1, 4096);
       app.edited();
     }
-    helpMarker("Quantidade de LEDs. Fita de 60 LEDs: 60 × 1. Matriz 16×16: 16 × 16.");
+    helpMarker(T("Quantidade de LEDs. Fita de 60 LEDs: 60 × 1. Matriz 16×16: 16 × 16."));
     int fmt = int(m->format);
-    if (ImGui::Combo("Formato", &fmt, "RGB\0BGR\0GRB (WS2812)\0RGBW\0Mono\0")) { m->format = LedFormat(fmt); app.edited(); }
-    helpMarker("Se o vermelho sair azul, use BGR. Fitas WS2812/SK6812 costumam ser GRB.");
+    if (ImGui::Combo(T("Formato"), &fmt, TZ("RGB\0BGR\0GRB (WS2812)\0RGBW\0Mono\0"))) { m->format = LedFormat(fmt); app.edited(); }
+    helpMarker(T("Se o vermelho sair azul, use BGR. Fitas WS2812/SK6812 costumam ser GRB."));
     ImGui::SameLine();
-    if (ImGui::Checkbox("16 bits", &m->wide)) app.edited();
-    if (ImGui::Checkbox("Zigzag", &m->zigzag)) app.edited();
-    ImGui::SetItemTooltip("As linhas vão e voltam (matriz feita com uma fita dobrada)");
+    if (ImGui::Checkbox(T("16 bits"), &m->wide)) app.edited();
+    if (ImGui::Checkbox(T("Zigzag"), &m->zigzag)) app.edited();
+    ImGui::SetItemTooltip("%s", T("As linhas vão e voltam (matriz feita com uma fita dobrada)"));
     ImGui::SameLine();
-    if (ImGui::Checkbox("Vertical", &m->vertical)) app.edited();
-    ImGui::SetItemTooltip("A fiação segue as colunas em vez das linhas");
+    if (ImGui::Checkbox(T("Vertical"), &m->vertical)) app.edited();
+    ImGui::SetItemTooltip("%s", T("A fiação segue as colunas em vez das linhas"));
     ImGui::SameLine();
-    if (ImGui::Checkbox("Inverter X", &m->flipX)) app.edited();
+    if (ImGui::Checkbox(T("Inverter X"), &m->flipX)) app.edited();
     ImGui::SameLine();
-    if (ImGui::Checkbox("Inverter Y", &m->flipY)) app.edited();
+    if (ImGui::Checkbox(T("Inverter Y"), &m->flipY)) app.edited();
 
     int uni = m->universe, ch = m->channel;
-    if (ImGui::InputInt("Universo", &uni)) { m->universe = std::clamp(uni, 0, 32767); app.edited(); }
-    helpMarker("Art-Net: o primeiro universo é 0. sACN: o primeiro é 1. Erro clássico quando a fita não acende.");
-    if (ImGui::InputInt("Canal inicial", &ch)) { m->channel = std::clamp(ch, 1, 512); app.edited(); }
-    if (ImGui::SliderFloat("Curva (gamma)", &m->gamma, 0.5f, 4.0f, "%.2f")) app.edited();
-    helpMarker("LEDs não são lineares: 2.2 deixa os tons médios mais naturais. 1 = sem correção.");
-    if (ImGui::SliderFloat("Brilho", &m->brightness, 0, 1)) app.edited();
+    if (ImGui::InputInt(T("Universo"), &uni)) { m->universe = std::clamp(uni, 0, 32767); app.edited(); }
+    helpMarker(T("Art-Net: o primeiro universo é 0. sACN: o primeiro é 1. Erro clássico quando a fita não acende."));
+    if (ImGui::InputInt(T("Canal inicial"), &ch)) { m->channel = std::clamp(ch, 1, 512); app.edited(); }
+    if (ImGui::SliderFloat(T("Curva (gamma)"), &m->gamma, 0.5f, 4.0f, "%.2f")) app.edited();
+    helpMarker(T("LEDs não são lineares: 2.2 deixa os tons médios mais naturais. 1 = sem correção."));
+    if (ImGui::SliderFloat(T("Brilho"), &m->brightness, 0, 1)) app.edited();
 
     // Where the strip lands in DMX.
     auto slots = computeLedLayout(m->layout());
     int cpp = ledChannelsPerPixel(m->format, m->wide);
     if (!slots.empty())
-      ImGui::TextWrapped("%zu LEDs · %d canais por LED · universo %d canal %d → universo %d canal %d",
+      ImGui::TextWrapped(T("%zu LEDs · %d canais por LED · universo %d canal %d → universo %d canal %d"),
                          slots.size(), cpp, slots.front().universe, slots.front().channel + 1,
                          slots.back().universe, slots.back().channel + cpp);
     if (dev && dev->protocol == DmxProtocol::SACN && m->universe == 0)
-      ImGui::TextColored({1, 0.6f, 0.3f, 1}, "sACN não tem universo 0: use 1.");
+      ImGui::TextColored({1, 0.6f, 0.3f, 1}, "%s", T("sACN não tem universo 0: use 1."));
 
-    if (ImGui::Button("Ocupar o canvas")) {
+    if (ImGui::Button(T("Ocupar o canvas"))) {
       m->area.setRect({0, 0}, {float(p.canvasWidth(m->canvasId)), float(p.canvasHeight(m->canvasId))});
       app.edited();
     }
     ImGui::SameLine();
-    if (ImGui::Button("Faixa horizontal")) {
+    if (ImGui::Button(T("Faixa horizontal"))) {
       m->area.setRect({float(p.canvasWidth(m->canvasId)) * 0.05f, float(p.canvasHeight(m->canvasId)) * 0.47f}, {float(p.canvasWidth(m->canvasId)) * 0.9f, float(p.canvasHeight(m->canvasId)) * 0.06f});
       app.edited();
     }
     ImGui::PopID();
   }
 
-  ImGui::SeparatorText("Geral");
-  if (ImGui::SliderFloat("DMX master", &p.dmxMaster, 0, 1)) app.edited();
-  ImGui::SetItemTooltip("Intensidade de todos os LEDs (0 = blackout das luzes)");
-  for (auto &c : e.leds.conflicts()) ImGui::TextColored({1, 0.5f, 0.4f, 1}, "Conflito: %s", c.c_str());
-  ImGui::TextDisabled("%d pacotes enviados", e.leds.packetsSent());
+  ImGui::SeparatorText(T("Geral"));
+  if (ImGui::SliderFloat(T("DMX master"), &p.dmxMaster, 0, 1)) app.edited();
+  ImGui::SetItemTooltip("%s", T("Intensidade de todos os LEDs (0 = blackout das luzes)"));
+  for (auto &c : e.leds.conflicts()) ImGui::TextColored({1, 0.5f, 0.4f, 1}, T("Conflito: %s"), c.c_str());
+  ImGui::TextDisabled(T("%d pacotes enviados"), e.leds.packetsSent());
 
-  ImGui::SeparatorText("Monitor DMX");
+  ImGui::SeparatorText(T("Monitor DMX"));
   const auto &unis = e.leds.universes();
   if (unis.empty()) {
-    ImGui::TextDisabled("Nada sendo enviado");
+    ImGui::TextDisabled("%s", T("Nada sendo enviado"));
     return;
   }
   static UniverseKey shownKey{-1, -1};
   if (!unis.count(shownKey)) shownKey = unis.begin()->first;
   auto keyName = [&](const UniverseKey &k) {
     const DmxDevice *d = p.dmxDevice(k.deviceId);
-    return (d ? d->name : std::string("?")) + " · universo " + std::to_string(k.universe);
+    return (d ? d->name : std::string("?")) + T(" · universo ") + std::to_string(k.universe);
   };
-  if (ImGui::BeginCombo("Universo##mon", keyName(shownKey).c_str())) {
+  if (ImGui::BeginCombo(T("Universo##mon"), keyName(shownKey).c_str())) {
     for (auto &[k, data] : unis)
       if (ImGui::Selectable(keyName(k).c_str(), !(k < shownKey) && !(shownKey < k))) shownKey = k;
     ImGui::EndCombo();
@@ -2616,24 +3520,24 @@ void Ui::ledInspector(App &app) {
   if (ImGui::IsItemHovered()) {
     ImVec2 mp = ImGui::GetIO().MousePos;
     int idx = int((mp.x - o.x) / cw) + int((mp.y - o.y) / chh) * 32;
-    if (idx >= 0 && idx < 512) ImGui::SetTooltip("Canal %d = %d", idx + 1, data[size_t(idx)]);
+    if (idx >= 0 && idx < 512) ImGui::SetTooltip(T("Canal %d = %d"), idx + 1, data[size_t(idx)]);
   }
-  ImGui::TextDisabled("Cada quadrado é um canal (1–512); passe o mouse para ver o valor.");
+  ImGui::TextDisabled("%s", T("Cada quadrado é um canal (1–512); passe o mouse para ver o valor."));
 }
 
 void Ui::projectInspector(App &app) {
   Project &p = app.engine.project;
-  ImGui::SeparatorText("Canvas principal");
-  if (inputText("Nome##cv0", p.canvasName)) app.edited();
+  ImGui::SeparatorText(T("Canvas principal"));
+  if (inputText(T("Nome##cv0"), p.canvasName)) app.edited();
   int size[2] = {p.canvasW, p.canvasH};
-  if (ImGui::InputInt2("Resolução", size, ImGuiInputTextFlags_EnterReturnsTrue)) {
+  if (ImGui::InputInt2(T("Resolução"), size, ImGuiInputTextFlags_EnterReturnsTrue)) {
     p.canvasW = std::clamp(size[0], 16, 16384);
     p.canvasH = std::clamp(size[1], 16, 16384);
     app.edited();
   }
-  helpMarker("Espaço de trabalho onde as layers são compostas. As saídas recortam regiões dele. "
-             "Pressione Enter para aplicar.");
-  const char *presets[] = {"1280×720", "1920×1080", "2560×1440", "3840×1080 (2 proj.)", "3840×2160"};
+  helpMarker(T("Espaço de trabalho onde as layers são compostas. As saídas recortam regiões dele. "
+             "Pressione Enter para aplicar."));
+  const char *presets[] = {"1280×720", "1920×1080", "2560×1440", T("3840×1080 (2 proj.)"), "3840×2160"};
   const int pw[] = {1280, 1920, 2560, 3840, 3840}, ph[] = {720, 1080, 1440, 1080, 2160};
   for (int i = 0; i < 5; ++i) {
     if (i) ImGui::SameLine();
@@ -2643,12 +3547,12 @@ void Ui::projectInspector(App &app) {
       app.edited();
     }
   }
-  if (colorEdit("Fundo", p.background)) app.edited();
+  if (colorEdit(T("Fundo"), p.background)) app.edited();
 
-  ImGui::SeparatorText("Outros canvases (video routing)");
-  ImGui::TextWrapped("Cada canvas tem as suas layers. Uma saída escolhe qual canvas mostra, e um "
+  ImGui::SeparatorText(T("Outros canvases (video routing)"));
+  ImGui::TextWrapped("%s", T("Cada canvas tem as suas layers. Uma saída escolhe qual canvas mostra, e um "
                      "canvas pode virar mídia dentro de outro (Biblioteca → + Ao vivo → Canvas). "
-                     "Ex.: vários canvases montados num único sinal 4K para o processador de LED.");
+                     "Ex.: vários canvases montados num único sinal 4K para o processador de LED."));
   int removeCanvas = -1;
   for (auto &c : p.canvases) {
     ImGui::PushID(c.id);
@@ -2665,7 +3569,7 @@ void Ui::projectInspector(App &app) {
     ImGui::SameLine();
     if (colorEdit("##bg", c.background)) app.edited();
     ImGui::SameLine();
-    if (ImGui::SmallButton("Ver")) { workspace.viewCanvas = c.id; workspace.viewOutputId = -1; }
+    if (ImGui::SmallButton(T("Ver"))) { workspace.viewCanvas = c.id; workspace.viewOutputId = -1; }
     ImGui::SameLine();
     if (ImGui::SmallButton("x")) removeCanvas = c.id;
     ImGui::PopID();
@@ -2674,82 +3578,88 @@ void Ui::projectInspector(App &app) {
   static int pendingRemove = -1;
   if (removeCanvas >= 0) pendingRemove = removeCanvas;
   if (ImGui::BeginPopupModal("Remover canvas?", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
-    ImGui::Text("As layers deste canvas serão apagadas. As saídas voltam para o canvas principal.");
-    if (ImGui::Button("Remover")) {
+    ImGui::Text("%s", T("As layers deste canvas serão apagadas. As saídas voltam para o canvas principal."));
+    if (ImGui::Button(T("Remover"))) {
       p.removeCanvas(pendingRemove);
       if (workspace.viewCanvas == pendingRemove) workspace.viewCanvas = 0;
       app.edited();
       ImGui::CloseCurrentPopup();
     }
     ImGui::SameLine();
-    if (ImGui::Button("Cancelar")) ImGui::CloseCurrentPopup();
+    if (ImGui::Button(T("Cancelar"))) ImGui::CloseCurrentPopup();
     ImGui::EndPopup();
   }
-  if (ImGui::Button("+ Canvas")) {
+  if (ImGui::Button(T("+ Canvas"))) {
     CanvasConfig &c = p.addCanvas(1920, 1080);
-    Layer &l = p.addLayer(c.name + " layer", c.id);
+    Layer &l = p.addLayer(c.name + T(" layer"), c.id);
     app.sel.layerId = l.id;
     workspace.viewCanvas = c.id;
     workspace.viewOutputId = -1;
     app.edited();
   }
-  ImGui::SeparatorText("Show");
-  if (ImGui::DragFloat("Fade padrão (s)", &p.defaultTransition, 0.05f, 0, 60)) app.edited();
+  ImGui::SeparatorText(T("Show"));
+  if (ImGui::DragFloat(T("Fade padrão (s)"), &p.defaultTransition, 0.05f, 0, 60)) app.edited();
 
-  ImGui::SeparatorText("Ao abrir o projeto (instalação)");
-  if (ImGui::Checkbox("Abrir as saídas", &p.startOutputs)) app.edited();
+  ImGui::SeparatorText(T("Ao abrir o projeto (instalação)"));
+  if (ImGui::Checkbox(T("Abrir as saídas"), &p.startOutputs)) app.edited();
   ImGui::SetNextItemWidth(100);
-  if (ImGui::InputInt("Disparar a coluna (0 = nenhuma)", &p.startColumn)) {
+  if (ImGui::InputInt(T("Disparar a coluna (0 = nenhuma)"), &p.startColumn)) {
     p.startColumn = std::max(0, p.startColumn);
     app.edited();
   }
-  helpMarker("Para uma instalação que liga sozinha: coloque um atalho do Lumen com o projeto "
-             "(Lumen.exe show.lumen) na pasta Inicializar do Windows (Win+R, shell:startup).");
+  helpMarker(T("Para uma instalação que liga sozinha: coloque um atalho do Lumen com o projeto "
+             "(Lumen.exe show.lumen) na pasta Inicializar do Windows (Win+R, shell:startup)."));
 
-  ImGui::SeparatorText("Áudio");
+  ImGui::SeparatorText(T("Áudio"));
   Engine &e = app.engine;
-  if (ImGui::BeginCombo("Saída de áudio", p.audioDevice.empty() ? "Padrão do sistema" : p.audioDevice.c_str())) {
-    if (ImGui::Selectable("Padrão do sistema", p.audioDevice.empty())) { p.audioDevice.clear(); app.edited(); }
+  if (ImGui::BeginCombo(T("Saída de áudio"), p.audioDevice.empty() ? T("Padrão do sistema") : p.audioDevice.c_str())) {
+    if (ImGui::Selectable(T("Padrão do sistema"), p.audioDevice.empty())) { p.audioDevice.clear(); app.edited(); }
     for (auto &d : AudioEngine::devices())
       if (ImGui::Selectable(d.c_str(), d == p.audioDevice)) { p.audioDevice = d; app.edited(); }
     ImGui::EndCombo();
   }
-  ImGui::TextDisabled("Em uso: %s", e.audio.deviceName().c_str());
+  ImGui::TextDisabled(T("Em uso: %s"), e.audio.deviceName().c_str());
   if (!e.audio.error().empty()) ImGui::TextColored({1, 0.5f, 0.4f, 1}, "%s", e.audio.error().c_str());
-  if (ImGui::SliderFloat("Volume master", &p.masterVolume, 0, 2, "%.2f")) app.edited();
+  if (ImGui::SliderFloat(T("Volume master"), &p.masterVolume, 0, 2, "%.2f")) app.edited();
   ImGui::ProgressBar(std::min(1.0f, e.audio.peak(0)), {-1, 5}, "");
   ImGui::ProgressBar(std::min(1.0f, e.audio.peak(1)), {-1, 5}, "");
 
-  ImGui::SeparatorText("Vídeo");
-  if (ImGui::Checkbox("Decodificação por hardware", &p.hardwareDecode)) app.edited();
-  helpMarker("Usa a GPU (D3D11VA/DXVA2 no Windows) para H.264/HEVC/VP9/AV1. Vale para mídias "
-             "disparadas depois da mudança. HAP sempre vai direto para a GPU.");
-  ImGui::TextDisabled("HAP comprimido na GPU: %s", FrameUploader::supportsS3tc() ? "sim" : "não suportado");
+  ImGui::SeparatorText(T("Vídeo"));
+  if (ImGui::Checkbox(T("Decodificação por hardware"), &p.hardwareDecode)) app.edited();
+  helpMarker(T("Usa a GPU (D3D11VA/DXVA2 no Windows) para H.264/HEVC/VP9/AV1. Vale para mídias "
+             "disparadas depois da mudança. HAP sempre vai direto para a GPU."));
+  ImGui::TextDisabled(T("HAP comprimido na GPU: %s"), FrameUploader::supportsS3tc() ? T("sim") : T("não suportado"));
 
-  ImGui::SeparatorText("Spout (enviar o canvas)");
+  ImGui::SeparatorText(T("Spout (enviar o canvas)"));
   if (!spoutAvailable()) {
-    ImGui::TextDisabled("Disponível só no Windows");
+    ImGui::TextDisabled("%s", T("Disponível só no Windows"));
   } else {
-    if (ImGui::Checkbox("Enviar canvas por Spout", &p.spoutSend)) app.edited();
-    if (inputText("Nome do sender", p.spoutName)) app.edited();
+    if (ImGui::Checkbox(T("Enviar canvas por Spout"), &p.spoutSend)) app.edited();
+    if (inputText(T("Nome do sender"), p.spoutName)) app.edited();
     if (!e.spoutStatus().empty()) ImGui::TextDisabled("%s", e.spoutStatus().c_str());
   }
-  ImGui::SeparatorText("Arquivo");
-  ImGui::TextWrapped("%s", p.filePath.empty() ? "(projeto não salvo)" : p.filePath.c_str());
-  ImGui::Text("%zu mídias · %zu layers · %zu colunas · %zu saídas", p.library.size(),
+  ImGui::SeparatorText(T("NDI (enviar o canvas)"));
+  if (ImGui::Checkbox(T("Enviar canvas por NDI"), &p.ndiSend)) app.edited();
+  if (p.ndiSend) {
+    if (inputText(T("Nome NDI##canvas"), p.ndiName)) app.edited();
+    if (!e.ndiStatus().empty()) ImGui::TextDisabled("%s", e.ndiStatus().c_str());
+  }
+  ImGui::SeparatorText(T("Arquivo"));
+  ImGui::TextWrapped("%s", p.filePath.empty() ? T("(projeto não salvo)") : p.filePath.c_str());
+  ImGui::Text(T("%zu mídias · %zu layers · %zu colunas · %zu saídas"), p.library.size(),
               p.layers.size(), p.columns.size(), p.outputs.size());
 }
 
 void Ui::statusBar(App &app) {
-  ImGui::Text("%.0f fps", app.fps());
+  ImGui::Text(T("%.0f fps"), app.fps());
   ImGui::SameLine(0, 20);
   const Project &p = app.engine.project;
-  ImGui::TextDisabled("Canvas %d×%d", p.canvasW, p.canvasH);
+  ImGui::TextDisabled(T("Canvas %d×%d"), p.canvasW, p.canvasH);
   ImGui::SameLine(0, 20);
-  ImGui::TextDisabled("Saídas abertas: %d (%.1f ms)", app.outputs.openCount(), app.outputs.renderMs());
+  ImGui::TextDisabled(T("Saídas abertas: %d (%.1f ms)"), app.outputs.openCount(), app.outputs.renderMs());
   ImGui::SameLine(0, 20);
-  if (app.engine.oscServer().running()) ImGui::TextDisabled("OSC :%d", app.engine.oscServer().port());
-  else ImGui::TextDisabled("OSC desligado");
+  if (app.engine.oscServer().running()) ImGui::TextDisabled(T("OSC :%d"), app.engine.oscServer().port());
+  else ImGui::TextDisabled("%s", T("OSC desligado"));
   if (!app.statusText().empty() && app.statusAge() < 6) {
     ImGui::SameLine(0, 30);
     if (app.statusIsError()) ImGui::TextColored({1, 0.45f, 0.45f, 1}, "%s", app.statusText().c_str());

@@ -163,6 +163,24 @@ bool Engine::setLayerProperty(Layer &l, const std::vector<std::string> &propIn, 
     }
     return false;
   }
+  // /layer:Nome/text "..." (or /media/text): text of the text media playing in the layer.
+  if (p0 == "text" && hasArg) {
+    auto it = states_.find(l.id);
+    MediaItem *media = it != states_.end() && it->second.current ? project.media(it->second.current->mediaId()) : nullptr;
+    if (!media || media->type != MediaType::Text) return false;
+    std::string text;
+    for (size_t k = 0; k < m.args.size(); ++k) {
+      if (k) text += ' ';
+      if (auto *str = std::get_if<std::string>(&m.args[k])) text += *str;
+      else {
+        char b[32];
+        std::snprintf(b, sizeof(b), "%g", m.number(k));
+        text += b;
+      }
+    }
+    media->text = text;
+    return true;
+  }
   if (p0 == "visible") { l.visible = !hasArg || a0 > 0.5f; return true; }
   if (p0 == "mute") { l.mute = !hasArg || a0 > 0.5f; return true; }
   if (p0 == "tint" && m.args.size() >= 3) { l.fx.tint = {a0, a1, m.number(2), 1}; return true; }
@@ -252,9 +270,28 @@ bool Engine::handleOsc(const OscMessage &m) {
     if (cmd == "blackout") { blackout = !hasArg || a0 > 0.5f; return true; }
     if (cmd == "master") { masterOpacity = std::clamp(a0, 0.0f, 1.0f); return true; }
     if (cmd == "volume") { project.masterVolume = std::clamp(a0, 0.0f, 2.0f); return true; }
+    if (cmd == "transition") { transitionFader = std::clamp(a0, 0.0f, 1.0f); return true; }
     return false;
   }
 
+  if (p[1] == "timeline" && p.size() == 4) {
+    // /lumen/timeline/<n|name>/play|pause|stop|time <s>
+    Timeline *tl = nullptr;
+    int n;
+    if (parseInt(p[2], n) && n >= 1 && n <= int(project.timelines.size())) tl = &project.timelines[size_t(n - 1)];
+    for (auto &t : project.timelines)
+      if (!tl && t.name == p[2]) tl = &t;
+    if (!tl) return false;
+    if (p[3] == "play") { playTimeline(tl->id, !hasArg || a0 > 0.5f); return true; }
+    if (p[3] == "pause") { pauseTimeline(tl->id); return true; }
+    if (p[3] == "stop") { stopTimeline(tl->id); return true; }
+    if (p[3] == "time" && hasArg) { seekTimeline(tl->id, a0); return true; }
+    return false;
+  }
+  if (p[1] == "command" && hasArg) { // /lumen/command "pjlink sala power on"
+    if (auto *str = std::get_if<std::string>(&m.args[0])) { runCommand(*str); return true; }
+    return false;
+  }
   if (p[1] == "dmx" && p.size() == 3 && p[2] == "master" && hasArg) {
     project.dmxMaster = std::clamp(a0, 0.0f, 1.0f);
     return true;
@@ -369,6 +406,7 @@ void Engine::updateMappings(double dt) {
     if (im.target == MappingTarget::MasterOpacity) masterOpacity = std::clamp(st.value, 0.0f, 1.0f);
     else if (im.target == MappingTarget::MasterVolume) project.masterVolume = std::clamp(st.value, 0.0f, 2.0f);
     else if (im.target == MappingTarget::DmxMaster) project.dmxMaster = std::clamp(st.value, 0.0f, 1.0f);
+    else if (im.target == MappingTarget::TransitionFader) transitionFader = std::clamp(st.value, 0.0f, 1.0f);
     else if (Layer *l = project.layer(im.layerId)) setParam(*l, im.target, st.value);
     // Once settled, stop writing so the parameter can still be edited by hand.
     if (std::fabs(st.value - st.target) < 1e-4f) st.active = false;

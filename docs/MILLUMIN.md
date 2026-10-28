@@ -11,19 +11,19 @@ Legenda: ✅ o Lumen tem · 🟡 o Lumen tem parte · ⬜ ainda não tem.
 | Millumin | Lumen |
 |---|---|
 | Dashboard de colunas × layers, GO no espaço, título, notas e cor da coluna | ✅ |
-| Transição por coluna (crossfade, corte, pelo preto) | ✅ (ISF e stinger ⬜) |
+| Transição por coluna (crossfade, corte, pelo preto, ISF, stinger, manual) | ✅ v0.9 |
 | Modos de loop: infinito, uma vez e congelar, uma vez e parar, auto-follow | ✅ v0.6 |
 | Auto-go (espera, depois da transição, próxima / coluna específica) | ✅ v0.6 |
 | **States**: valores de propriedades por coluna, interpolados na transição, herança ➔ | ✅ v0.6 (layer: opacidade, posição, escala, rotação, cor, volume) |
 | Auto States (gravar automaticamente ao editar) | ⬜ |
 | Media layer independente, copy layer, grupos | 🟡 (fatias cobrem parte do copy layer) |
 | Transição por layer (crossfade, fade in/out) | ⬜ |
-| Timeline com keyframes, curvas, segmentos, intro, assíncrona, flags | ⬜ (próxima prioridade) |
+| Timeline com keyframes, curvas, segmentos, intro, assíncrona, flags | ✅ v0.9 (intro + loop, flags com comandos; timeline como mídia ⬜) |
 | Media Editor: corte (crop), in/out, efeitos por mídia | 🟡 (recorte UV por fatia) |
 | Efeitos em pilha: RGBA, HSLA, níveis, LUT, limiar, espelho, borda, chroma key, soft crop, blur, ISF | ✅ v0.8 (ISF; LUT ⬜) |
 | Mattes: alpha, alpha invertido, luma, luma invertido | ✅ v0.8 |
 | Máscaras: mostrar/esconder em pilha, invertida, opacidade, feather, escala, bezier, SVG | ✅ v0.7 |
-| Mídias: texto dinâmico, navegador, captura de tela, slideshow, PDF, color card com 10 cores | 🟡 (geradores, câmera, rede, Spout) |
+| Mídias: texto dinâmico, navegador, captura de tela, slideshow, PDF, color card com 10 cores | 🟡 (texto dinâmico v0.9, geradores, câmera, rede, Spout, NDI) |
 | Áudio: volume por mídia, roteamento por layer e matriz de canais | 🟡 (volume, mudo, placa de som) |
 
 ## Saídas e mapping
@@ -40,9 +40,9 @@ Legenda: ✅ o Lumen tem · 🟡 o Lumen tem parte · ⬜ ainda não tem.
 | `division` muda a grade mantendo o warp | ✅ v0.7 |
 | Vários canvases, canvas como mídia (vários → 1 saída) | ✅ v0.7 |
 | 1 canvas → várias saídas com blend livre (fora de grade) | ✅ v0.7 (blend automático) |
-| Saída sem tela (NDI / Syphon) | ✅ v0.7 (Spout sem janela) |
+| Saída sem tela (NDI / Syphon) | ✅ (Spout v0.7, NDI v0.9) |
 | Structure: anamorfose 3D (OBJ, câmera do público, 6 pontos e auto-place) | ⬜ |
-| Syphon / NDI / Blackmagic / AJA / RTMP | 🟡 (Spout no lugar de Syphon) |
+| Syphon / NDI / Blackmagic / AJA / RTMP | 🟡 (Spout no lugar de Syphon, NDI v0.9) |
 | Compensação de nível de preto | ✅ (o Millumin não tem) |
 
 ## Luz
@@ -61,15 +61,15 @@ Legenda: ✅ o Lumen tem · 🟡 o Lumen tem parte · ⬜ ainda não tem.
 |---|---|
 | Interações: entrada → transformação → ação, com "learn" | ✅ |
 | Entradas: teclado, MIDI, OSC, DMX, Art-Net, sACN | ✅ v0.6 |
-| Entradas: timecode, gamepad, Kinect, Leap Motion, áudio, blob tracker, scheduler | 🟡 (agenda v0.6, blob tracker v0.8) |
+| Entradas: timecode, gamepad, Kinect, Leap Motion, áudio, blob tracker, scheduler | 🟡 (agenda v0.6, blob tracker v0.8, timecode e serial v0.9) |
 | Transformações: nenhuma, chave, alternar, linear, acumular; calibrar; estabilizar | ✅ v0.6 |
 | Grupos de interações limitados a colunas | ✅ v0.6 (por mapeamento) |
-| Data-tracks: MIDI, OSC, DMX, string, MSC, PJLink, ATEM por coluna | 🟡 (ações OSC por coluna) |
+| Data-tracks: MIDI, OSC, DMX, string, MSC, PJLink, ATEM por coluna | ✅ v0.9 (MIDI, OSC, DMX, TCP/UDP, serial, PJLink; MSC e ATEM ⬜) |
 | API OSC completa, feedback, consulta `/?` | ✅ v0.6 (a consulta `/?` ⬜) |
 | Scripts JavaScript | ⬜ |
-| Timecode LTC/MTC/NTC (entrada e geração) | ⬜ |
+| Timecode LTC/MTC/NTC (entrada e geração) | ✅ v0.9 (LTC e MTC; NTC ⬜) |
 | Máquina reserva (ColumnSync) | ✅ pelo feedback OSC |
-| Arduino (auto-programação) | 🟡 (Arduino envia OSC ou serial→OSC) |
+| Arduino (auto-programação) | 🟡 (serial como entrada v0.9; sem auto-programação) |
 
 ## Atalhos do Millumin e equivalentes
 
@@ -82,3 +82,4 @@ Legenda: ✅ o Lumen tem · 🟡 o Lumen tem parte · ⬜ ainda não tem.
 | M (mapping), V (mover) | M, V (e G malha, K máscara, L LED) |
 | TAB (próximo canto), setas, ⇧ | Tab, setas, Shift ×10 |
 | ⌘Z / ⌘⇧Z | Ctrl+Z / Ctrl+Y |
+| Modo show (lock) | Ctrl+Shift+L |

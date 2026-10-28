@@ -4,6 +4,7 @@
 
 #include "core/project.h"
 #include "render/gpu.h"
+#include "io/ndi.h"
 #include "io/spout.h"
 #include "render/mask.h"
 
@@ -87,6 +88,8 @@ private:
   struct SpoutTarget {
     Framebuffer fb;
     SpoutOut out;
+    NdiSender ndi;
+    std::vector<unsigned char> px, flip;
   };
   std::map<int, std::unique_ptr<SpoutTarget>> spout_; // by output
 public:

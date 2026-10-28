@@ -17,6 +17,8 @@ static void usage() {
       "  --no-outputs            nunca abre as janelas de saída\n"
       "  --output-controls       desenha os cantos/malha da 1a saída no projetor\n"
       "  --check-effects         compila todos os shaders ISF da pasta effects e sai\n"
+      "  --diagnose              testa GPU, shaders, monitores, áudio, MIDI, serial, Spout e NDI e sai\n"
+      "  --show-mode             abre com a edição travada (modo show)\n"
       "  --size LxA              tamanho da janela de controle\n"
       "  --frames N              sai depois de N quadros (testes)\n"
       "  --screenshot-canvas F   salva o canvas em F (.ppm) no último quadro\n"
@@ -48,6 +50,8 @@ int main(int argc, char **argv) {
     else if (a == "--no-outputs") opts.noOutputs = true;
     else if (a == "--outputs") opts.openOutputs = true;
     else if (a == "--output-controls") opts.outputControls = true;
+    else if (a == "--diagnose") opts.diagnose = true;
+    else if (a == "--show-mode") opts.showMode = true;
     else if (a == "--check-effects") {
       opts.checkEffects = true;
       if (i + 1 < int(args.size()) && args[size_t(i + 1)][0] != '-') opts.checkEffectsDir = args[size_t(++i)];

@@ -5,6 +5,7 @@
 #include "engine/outputs.h"
 
 #include <memory>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -26,6 +27,8 @@ struct Options {
   bool outputControls = false;  // calibration overlay on the first output
   bool checkEffects = false;    // compile every built-in ISF shader and exit
   std::string checkEffectsDir;  // another folder of .fs files
+  bool diagnose = false;        // print the system self-test report and exit
+  bool showMode = false;        // start with editing locked
   int width = 1600, height = 900;
   std::string blend;             // "3x1:0.15:1920x1080" applies the blend assistant at start
   int pattern = -1;              // test pattern for every output (TestPattern value)
@@ -104,9 +107,29 @@ public:
   bool outputsOpen = false;
   // Draws the selected output's warp handles on the projector itself.
   bool showOutputControls = false;
+  // Show mode: editing is locked, only show control (GO, stop, blackout...).
+  bool showLocked = false;
+  // Missing media: relinks every missing file found (by name) under `dir`.
+  int relinkMissing(const std::string &dir);
+  int missingMedia() const;
+  bool mediaMissing(const MediaItem &m) const;
+  static bool checkMissing(const MediaItem &m);
+  mutable std::map<std::pair<int, std::string>, bool> missingCache_;
+  mutable double missingCheckedAt_ = -10;
+  // Crash recovery (autosave of the last session that did not close cleanly).
+  bool recoveryPending() const { return !recoveryFile_.empty(); }
+  const std::string &recoveryInfo() const { return recoveryInfo_; }
+  void recover(bool yes);
+  // System self-test (GPU, shaders, monitors, audio, MIDI, serial, Spout, NDI).
+  std::string diagnosticReport();
 
 private:
   void commitIfNeeded();
+  void autosave();
+  void clearAutosave();
+  void checkRecovery();
+  double lastAutosave_ = 0;
+  std::string recoveryFile_, recoveryInfo_;
   void pollKeyboard(bool mainWindowKeys);
   std::vector<bool> keyDown_;
   void updateTitle();

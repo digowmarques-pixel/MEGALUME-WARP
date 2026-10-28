@@ -3,6 +3,7 @@
 // main thread except decoding, the audio callback and the input sockets.
 #pragma once
 
+#include "control/devices.h"
 #include "control/dmxin.h"
 #include "control/midi.h"
 #include "control/osc.h"
@@ -10,6 +11,8 @@
 #include "engine/compositor.h"
 #include "engine/effects.h"
 #include "engine/leds.h"
+#include "io/ndi.h"
+#include "io/serial.h"
 #include "io/spout.h"
 #include "media/audio.h"
 #include "media/source.h"
@@ -21,6 +24,12 @@
 
 namespace lumen {
 
+struct TimelineRun {
+  double time = 0;
+  bool playing = true;
+  bool fromColumn = false; // started by a column (stopped by the next one)
+};
+
 struct LayerState {
   std::unique_ptr<Playback> current, previous;
   float fade = 1;          // 0..1 progress of the current transition
@@ -29,6 +38,9 @@ struct LayerState {
   TransitionType type = TransitionType::Crossfade;
   int columnId = -1;       // column the current content came from
   EndMode endMode = EndMode::Loop;
+  bool manual = false;     // transition progress follows the transition fader
+  bool composed = false;   // shader transition: currentTex holds both contents
+  std::string transitionShader;
   bool endHandled = false; // the end of the current media was acted upon
   const Texture *currentTex = nullptr, *previousTex = nullptr;
 };
@@ -123,6 +135,41 @@ public:
   // LED pixel mapping (Art-Net / sACN).
   LedEngine leds;
 
+  // Device commands (PJLink, MIDI out, DMX, TCP/UDP, serial).
+  DeviceCommands devices;
+
+  // Timecode (MTC / LTC input): seconds, valid while frames keep arriving.
+  bool timecodeValid() const { return timecodeValid_; }
+  double timecodeSeconds() const { return timecodeSeconds_; }
+  double timecodeFps() const { return timecodeFps_; }
+  const LtcCapture &ltcInput() const { return ltcIn_; }
+  const std::string &timecodeError() const { return tcError_; }
+  // Timecode being generated (valid while the source timeline plays).
+  bool generatingTimecode() const { return genActive_; }
+  double generatedTimecode() const { return genTime_; }
+
+  // Timelines.
+  void playTimeline(int id, bool fromStart = true, bool fromColumn = false);
+  void pauseTimeline(int id);
+  void stopTimeline(int id);
+  void seekTimeline(int id, double t);
+  const TimelineRun *timelineRun(int id) const;
+  // Applies every track at time t (scrubbing a stopped timeline).
+  void applyTimeline(const Timeline &tl, double t);
+  // Parameters by name ("opacity", "effect1/radius", "master"...).
+  bool setNamedParam(int layerId, const std::string &param, float v);
+  float getNamedParam(int layerId, const std::string &param);
+  // OSC line ("/lumen/go", "/luz/cena 3": local or sent to the OSC outputs)
+  // or a device command (see docs/DISPOSITIVOS.md).
+  void runCommand(const std::string &line);
+
+  // Manual transitions: the fader (0..1) drives the progress once it has
+  // been brought back to 0 ("armed").
+  float transitionFader = 0;
+  bool manualTransitionActive() const { return manualActive_; }
+  bool manualTransitionArmed() const { return manualArmed_; }
+  float manualProgress() const { return manualProgress_; }
+
   // Effects (ISF) and the blob tracker.
   IsfCatalog isfCatalog;
   const std::vector<Blob> *blobs(int layerId) const;
@@ -131,6 +178,10 @@ public:
 
   // Spout output of the canvas (Windows).
   std::string spoutStatus() const { return spoutStatus_; }
+  std::string ndiStatus() const { return ndiStatus_; }
+  // Serial input (Arduino...).
+  const SerialReader &serialInput() const { return serialIn_; }
+  const std::string &serialError() const { return serialError_; }
 
 private:
   void applyMappings(const OscMessage &m);
@@ -169,6 +220,34 @@ private:
   std::map<int, std::vector<int>> blobSlots_; // by layer: blob id in each slot (0 = free)
   std::set<int> learnBackground_;
   void emitBlobs(const Layer &l, const BlobReport &r);
+  void updateTimelines(double dt);
+  void launchColumnNow(int index, bool cut);
+  std::map<int, TimelineRun> timelineRuns_;
+  bool timecodeValid_ = false;
+  double timecodeSeconds_ = 0, timecodeFps_ = 25, tcFreshAt_ = -100, tcPrev_ = -1;
+  LtcCapture ltcIn_;
+  std::string ltcDeviceInUse_ = "\x01", tcError_;
+  int ltcChannelInUse_ = -1;
+  MidiOutPort mtcOut_;
+  std::string mtcPortInUse_ = "\x01";
+  bool genActive_ = false;
+  double genTime_ = 0, mtcClock_ = -1, ltcClock_ = -1;
+  int mtcPiece_ = 0;
+  LtcEncoder ltcEnc_{kAudioRate};
+  std::shared_ptr<AudioVoice> ltcVoice_;
+  void updateTimecode(double dt);
+  bool manualActive_ = false, manualArmed_ = false;
+  float manualProgress_ = 0;
+  // Shader transitions (one per layer) and the stinger.
+  std::map<int, std::unique_ptr<IsfRenderer>> transitionIsf_;
+  std::map<int, std::unique_ptr<Framebuffer>> transitionIn_[2], transitionOut_;
+  Texture clearTex_;
+  std::unique_ptr<Playback> stinger_;
+  const Texture *stingerTex_ = nullptr;
+  Layer stingerLayer_;
+  int pendingColumn_ = -1;
+  double pendingAt_ = 0;
+  const Texture *composeTransition(int layerId, LayerState &st);
   double time_ = 0;
   uint64_t frame_ = 0;
   OscServer osc_;
@@ -180,7 +259,12 @@ private:
   std::vector<OscMessage> inbox_;
   std::string audioDeviceInUse_ = "\x01"; // forces the first start
   SpoutOut spoutOut_;
-  std::string spoutStatus_;
+  std::string spoutStatus_, ndiStatus_;
+  NdiSender ndiOut_;
+  std::vector<unsigned char> ndiPixels_, ndiFlip_;
+  SerialReader serialIn_;
+  std::string serialPortInUse_, serialError_;
+  int serialBaudInUse_ = 0;
 };
 
 } // namespace lumen

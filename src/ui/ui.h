@@ -4,6 +4,7 @@
 #include "core/project.h"
 #include "media/decoder.h"
 #include "render/gpu.h"
+#include "ui/i18n.h"
 
 #include <functional>
 #include <string>
@@ -59,6 +60,10 @@ public:
 
 private:
   void menuBar(App &app);
+  void recoveryPopup(App &app);
+  bool showDiag_ = false;
+  std::string diagReport_;
+  void relinkDialog(App &app);
   void toolbar(App &app);
   void library(App &app);
   void dashboard(App &app);
@@ -73,6 +78,8 @@ private:
   void softEdgeControls(App &app, OutputConfig *o);
   void blackAndColorControls(App &app, OutputConfig *o);
   void effectsUi(App &app, Layer &l);
+  void timelineEditor(App &app);
+  void showTimeline(int id) { timelineSel_ = id; bottomTab_ = 1; forceBottom_ = true; }
   void blobUi(App &app, Layer &l);
   void openInputMesh(int layerId, int slice, int outputId);
   void inputMeshWindow(App &app);
@@ -93,6 +100,14 @@ private:
   int calibrating_ = -1; // mapping whose input range is being learnt
   float calMin_ = 0, calMax_ = 0;
   ImFont *bigFont_ = nullptr;
+  int bottomTab_ = 0;     // 0 dashboard, 1 timeline
+  bool forceBottom_ = false;
+  int timelineSel_ = -1;  // timeline shown in the editor
+  float timelineZoom_ = 40; // pixels per second
+  float timelineView_ = 0, tlStart_ = 0;
+  int tlViewFor_ = -1, tlFlag_ = -1, tlKeyTrack_ = -1, tlKey_ = -1, tlDragTrack_ = -1;
+  bool tlDragFlag_ = false;
+  float tlDragMin_ = 0, tlDragMax_ = 1;
   int dashZoom_ = 1;      // 0 small, 1 medium, 2 large cells
   bool showDemo_ = false;
   bool showHelp_ = false;

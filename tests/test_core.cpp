@@ -6,9 +6,15 @@
 #include "core/project.h"
 #include "core/blob.h"
 #include "core/isf.h"
+#include "core/md5.h"
+#include "core/timecode.h"
+#include "control/devices.h"
 #include "core/svg.h"
 #include "core/warp.h"
 #include "platform/platform.h"
+#include "ui/i18n.h"
+#include <utility>
+#include <vector>
 
 #include <algorithm>
 #include <cmath>
@@ -642,7 +648,141 @@ static void testV08() {
   CHECK(q.library.back().type == MediaType::Shader && q.library.back().shaderParams["scale"][0] == 7);
 }
 
+static void testV09() {
+  // MD5: RFC 1321 vectors and the PJLink specification example.
+  CHECK(md5Hex("") == "d41d8cd98f00b204e9800998ecf8427e");
+  CHECK(md5Hex("The quick brown fox jumps over the lazy dog") == "9e107d9d372bb6826bd81d3542a419d6");
+  CHECK(md5Hex("498e4a67JBMIAProjectorLink") == "5d8409bc1c3fa39749434aa3a5c38682");
+  // Device text tokens.
+  CHECK(expandDeviceText("run cue 1[CR][LF]") == "run cue 1\r\n");
+  CHECK(expandDeviceText("[HEX_02]PON[HEX_03]") == std::string("\x02PON\x03"));
+  CHECK(expandDeviceText("a\\tb\\n") == "a\tb\n");
+  // Keyframe curves.
+  TimelineTrack tr;
+  tr.keys = {{0, 0, Ease::Linear}, {2, 10, Ease::InOut}, {4, 0, Ease::Hold}, {5, 5, Ease::Linear}};
+  CHECK(tr.valueAt(-1) == 0 && tr.valueAt(1) == 5 && tr.valueAt(3) == 5 && tr.valueAt(4.5f) == 0);
+  CHECK(tr.valueAt(2.5f) < 10 && tr.valueAt(2.5f) > 8); // ease in-out: slow start (linear would be 7.5)
+  CHECK(tr.valueAt(9) == 5);
+  // Timelines, column options and projectors round trip.
+  Project p = Project::makeDefault();
+  Timeline &tl = p.addTimeline();
+  tl.duration = 12; tl.loop = true; tl.loopStart = 3;
+  tl.tracks.push_back({p.layers[0].id, "effect1/radius", true, {{1, 2, Ease::Out}, {5, 8, Ease::Hold}}});
+  tl.flags.push_back({4, "luz", "pjlink Sala shutter close"});
+  Column &c = p.columns[0];
+  c.timelineId = tl.id;
+  c.transitionType = TransitionType::Shader;
+  c.transitionShader = builtinEffectsDir() + "/T_Circulo.fs";
+  c.manualTransition = true;
+  c.stingerMediaId = 7; c.stingerCut = 0.3f;
+  c.commands = {"pjlink Sala power on", "wait 2", "midi note 1 60 127"};
+  c.timecodeCue = 3661.5f;
+  p.projectors.push_back({"Sala", "10.0.0.9", "segredo"});
+  ScheduleEntry se;
+  se.action = ScheduleAction::Command;
+  se.command = "pjlink Sala power off";
+  p.schedule.push_back(se);
+  Project q;
+  CHECK(deserializeProject(serializeProject(p, ""), "", q));
+  CHECK(q.timelines.size() == 1 && q.timelines[0].loopStart == 3 && q.timelines[0].tracks[0].keys[1].ease == Ease::Hold);
+  CHECK(q.timelines[0].flags[0].command == "pjlink Sala shutter close");
+  const Column &qc = q.columns[0];
+  CHECK(qc.timelineId == tl.id && qc.transitionType == TransitionType::Shader && qc.manualTransition);
+  CHECK(qc.stingerMediaId == 7 && qc.stingerCut == 0.3f && qc.commands.size() == 3 && qc.timecodeCue == 3661.5f);
+  CHECK(platform::toPath(qc.transitionShader) == platform::toPath(builtinEffectsDir()) / "T_Circulo.fs");
+  CHECK(q.projectors.size() == 1 && q.projectors[0].password == "segredo");
+  CHECK(q.schedule[0].action == ScheduleAction::Command && q.schedule[0].command == "pjlink Sala power off");
+  q.removeLayer(q.layers[0].id);
+  CHECK(q.timelines[0].tracks.empty());
+
+  // Timecode: labels <-> seconds (with drop frame).
+  Timecode a = Timecode::fromSeconds(3723.48, 25);
+  CHECK(a.h == 1 && a.m == 2 && a.s == 3 && a.f == 12 && std::fabs(a.seconds() - 3723.48) < 0.001);
+  Timecode df = Timecode::fromSeconds(60.0 * 10 + 0.5, 29.97);
+  CHECK(df.dropFrame && std::fabs(df.seconds() - 600.5) < 0.04);
+  Timecode d1 = Timecode::fromSeconds(60.0, 29.97); // 1 minute of real time: 00:00:59;28 or 00:01:00;02
+  CHECK(d1.m == 0 || d1.f >= 2);
+  double sec = 0;
+  CHECK(parseTimecode("01:00:10:12", 25, sec) && std::fabs(sec - 3610.48) < 1e-6);
+  CHECK(parseTimecode("00:01:02.5", 25, sec) && std::fabs(sec - 62.5) < 1e-6);
+  CHECK(!parseTimecode("abc", 25, sec));
+  // MTC: 8 quarter frames give the time (2 frames late, compensated); full frame.
+  Timecode src = Timecode::fromSeconds(3725.2, 25);
+  MtcDecoder mtc;
+  Timecode got;
+  bool ok = false;
+  for (int piece = 0; piece < 8; ++piece) {
+    auto qf = mtcQuarterFrame(src, piece);
+    ok = mtc.feed(qf.data(), qf.size(), got);
+  }
+  CHECK(ok && got.fps == 25 && std::fabs(got.seconds() - (src.seconds() + 2.0 / 25)) < 1e-6);
+  auto ff = mtcFullFrame(Timecode::fromSeconds(10.0, 30));
+  CHECK(mtc.feed(ff.data(), ff.size(), got) && got.s == 10 && got.fps == 30);
+  // LTC: encode a few frames, decode them back (also at another sample rate and level).
+  for (double fps : {25.0, 30.0, 24.0}) {
+    for (int rate : {48000, 44100}) {
+      LtcEncoder enc(rate);
+      std::vector<float> audio;
+      for (int k = 0; k < 6; ++k) enc.encode(Timecode::fromSeconds(5025.0 + k / fps, fps), audio, 0.3f);
+      LtcDecoder dec(rate);
+      dec.feed(audio.data(), audio.size());
+      Timecode last;
+      CHECK(dec.latest(last) && dec.frames() >= 4);
+      if (!(last.h == 1 && last.m == 23 && last.s == 45 && last.f >= 4 && std::fabs(last.fps - fps) < 0.5)) std::printf("ltc %s fps %.2f frames %d\n", last.str().c_str(), last.fps, int(dec.frames()));
+      CHECK(last.h == 1 && last.m == 23 && last.s == 45 && last.f >= 4 && std::fabs(last.fps - fps) < 0.5);
+    }
+  }
+}
+
+// printf conversions of a format string, in order ("%d", "%.2f" -> "d", "f").
+static std::string conversions(const std::string &s) {
+  std::string out;
+  for (size_t i = 0; i < s.size(); ++i) {
+    if (s[i] != '%') continue;
+    if (i + 1 < s.size() && s[i + 1] == '%') { ++i; continue; }
+    if (i + 1 >= s.size() || s[i + 1] == ' ') continue; // "20% of": plain text, not a format
+    size_t j = i + 1;
+    while (j < s.size() && std::strchr("-+#0123456789.zlh", s[j])) ++j;
+    if (j < s.size() && std::strchr("diufFeEgGxXoscp", s[j])) out += s.substr(i + 1, j - i);
+    else out += '?';
+    out += ',';
+    i = j;
+  }
+  return out;
+}
+
+static void testI18n() {
+  using namespace lumen;
+  // Every translation keeps the format specifiers of the original, in order:
+  // the labels are passed to ImGui::Text / snprintf as formats.
+  static const std::vector<std::pair<std::string, std::string>> dict = {
+#include "ui/lang_en.inc"
+  };
+  for (auto &[pt, en] : dict) {
+    if (conversions(pt) != conversions(en)) std::printf("i18n: formatos diferentes em \"%s\"\n", pt.c_str());
+    CHECK(conversions(pt) == conversions(en));
+  }
+  CHECK(dict.size() > 600);
+  Language before = language();
+  setLanguage(Language::Portuguese);
+  const char *salvar = "Salvar";
+  CHECK(T(salvar) == salvar);
+  setLanguage(Language::English);
+  CHECK(std::string(T("Salvar")) == "Save");
+  CHECK(std::string(T("Salvar##menu")) == "Save##menu");
+  const char *unknown = "xyz sem tradução";
+  CHECK(T(unknown) == unknown);
+  const char *z = TZ("Branco\0Preto\0Outra coisa\0");
+  CHECK(std::string(z) == "White");
+  CHECK(std::string(z + 6) == "Black");
+  CHECK(std::string(z + 12) == "Outra coisa");
+  CHECK(z[12 + 11 + 1] == '\0');
+  setLanguage(before);
+}
+
 int main() {
+  testI18n();
+  testV09();
   testV08();
   testV07();
   testV06();

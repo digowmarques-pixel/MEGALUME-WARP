@@ -3,7 +3,7 @@
 Media server para **videomapping** e **instalações interativas**, inspirado no
 Millumin, feito para **Windows** (também compila no Linux).
 
-## O que já funciona (v0.8)
+## O que já funciona (v0.9)
 
 | Área | Recursos |
 |---|---|
@@ -24,13 +24,24 @@ Millumin, feito para **Windows** (também compila no Linux).
 | **Efeitos e interação** | Efeitos **ISF** em pilha (20 incluídos, compatível com a coleção oficial), geradores ISF, **matte** alpha/luma e **rastreamento de blobs** na câmera. Veja [docs/EFEITOS.md](docs/EFEITOS.md) |
 | **Video routing** | Vários canvases, saída escolhe o canvas, canvas como mídia de outro, blend automático para projetores fora de grade, Spout por saída (com ou sem janela) |
 | **Compatível com Millumin** | API OSC do Millumin (`/millumin/action/launchColumn`, `/layer:Nome/opacity`...), feedback `launchedColumn`; teclado e **DMX de entrada** como interação; transformações chave / alternar / acumular. Veja [docs/MILLUMIN.md](docs/MILLUMIN.md) |
-| **Projeto** | Arquivo `.lumen` (JSON legível), caminhos relativos, desfazer/refazer, arrastar arquivos do Explorer |
+| **Timeline** | Keyframes com curvas (linear, suave, entrada, saída, degrau) para opacidade, posição, efeitos e masters; marcadores que disparam comandos; loop com introdução; GO no fim; segue o timecode |
+| **Transições** | Crossfade, corte, pelo preto, **transições em shader ISF** (6 incluídas), **stinger** (vídeo com alpha cobrindo a troca) e **fader manual** (MIDI/OSC) |
+| **Equipamentos** | Comandos por coluna, marcador ou agenda: **PJLink** (ligar, obturador, entrada), **MIDI**, **DMX**, **TCP/UDP**, **serial**, OSC, espera. Veja [docs/DISPOSITIVOS.md](docs/DISPOSITIVOS.md) |
+| **Timecode** | Recebe **MTC** e **LTC** (com roda livre), colunas e timelines no timecode, **gera** MTC/LTC a partir de uma timeline |
+| **NDI, texto, Arduino** | **NDI** (receber e enviar por saída ou canvas), **texto dinâmico** (OSC ou arquivo .txt), **Arduino pela serial** como entrada |
+| **Projeto** | Arquivo `.lumen` (JSON legível), caminhos relativos, desfazer/refazer, arrastar arquivos do Explorer, **salvamento automático** com recuperação, **mídias ausentes** encontradas sozinhas, **modo show** (edição travada), interface em **português ou inglês**, **diagnóstico do sistema** |
 
 ## Baixar pronto (sem compilar)
 
 Cada envio para o GitHub dispara o workflow [`build`](.github/workflows/build.yml),
-que compila no Windows e publica o artefato **Lumen-windows-x64**
-(aba *Actions* → execução mais recente → *Artifacts*). Descompacte e rode `lumen.exe`.
+que compila no Windows e publica o **instalador** (**Lumen-windows-x64-setup**) e a
+versão portátil (**Lumen-windows-x64**) na aba *Actions* → execução mais recente →
+*Artifacts*. O instalador cria os atalhos e associa os arquivos `.lumen`.
+
+Depois de instalar, rode *Menu Iniciar → Lumen (console de diagnóstico)* (ou
+`lumen.exe --diagnose`): ele testa placa de vídeo, shaders, monitores, áudio, MIDI,
+serial, Spout e NDI e salva o relatório em `%APPDATA%\Lumen\diagnostico.txt`.
+Para conferir tudo numa máquina nova, siga [docs/TESTE-WINDOWS.md](docs/TESTE-WINDOWS.md).
 
 ## Compilar no Windows
 
@@ -85,6 +96,12 @@ sudo apt install mingw-w64
 O pacote fica em `build-mingw/Lumen/` (exe + DLLs + exemplos). Para só verificar se o
 código compila para Windows: `./scripts/check-windows-mingw.sh`.
 
+O instalador (NSIS, também roda no Linux com `sudo apt install nsis`):
+
+```bash
+cd installer && makensis -DVERSION=0.9.0 -DSRCDIR=../build-mingw/Lumen -DOUTFILE=../Lumen-0.9.0-setup.exe lumen.nsi
+```
+
 ## Compilar no Linux (desenvolvimento)
 
 ```bash
@@ -138,6 +155,7 @@ cmake -S . -B build && cmake --build build -j
 | Ctrl+P | Abrir / fechar as janelas dos projetores |
 | Ctrl+Shift+P | Janela Saídas (layout dos projetores) |
 | Ctrl+Shift+D | Mostrar os cantos e a malha da saída no próprio projetor |
+| Ctrl+Shift+L | Modo show: trava a edição (GO, Esc, B e masters continuam) |
 
 ## Controle por OSC
 
@@ -158,10 +176,13 @@ src/
   app.*            janela principal, loop, arquivos, desfazer
   core/            modelo do projeto (JSON) e geometria do warp (homografia + malha)
   media/           decodificação FFmpeg (thread, hardware), HAP, conversão na GPU, áudio, ao vivo
-  io/              Spout (Windows)
+  io/              Spout, NDI e porta serial
   engine/          motor do show (colunas, transições), compositor, janelas de saída
-  control/         OSC (UDP), MIDI e mapeamentos sensor → parâmetro
-  ui/              interface (Dear ImGui): biblioteca, dashboard, workspace, propriedades
+  control/         OSC (UDP), MIDI, DMX, mapeamentos e comandos de equipamentos (PJLink...)
+  ui/              interface (Dear ImGui): biblioteca, dashboard, timeline, workspace, propriedades;
+                   i18n.cpp + lang_en.inc: tradução para inglês
+effects/           shaders ISF incluídos (efeitos, geradores e transições T_*)
+installer/         instalador NSIS (lumen.nsi)
   gl/ render/      carregador OpenGL 3.3 e wrappers (shader, textura, framebuffer)
 tests/             testes unitários (warp, OSC, projeto)
 ```
@@ -175,6 +196,9 @@ Mais detalhes em [docs/ARQUITETURA.md](docs/ARQUITETURA.md). Próximos passos em
 lumen [projeto.lumen] [--launch N] [--outputs | --no-outputs] [--size LxA]
       [--blend 3x1:0.15:1920x1080] [--pattern N] [--black-level V]
       [--frames N --screenshot-canvas F.ppm --screenshot-ui F.ppm --screenshot-output F.ppm]
+lumen --diagnose          # relatório do sistema
+lumen show.lumen --outputs --show-mode   # instalação: abre as saídas com a edição travada
+lumen --check-effects     # compila todos os shaders ISF da pasta effects
 ```
 
 As opções `--frames`/`--screenshot-*` servem para testes automáticos (o CI usa).
@@ -183,4 +207,5 @@ As opções `--frames`/`--screenshot-*` servem para testes automáticos (o CI us
 
 Dear ImGui (MIT), nlohmann/json (MIT), miniaudio (MIT-0/domínio público),
 RtMidi (MIT), Spout2 SDK (BSD-2), cabeçalhos Khronos (MIT/Apache-2.0),
-GLFW (zlib) e FFmpeg (LGPL 2.1+, link dinâmico).
+GLFW (zlib), stb_truetype (domínio público, via Dear ImGui) e FFmpeg (LGPL 2.1+,
+link dinâmico). NDI® é marca da Vizrt; o runtime NDI é carregado só se instalado.

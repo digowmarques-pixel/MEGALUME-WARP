@@ -178,7 +178,7 @@ void Workspace::draw(App &app, ImVec2 size) {
   // ---- header: view selector
   ImGui::SetNextItemWidth(200);
   if (!p.hasCanvas(viewCanvas)) viewCanvas = 0;
-  std::string viewName = viewOut ? "Saída: " + viewOut->name : p.canvasLabel(viewCanvas);
+  std::string viewName = viewOut ? T("Saída: ") + viewOut->name : p.canvasLabel(viewCanvas);
   bool refit = false;
   static int lastView = -2;
   if (lockView && lastView != viewOutputId) refit = true; // switched output in the embedded view
@@ -194,7 +194,7 @@ void Workspace::draw(App &app, ImVec2 size) {
       }
     ImGui::Separator();
     for (auto &o : p.outputs)
-      if (ImGui::Selectable(("Saída: " + o.name).c_str(), viewOutputId == o.id)) {
+      if (ImGui::Selectable((T("Saída: ") + o.name).c_str(), viewOutputId == o.id)) {
         viewOutputId = o.id;
         app.sel.outputId = o.id;
         refit = true;
@@ -202,15 +202,15 @@ void Workspace::draw(App &app, ImVec2 size) {
     ImGui::EndCombo();
   }
   ImGui::SameLine();
-  if (ImGui::Button("Enquadrar (F)")) refit = true;
+  if (ImGui::Button(T("Enquadrar (F)"))) refit = true;
   ImGui::SameLine();
   ImGui::TextDisabled("%.0f%%", zoom_ * 100);
   ImGui::SameLine();
-  const char *hints[] = {"Clique para selecionar · arraste para mover a fatia (Shift: layer inteira)",
-                         "Arraste os cantos para encaixar a imagem na superfície",
-                         "Arraste os pontos da malha para curvar a imagem · duplo clique adiciona linha e coluna",
-                         "Clique adiciona ponto · arraste move · botão direito apaga · Alt+clique: curva · Shift+arraste: máscara inteira",
-                         "LED: clique numa fita · arraste os cantos ou o meio para posicionar sobre a imagem"};
+  const char *hints[] = {T("Clique para selecionar · arraste para mover a fatia (Shift: layer inteira)"),
+                         T("Arraste os cantos para encaixar a imagem na superfície"),
+                         T("Arraste os pontos da malha para curvar a imagem · duplo clique adiciona linha e coluna"),
+                         T("Clique adiciona ponto · arraste move · botão direito apaga · Alt+clique: curva · Shift+arraste: máscara inteira"),
+                         T("LED: clique numa fita · arraste os cantos ou o meio para posicionar sobre a imagem")};
   ImGui::TextDisabled("%s", hints[int(tool)]);
   viewOut = viewOutputId >= 0 ? p.output(viewOutputId) : nullptr;
 
@@ -472,14 +472,14 @@ void Workspace::drawCanvasOverlay(App &app, ImDrawList *dl, ImVec2 origin, float
       }
       if (w.meshCols == 2 && w.meshRows == 2)
         dl->AddText({origin.x + 8, origin.y + 8}, IM_COL32(255, 255, 255, 200),
-                    "Duplo clique adiciona pontos, ou aumente a malha em Propriedades > Fatias");
+                    T("Duplo clique adiciona pontos, ou aumente a malha em Propriedades > Fatias"));
       break;
     }
     case Tool::Mask: {
       if (app.sel.mask < 0 || app.sel.mask >= int(sel->masks.size())) {
         if (clicked) { // first click creates a mask
           Mask m;
-          m.name = "Máscara " + std::to_string(sel->masks.size() + 1);
+          m.name = T("Máscara ") + std::to_string(sel->masks.size() + 1);
           sel->masks.push_back(m);
           app.sel.mask = int(sel->masks.size()) - 1;
         } else {
@@ -591,7 +591,7 @@ bool Workspace::drawLedOverlay(App &app, ImDrawList *dl, ImVec2 origin, float sc
   }
   if (p.ledMappings.empty())
     dl->AddText({origin.x + 8, origin.y + 8}, IM_COL32(255, 255, 255, 220),
-                "Crie uma fita em Propriedades > LED");
+                T("Crie uma fita em Propriedades > LED"));
   return true;
 }
 
@@ -625,7 +625,7 @@ void Workspace::drawOutputOverlay(App &app, ImDrawList *dl, ImVec2 origin, ImVec
     if (app.sel.outMask < 0 || app.sel.outMask >= int(o->masks.size())) {
       if (!clicked) return;
       Mask m;
-      m.name = "Máscara " + std::to_string(o->masks.size() + 1);
+      m.name = T("Máscara ") + std::to_string(o->masks.size() + 1);
       m.subtract = true;
       m.feather = 20;
       o->masks.push_back(m);
@@ -635,7 +635,7 @@ void Workspace::drawOutputOverlay(App &app, ImDrawList *dl, ImVec2 origin, ImVec
     if (editMask(m, app.sel.outMaskPoint, toScreen, mn, std::max(1.0f, size.x), dl, IM_COL32(255, 120, 120, 255), 30))
       app.edited();
     dl->AddText({origin.x + 8, origin.y + 8}, IM_COL32(255, 255, 255, 220),
-                "Máscara da saída: clique adiciona ponto, arraste move, botão direito apaga, Alt+clique faz curva.");
+                T("Máscara da saída: clique adiciona ponto, arraste move, botão direito apaga, Alt+clique faz curva."));
     return;
   }
 
@@ -683,7 +683,7 @@ void Workspace::drawOutputOverlay(App &app, ImDrawList *dl, ImVec2 origin, ImVec
     }
   }
   dl->AddText({origin.x + 8, origin.y + 8}, IM_COL32(255, 255, 255, 220),
-              "Warp da saída: cantos (M) ou malha (G). Ajusta a projeção inteira.");
+              T("Warp da saída: cantos (M) ou malha (G). Ajusta a projeção inteira."));
 }
 
 void Workspace::handleShortcuts(App &app) {

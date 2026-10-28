@@ -556,3 +556,25 @@ void VideoDecoder::run() {
 }
 
 } // namespace lumen
+
+namespace lumen {
+
+std::string ffmpegInfo() {
+  char buf[256];
+  std::snprintf(buf, sizeof(buf), "avcodec %u.%u.%u, avformat %u.%u.%u, avutil %u.%u.%u",
+                avcodec_version() >> 16, (avcodec_version() >> 8) & 255, avcodec_version() & 255,
+                avformat_version() >> 16, (avformat_version() >> 8) & 255, avformat_version() & 255,
+                avutil_version() >> 16, (avutil_version() >> 8) & 255, avutil_version() & 255);
+  std::string out = buf;
+  out += "; hw:";
+  int n = 0;
+  for (AVHWDeviceType t = av_hwdevice_iterate_types(AV_HWDEVICE_TYPE_NONE); t != AV_HWDEVICE_TYPE_NONE;
+       t = av_hwdevice_iterate_types(t), ++n)
+    out += std::string(" ") + av_hwdevice_get_type_name(t);
+  if (!n) out += " (nenhum)";
+  out += "; hap: ";
+  out += avcodec_find_decoder(AV_CODEC_ID_HAP) ? "sim" : "não";
+  return out;
+}
+
+} // namespace lumen

@@ -1,0 +1,124 @@
+# Roteiro de teste no Windows
+
+O Lumen é compilado e testado automaticamente (Linux e Windows no GitHub Actions),
+mas várias partes só podem ser conferidas numa máquina de verdade, com projetor,
+placa de vídeo, câmera e equipamentos. Este roteiro leva cerca de 1 hora.
+Marque cada item; quando algo falhar, anote o número do item e mande junto o
+relatório do diagnóstico (passo 0).
+
+**Material ideal**: PC com placa de vídeo dedicada e 2 saídas (ou 1 monitor + 1
+projetor), um vídeo H.264 e um HAP, uma webcam, um controlador MIDI USB, um
+celular com TouchOSC (ou qualquer app OSC), e — se tiver — um projetor com PJLink,
+um Arduino e o NDI Tools.
+
+## 0. Instalação e diagnóstico
+
+- [ ] 0.1 Instale com `Lumen-0.9.0-setup.exe` (ou descompacte o .zip). O atalho
+      aparece no Menu Iniciar, e arquivos `.lumen` abrem com o Lumen.
+- [ ] 0.2 Menu Iniciar → *Lumen (console de diagnóstico)*. O relatório abre no Bloco
+      de Notas (também fica em `%APPDATA%\Lumen\diagnostico.txt`).
+      **Não pode ter [FALHA]**. Confira: GPU correta (não "GDI Generic" / "Microsoft
+      Basic Render"), monitores, saída de áudio, controlador MIDI, câmera.
+- [ ] 0.3 Abra o Lumen normal. A janela abre maximizada, preta e amarela, sem erro.
+      Se fechar sozinho: rode `lumen-console.exe` e envie o texto do console
+      (e `%APPDATA%\Lumen\lumen.log`, se existir).
+
+## 1. Mídia e reprodução
+
+- [ ] 1.1 Arraste um vídeo H.264, um HAP e uma imagem PNG para a biblioteca. As
+      miniaturas aparecem.
+- [ ] 1.2 Arraste o vídeo para uma célula e clique: toca com som, sem engasgar.
+      A barra de baixo mostra ~60 fps.
+- [ ] 1.3 *Projeto → Decodificação por hardware* ligada: um vídeo 4K H.264/HEVC
+      toca liso. Em *Mídia* aparece "Decodificação por hardware: d3d11va".
+- [ ] 1.4 Espaço (GO), Shift+Espaço, Esc (para com fade), B (blackout).
+- [ ] 1.5 Transições: crossfade, corte, pelo preto e uma *Shader (ISF)* (ex.:
+      T_Circulo) entre duas colunas.
+
+## 2. Saídas, mapping e blend
+
+- [ ] 2.1 *Saídas...*: escolha o monitor do projetor como destino e abra as saídas
+      (Ctrl+P). Tela cheia, sem bordas, no monitor certo.
+- [ ] 2.2 Perspectiva (M) e Malha (G) numa layer: a imagem deforma ao arrastar.
+- [ ] 2.3 Warp da saída inteira (*Editar no workspace*) e Ctrl+Shift+D (controles
+      desenhados no projetor).
+- [ ] 2.4 Com dois projetores: *Assistente de blend* 2×1, padrão *Grade de blend*.
+      As linhas coincidem na emenda; com *Branco* a emenda some ajustando gamma.
+- [ ] 2.5 Fechar e abrir as saídas várias vezes; desligar e ligar o cabo do
+      projetor com o Lumen aberto (não pode travar).
+
+## 3. Efeitos e texto
+
+- [ ] 3.1 *+ Efeito* numa layer: Desfoque, ChromaKey, Caleidoscópio. Parâmetros
+      respondem na hora.
+- [ ] 3.2 Edite um `.fs` da pasta `effects` no Bloco de Notas e salve: o efeito
+      recarrega sozinho.
+- [ ] 3.3 *+ Gerador → Texto (dinâmico)*: acentos (ç, ã, é) aparecem certos.
+      Mande `/layer:<nome>/text "Olá"` por OSC.
+
+## 4. Entradas ao vivo
+
+- [ ] 4.1 *+ Ao vivo*: a webcam aparece na lista e mostra imagem.
+- [ ] 4.2 *Blob tracker* com a webcam: *Gravar fundo*, passe a mão na frente — os
+      blobs aparecem.
+- [ ] 4.3 Spout: abra um programa que envia Spout (ex.: o demo do Spout, Resolume,
+      TouchDesigner). Ele aparece em *+ Ao vivo → Spout*.
+- [ ] 4.4 Envie a saída por Spout e receba no outro programa.
+- [ ] 4.5 NDI (com o NDI Tools instalado): *+ Ao vivo → NDI* mostra as fontes;
+      *NDI desta saída* aparece no *NDI Studio Monitor*.
+
+## 5. Controle
+
+- [ ] 5.1 OSC: TouchOSC no celular para o IP do PC, porta 8000. `/lumen/go` funciona.
+      O Windows pergunta sobre o firewall na primeira vez: permita.
+- [ ] 5.2 MIDI: *Aprender* num mapeamento e mexa um fader do controlador.
+- [ ] 5.3 Teclado como entrada (`/key/a`) e DMX de entrada (se tiver mesa de luz).
+- [ ] 5.4 Fader de transição manual: coluna com *Manual (fader)*, mova o fader da
+      barra de cima (e por MIDI).
+
+## 6. Timeline e timecode
+
+- [ ] 6.1 Crie uma timeline, faixa *Opacidade*, duas chaves; ligue à coluna. Ao
+      disparar a coluna a opacidade anima.
+- [ ] 6.2 Marcador com `/lumen/go`: a timeline dispara a próxima coluna.
+- [ ] 6.3 MTC: gere MTC a partir de uma timeline numa saída MIDI (loopMIDI cria uma
+      porta virtual) e receba em outro programa (ou no próprio Lumen).
+- [ ] 6.4 LTC: toque um arquivo de áudio LTC (ou um gerador) na entrada de linha;
+      *Receber → LTC* mostra o timecode correndo; a timeline com *timecode* segue.
+
+## 7. Equipamentos
+
+- [ ] 7.1 PJLink: cadastre o projetor, use *Ligar*, *Fechar obturador*. O estado
+      aparece ao lado.
+- [ ] 7.2 Comandos numa coluna (`pjlink`, `midi`, `dmx`, `tcp`, `wait`) — veja o
+      resultado no Monitor OSC.
+- [ ] 7.3 Arduino: carregue o exemplo de `docs/DISPOSITIVOS.md`, ligue a serial
+      e use *Aprender* com o potenciômetro.
+- [ ] 7.4 LED: uma fita por Art-Net/sACN (ou o *Monitor DMX* se não tiver fita).
+
+## 8. Acabamento
+
+- [ ] 8.1 Edite um projeto sem salvar e mate o processo pelo Gerenciador de Tarefas
+      (depois de 1 minuto). Ao abrir o projeto, o Lumen oferece *Recuperar*.
+- [ ] 8.2 Mova a pasta do projeto (com as mídias) para outro lugar e abra:
+      as mídias são encontradas sozinhas. Renomeie uma mídia: ela fica vermelha
+      na biblioteca e *Procurar mídias ausentes...* resolve.
+- [ ] 8.3 Modo show (Ctrl+Shift+L ou botão *Editar/SHOW*): não dá para editar, mas
+      GO, Esc, B e masters funcionam.
+- [ ] 8.4 *Idioma / Language → English*: a interface muda para inglês; reabra o
+      programa e continua em inglês.
+- [ ] 8.5 Desinstale pelo *Configurações → Aplicativos*: os projetos e mídias do
+      usuário continuam onde estavam.
+
+## 9. Resistência (show longo)
+
+- [ ] 9.1 Deixe um projeto com auto-GO em loop rodando por 8 horas com as saídas
+      abertas. Anote o uso de memória no começo e no fim (não pode crescer sem
+      parar) e se houve algum engasgo.
+- [ ] 9.2 Abra o projeto pela pasta *Inicializar* do Windows (`shell:startup`)
+      com *Ao abrir o projeto → Abrir as saídas* e reinicie o PC: o show volta sozinho.
+
+## Como relatar
+
+Para cada falha: número do item, o que aconteceu, o relatório do diagnóstico
+(*Ajuda → Diagnóstico do sistema → Copiar*) e, se possível, uma foto ou vídeo.
