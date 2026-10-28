@@ -2,6 +2,7 @@
 #include "app.h"
 #include "platform/platform.h"
 
+#include <csignal>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -26,6 +27,8 @@ static void usage() {
       "  --size LxA              tamanho da janela de controle\n"
       "  --frames N              sai depois de N quadros (testes)\n"
       "  --quit-after S          sai depois de S segundos, em tempo real (testes)\n"
+      "  --test-audio-stall S    para a placa de som depois de S segundos (testes)\n"
+      "  --test-audio-record F   grava em F (WAV) o som enviado à placa (testes)\n"
       "  --screenshot-canvas F   salva o canvas em F (.ppm) no último quadro\n"
       "  --screenshot-ui F       salva a interface em F (.ppm) no último quadro\n"
       "  --screenshot-output F   salva a saída 1 em F (.ppm) no último quadro\n"
@@ -37,6 +40,11 @@ static void usage() {
 }
 
 int main(int argc, char **argv) {
+#ifndef _WIN32
+  // A device or controller that closes its TCP connection must give an error,
+  // not SIGPIPE (which ends the program).
+  std::signal(SIGPIPE, SIG_IGN);
+#endif
   lumen::platform::attachConsole();
   lumen::Options opts;
   std::vector<std::string> args = lumen::platform::utf8Args(argc, argv);
@@ -67,6 +75,8 @@ int main(int argc, char **argv) {
     }
     else if (a == "--frames") opts.frames = std::atoi(next().c_str());
     else if (a == "--quit-after") opts.quitAfter = std::atof(next().c_str());
+    else if (a == "--test-audio-stall") opts.testAudioStall = std::atof(next().c_str());
+    else if (a == "--test-audio-record") opts.testAudioRecord = next();
     else if (a == "--screenshot-canvas") opts.screenshotCanvas = next();
     else if (a == "--screenshot-ui") opts.screenshotUi = next();
     else if (a == "--screenshot-output") opts.screenshotOutput = next();

@@ -12,9 +12,9 @@
 }*/
 void main() {
   vec4 c = IMG_THIS_PIXEL(inputImage);
-  vec3 rgb = c.a > 0.0 ? c.rgb / c.a : c.rgb;
+  vec3 rgb = c.rgb; // straight alpha in and out
   rgb = clamp((rgb - inBlack) / max(inWhite - inBlack, 0.001), 0.0, 1.0);
   rgb = pow(rgb, vec3(1.0 / gamma));
   rgb = mix(vec3(outBlack), vec3(outWhite), rgb);
-  gl_FragColor = vec4(rgb * c.a, c.a);
+  gl_FragColor = vec4(rgb, c.a);
 }

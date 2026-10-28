@@ -20,5 +20,5 @@ void main() {
   // Spill: pull the key channel down towards the others.
   float gray = dot(rgb, vec3(0.3333));
   rgb = mix(rgb, mix(rgb, vec3(gray), keyColor.rgb), spill * (1.0 - a));
-  gl_FragColor = vec4(rgb * a, c.a * a);
+  gl_FragColor = vec4(rgb, c.a * a); // straight alpha: no dark fringe on the edges
 }

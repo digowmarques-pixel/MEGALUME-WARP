@@ -89,11 +89,17 @@ void DmxReceiver::run() {
     int n = int(recvfrom(s, reinterpret_cast<char *>(buf.data()), int(buf.size()), 0,
                          reinterpret_cast<sockaddr *>(&from), &fromLen));
     if (n <= 0) continue;
-    int universe = 0, count = 0;
+    int universe = 0, count = 0, priority = 100;
     DmxUniverse data{};
     bool ok = protocol_ == DmxProtocol::ArtNet ? decodeArtDmx(buf.data(), size_t(n), universe, data, count)
-                                               : decodeSacn(buf.data(), size_t(n), universe, data, count);
+                                               : decodeSacn(buf.data(), size_t(n), universe, data, count, &priority);
     if (!ok || universe < first_ || universe >= first_ + count_) continue;
+    // sACN with several sources (a main and a backup console): the highest
+    // priority heard in the last 2.5 s wins; a lower one is a standby.
+    auto now = std::chrono::steady_clock::now();
+    auto &top = priority_[universe];
+    if (priority < top.first && now - top.second < std::chrono::milliseconds(2500)) continue;
+    top = {priority, now};
     char ip[INET_ADDRSTRLEN] = {};
     inet_ntop(AF_INET, &from.sin_addr, ip, sizeof(ip));
     std::lock_guard<std::mutex> lock(mutex_);

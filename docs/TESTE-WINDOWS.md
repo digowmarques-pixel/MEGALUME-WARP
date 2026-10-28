@@ -2,7 +2,7 @@
 
 O Lumen é compilado e testado automaticamente (Linux e Windows no GitHub Actions),
 mas várias partes só podem ser conferidas numa máquina de verdade, com projetor,
-placa de vídeo, câmera e equipamentos. Este roteiro leva cerca de 1h30.
+placa de vídeo, câmera e equipamentos. Este roteiro leva cerca de 2 horas.
 Marque cada item; quando algo falhar, anote o número do item e mande junto o
 relatório do diagnóstico (passo 0).
 
@@ -13,7 +13,7 @@ um Arduino e o NDI Tools.
 
 ## 0. Instalação e diagnóstico
 
-- [ ] 0.1 Instale com `Lumen-0.10.0-setup.exe` (ou descompacte o .zip). O atalho
+- [ ] 0.1 Instale com `Lumen-0.10.1-setup.exe` (ou descompacte o .zip). O atalho
       aparece no Menu Iniciar, e arquivos `.lumen` abrem com o Lumen.
 - [ ] 0.2 Menu Iniciar → *Lumen (console de diagnóstico)*. O relatório abre no Bloco
       de Notas (também fica em `%APPDATA%\Lumen\diagnostico.txt`).
@@ -134,6 +134,32 @@ um Arduino e o NDI Tools.
       parar) e se houve algum engasgo.
 - [ ] 10.2 Abra o projeto pela pasta *Inicializar* do Windows (`shell:startup`)
       com *Ao abrir o projeto → Abrir as saídas* e reinicie o PC: o show volta sozinho.
+
+## 11. Correções da revisão (v0.10.1) que só o Windows confirma
+
+- [ ] 11.1 Num PC (ou máquina virtual) **sem** o *Visual C++ Redistributable*: o Lumen
+      abre sem erro de `VCRUNTIME140.dll` ou `MSVCP140.dll`, e o atalho *Lumen (console
+      de diagnóstico)* abre o console.
+- [ ] 11.2 Instale uma versão antiga numa pasta escolhida (ex.: `D:\Lumen`), coloque um
+      `.fs` seu em `effects` e instale a 0.10.1 por cima: o instalador já sugere
+      `D:\Lumen`, o seu `.fs` continua lá e o atalho do Menu Iniciar aparece também
+      para outro usuário do PC.
+- [ ] 11.3 *Executar o Lumen* no fim do instalador: arrastar um vídeo do Explorer para
+      a biblioteca funciona (o Lumen não abriu como administrador).
+- [ ] 11.4 Com um vídeo tocando **com som**, renomeie uma mídia do projeto e use
+      *Arquivo → Procurar mídias ausentes...*: a janela de escolher pasta abre.
+- [ ] 11.5 PJLink: o estado aparece (ligado / desligado / ligando). Com o projetor fora
+      da tomada, um comando `pjlink` dá erro em ~3 s e as próximas linhas da coluna
+      não ficam esperando.
+- [ ] 11.6 Arduino: o comando `serial COM3@9600 ...` disparado três vezes seguidas
+      não reinicia a placa (o LED *L* não pisca de novo e os relés não voltam ao
+      início). Tire o cabo USB da porta que está **recebendo** e ponha de volta: a
+      seção Serial mostra "desconectada: tentando..." e volta a ler sozinha.
+- [ ] 11.7 Com um vídeo com som tocando, desconecte a interface de áudio USB: o vídeo
+      continua andando; ao reconectar (ou escolher outra saída), o som volta.
+- [ ] 11.8 Interface com mais de 32 canais (ex.: Dante Virtual Soundcard, MADI): uma
+      layer em *Saídas 33-34* sai nas saídas 33 e 34. Com *Canais* diferente do que a
+      interface tem, o som sai nas saídas certas (não dobrado nem trocado).
 
 ## Como relatar
 

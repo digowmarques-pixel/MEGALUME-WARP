@@ -10,7 +10,9 @@ Em *Propriedades → Projeto → Áudio*:
 
 - **Saída de áudio**: o dispositivo. Interfaces multicanal (Focusrite, RME, MOTU,
   Behringer, Dante Virtual Soundcard, MADI...) aparecem com todos os canais.
-- **Canais**: *Todos do dispositivo* (padrão) ou um número fixo (2, 4, 8, 16, 32).
+- **Canais**: *Todos do dispositivo* (padrão) ou um número fixo (2 a 64). Um número
+  maior que o da placa usa os canais que ela tem. Placas com mais de 64 saídas
+  funcionam, com as 64 primeiras.
 - **Modo exclusivo (WASAPI)** — só no Windows: o Lumen usa a placa sozinho, sem o
   mixer do Windows. Tem menos latência, não reamostra e entrega os canais do jeito
   que estão. Se o dispositivo recusar, volta ao modo compartilhado e avisa.
@@ -19,6 +21,14 @@ Em *Propriedades → Projeto → Áudio*:
 
 A linha *Em uso* mostra o dispositivo, os canais e a latência de fato. Os medidores
 mostram cada canal de saída, numerados.
+
+**Se a placa parar** (USB desconectado, driver travado): os vídeos continuam no
+relógio de quadros, sem congelar; o Lumen tenta reabrir a placa (ou a padrão, ou o
+relógio silencioso) a cada 3 s, e o som volta sincronizado com a imagem. O log mostra
+`[audio] a placa de som parou; reabrindo`.
+
+**Velocidade diferente de 1**: o clipe fica sem som enquanto isso; ao voltar para 1, o
+som volta no ponto certo da imagem.
 
 ## Para onde vai o som de cada layer
 
@@ -42,6 +52,9 @@ que iam para 3-4, 5-6... tocam em 1-2. Assim dá para ensaiar em qualquer lugar.
 
 Em *Interação → Timecode → Gerar*, a saída do LTC pode ser esquerda, direita, os dois
 ou **qualquer saída da interface** (ex.: saída 8, ligada direto na mesa de luz).
+O LTC não passa pelo volume master (master em zero não corta o timecode) e segue o
+relógio da placa: depois de um engasgo do computador ele se realinha à timeline em vez
+de ficar atrasado.
 
 ## ASIO
 

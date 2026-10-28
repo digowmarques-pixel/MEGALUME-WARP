@@ -7,7 +7,7 @@
 namespace lumen {
 
 constexpr int kMaxVoiceChannels = 8;   // 7.1
-constexpr int kMaxOutputChannels = 32; // multichannel interfaces, Dante, MADI...
+constexpr int kMaxOutputChannels = 64; // multichannel interfaces, Dante, MADI (more: first 64 used)
 
 // One connection of a routing matrix: source channel -> output channel (0-based).
 struct AudioPatch {

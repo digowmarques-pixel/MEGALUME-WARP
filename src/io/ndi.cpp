@@ -68,6 +68,7 @@ struct Api {
   void *(*sendCreate)(const NdiSendCreate *) = nullptr;
   void (*sendDestroy)(void *) = nullptr;
   void (*sendVideo)(void *, const NdiVideoFrame *) = nullptr;
+  void (*sendVideoAsync)(void *, const NdiVideoFrame *) = nullptr; // optional
   bool ok = false;
   std::string status = "NDI não carregado";
 };
@@ -105,6 +106,8 @@ Api &api() {
     x.sendCreate = reinterpret_cast<void *(*)(const NdiSendCreate *)>(sym("NDIlib_send_create"));
     x.sendDestroy = reinterpret_cast<void (*)(void *)>(sym("NDIlib_send_destroy"));
     x.sendVideo = reinterpret_cast<void (*)(void *, const NdiVideoFrame *)>(sym("NDIlib_send_send_video_v2"));
+    // Optional: the asynchronous send converts and compresses on NDI's own thread.
+    x.sendVideoAsync = reinterpret_cast<void (*)(void *, const NdiVideoFrame *)>(sym("NDIlib_send_send_video_async_v2"));
     bool all = x.initialize && x.findCreate && x.findDestroy && x.findSources && x.recvCreate && x.recvDestroy &&
                x.recvCapture && x.recvFreeVideo && x.sendCreate && x.sendDestroy && x.sendVideo;
     if (!all) {
@@ -227,14 +230,20 @@ bool NdiReceiver::latest(std::vector<uint8_t> &rgba, int &w, int &h) {
 }
 
 NdiSender::~NdiSender() {
-  if (inst_ && api().ok) api().sendDestroy(inst_);
+  if (inst_ && api().ok) {
+    if (api().sendVideoAsync) api().sendVideoAsync(inst_, nullptr); // waits until NDI is done with our buffer
+    api().sendDestroy(inst_);
+  }
 }
 
 bool NdiSender::send(const std::string &name, const uint8_t *rgba, int w, int h, int fpsN, int fpsD) {
   Api &a = api();
   if (!a.ok) return false;
   if (!inst_ || name != name_) {
-    if (inst_) a.sendDestroy(inst_);
+    if (inst_) {
+      if (a.sendVideoAsync) a.sendVideoAsync(inst_, nullptr);
+      a.sendDestroy(inst_);
+    }
     NdiSendCreate sc{name.c_str(), nullptr, false, false};
     inst_ = a.sendCreate(&sc);
     name_ = name;
@@ -249,8 +258,19 @@ bool NdiSender::send(const std::string &name, const uint8_t *rgba, int w, int h,
   v.aspect = float(w) / float(std::max(1, h));
   v.frameFormat = 1;
   v.timecode = INT64_MAX; // synthesize
-  v.data = const_cast<uint8_t *>(rgba);
   v.stride = w * 4;
+  if (a.sendVideoAsync) {
+    // Asynchronous: NDI keeps reading the buffer until the next call, so the
+    // frames alternate between two copies of our own. The render thread only
+    // copies; the colour conversion and compression run on NDI's thread.
+    std::vector<uint8_t> &b = buf_[cur_];
+    cur_ ^= 1;
+    b.assign(rgba, rgba + size_t(w) * size_t(h) * 4);
+    v.data = b.data();
+    a.sendVideoAsync(inst_, &v);
+    return true;
+  }
+  v.data = const_cast<uint8_t *>(rgba);
   a.sendVideo(inst_, &v); // synchronous: the data may be reused afterwards
   return true;
 }

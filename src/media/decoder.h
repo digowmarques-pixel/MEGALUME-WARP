@@ -42,6 +42,7 @@ struct VideoFrame {
 struct MediaInfo {
   int width = 0, height = 0;
   double duration = 0; // seconds (0 when unknown / live)
+  double startTime = 0; // where the video stream starts in the file (its clock 0)
   double fps = 0;
   bool hasVideo = false;
   bool hasAudio = false;

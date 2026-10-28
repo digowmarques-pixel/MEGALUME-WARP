@@ -9,6 +9,7 @@
 #include "core/warp.h"
 
 #include <map>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -547,6 +548,25 @@ struct Project {
 // edges. firstMonitor >= 0 assigns monitors in order; -1 keeps windows.
 // scaleContent rescales slices, masks and LED areas to the new canvas size.
 void applyBlendLayout(Project &p, const BlendLayoutParams &params, int firstMonitor, bool scaleContent);
+
+// Layer transform (position / scale / rotation). Scale and rotation turn
+// around the pivot, the mean of the slice centres.
+Vec2 layerPivot(const Layer &layer);
+Warp transformedWarp(const Layer &layer, const Slice &slice); // a slice as drawn
+Vec2 untransform(const Layer &layer, Vec2 canvasPoint);       // drawn point -> layer space
+Vec2 layerDelta(const Layer &layer, Vec2 canvasMove);         // a move on the canvas, in layer space
+// Edits the slices of a scaled or rotated layer without moving the rest of it
+// on screen: moving a corner or a slice moves the pivot, and everything drawn
+// around it; the layer position takes the difference back, so the edited
+// point lands exactly where it was put.
+void keepInPlace(Layer &layer, const std::function<void()> &edit);
+
+// Part of each soft edge of `o` that has a neighbour (along the edge, 0..1 of
+// the output; left/right from the top, top/bottom from the left; order left,
+// right, top, bottom): projectors not in a grid overlap only part of an edge,
+// and the rest of it must not be darkened. An edge without any neighbour
+// keeps its whole ramp (a soft edge on a lone projector, fading on a wall).
+void softEdgeSpans(const Project &p, const OutputConfig &o, float span[4][2]);
 
 // Free layouts (projectors placed anywhere on a canvas, not in a grid): sets
 // every output's soft edges from how its canvas region overlaps the others.

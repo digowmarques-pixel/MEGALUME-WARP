@@ -1,12 +1,15 @@
 #include "platform/platform.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
 #include <csignal>
 #include <exception>
+#include <functional>
 #include <sstream>
+#include <thread>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -86,8 +89,22 @@ static std::wstring win32Filter(const std::string &filter) {
   return f;
 }
 
-std::vector<std::string> openFileDialog(const std::string &title, const std::string &filter,
-                                        bool multiple) {
+// Shell dialogs need a single-threaded COM apartment, but the main thread is
+// already multithreaded (miniaudio's WASAPI initialises COM so, and a second
+// CoInitializeEx fails): the folder picker then silently did nothing. They run
+// on a thread of their own while the caller waits (they are modal anyway).
+template <class R> static R onStaThread(const std::function<R()> &f) {
+  R result{};
+  std::thread([&] {
+    HRESULT hr = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
+    result = f();
+    if (SUCCEEDED(hr)) CoUninitialize();
+  }).join();
+  return result;
+}
+
+static std::vector<std::string> openFileDialogSta(const std::string &title, const std::string &filter,
+                                                  bool multiple) {
   std::wstring buffer(64 * 1024, L'\0');
   std::wstring wfilter = win32Filter(filter), wtitle = widen(title);
   OPENFILENAMEW ofn{};
@@ -116,8 +133,13 @@ std::vector<std::string> openFileDialog(const std::string &title, const std::str
   return result;
 }
 
-std::string saveFileDialog(const std::string &title, const std::string &filter,
-                           const std::string &defaultName) {
+std::vector<std::string> openFileDialog(const std::string &title, const std::string &filter,
+                                        bool multiple) {
+  return onStaThread<std::vector<std::string>>([&] { return openFileDialogSta(title, filter, multiple); });
+}
+
+static std::string saveFileDialogSta(const std::string &title, const std::string &filter,
+                                     const std::string &defaultName) {
   std::wstring buffer(4096, L'\0');
   std::wstring def = widen(defaultName);
   std::copy(def.begin(), def.end(), buffer.begin());
@@ -134,15 +156,19 @@ std::string saveFileDialog(const std::string &title, const std::string &filter,
   return narrow(buffer.c_str());
 }
 
+std::string saveFileDialog(const std::string &title, const std::string &filter,
+                           const std::string &defaultName) {
+  return onStaThread<std::string>([&] { return saveFileDialogSta(title, filter, defaultName); });
+}
+
 bool hasNativeDialogs() { return true; }
 
 void openInShell(const std::string &path) {
   ShellExecuteW(nullptr, L"open", widen(path).c_str(), nullptr, nullptr, SW_SHOWNORMAL);
 }
 
-std::string folderDialog(const std::string &title) {
+static std::string folderDialogSta(const std::string &title) {
   std::wstring wtitle = widen(title);
-  CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
   BROWSEINFOW bi{};
   bi.lpszTitle = wtitle.c_str();
   bi.ulFlags = BIF_RETURNONLYFSDIRS | BIF_NEWDIALOGSTYLE;
@@ -152,6 +178,10 @@ std::string folderDialog(const std::string &title) {
   bool ok = SHGetPathFromIDListW(pidl, path);
   CoTaskMemFree(pidl);
   return ok ? narrow(path) : std::string();
+}
+
+std::string folderDialog(const std::string &title) {
+  return onStaThread<std::string>([&] { return folderDialogSta(title); });
 }
 
 std::vector<std::string> utf8Args(int, char **) {
@@ -188,6 +218,10 @@ std::string logPath() { return narrow(logPathW()); }
 void fatalError(const std::string &message) {
   std::fprintf(stderr, "[fatal] %s\n", message.c_str());
   std::fflush(stderr);
+  // One box: an error already shown here is followed by abort(), whose
+  // handler would show a second one.
+  static std::atomic<bool> shown{false};
+  if (shown.exchange(true)) return;
   std::wstring text = widen(message + "\n\nDetalhes em: " + logPath());
   MessageBoxW(nullptr, text.c_str(), L"Lumen", MB_OK | MB_ICONERROR);
 }
@@ -273,6 +307,15 @@ static std::string asQuote(const std::string &s) {
 }
 #endif
 
+#ifndef __APPLE__
+// A single-quoted shell argument: titles and default names may hold quotes.
+static std::string shQuote(const std::string &s) {
+  std::string out = "'";
+  for (char c : s) out += c == '\'' ? std::string("'\\''") : std::string(1, c);
+  return out + "'";
+}
+#endif
+
 bool hasNativeDialogs() {
 #ifdef __APPLE__
   return true;
@@ -293,7 +336,7 @@ std::vector<std::string> openFileDialog(const std::string &title, const std::str
             "-e 'set out to out & POSIX path of f & linefeed' -e 'end repeat' -e 'return out'"
       : "osascript -e 'POSIX path of (choose file with prompt " + asQuote(title) + ")'";
 #else
-  std::string cmd = "zenity --file-selection --separator='\n' --title='" + title + "'";
+  std::string cmd = "zenity --file-selection --separator='\n' --title=" + shQuote(title);
   if (multiple) cmd += " --multiple";
 #endif
   std::string out = runCapture(cmd + " 2>/dev/null");
@@ -311,8 +354,8 @@ std::string saveFileDialog(const std::string &title, const std::string &,
   return runCapture("osascript -e 'POSIX path of (choose file name with prompt " + asQuote(title) +
                     " default name " + asQuote(defaultName) + ")' 2>/dev/null");
 #else
-  return runCapture("zenity --file-selection --save --confirm-overwrite --title='" + title +
-                    "' --filename='" + defaultName + "' 2>/dev/null");
+  return runCapture("zenity --file-selection --save --confirm-overwrite --title=" + shQuote(title) +
+                    " --filename=" + shQuote(defaultName) + " 2>/dev/null");
 #endif
 }
 
@@ -321,7 +364,7 @@ std::string folderDialog(const std::string &title) {
 #ifdef __APPLE__
   return runCapture("osascript -e 'POSIX path of (choose folder with prompt " + asQuote(title) + ")' 2>/dev/null");
 #else
-  return runCapture("zenity --file-selection --directory --title='" + title + "' 2>/dev/null");
+  return runCapture("zenity --file-selection --directory --title=" + shQuote(title) + " 2>/dev/null");
 #endif
 }
 

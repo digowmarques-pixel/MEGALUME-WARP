@@ -11,6 +11,6 @@
 void main() {
   vec4 c = IMG_THIS_PIXEL(inputImage);
   float l = dot(c.rgb, vec3(0.2126, 0.7152, 0.0722));
-  vec3 d = mix(dark.rgb, light.rgb, l) * c.a;
+  vec3 d = mix(dark.rgb, light.rgb, l);
   gl_FragColor = vec4(mix(c.rgb, d, amount), c.a);
 }

@@ -189,6 +189,7 @@ bool decodeHapFrame(const uint8_t *data, size_t size, HapFrame &out, std::string
   }
   bool isAlpha;
   if (!decodeTexture(type, data + h, len, out.format, out.color, isAlpha, error)) return false;
+  if (isAlpha && error) *error = "HAP Alpha-Only (only alpha, no colour texture)";
   return !isAlpha;
 }
 

@@ -103,8 +103,11 @@ static float catmull(float p0, float p1, float p2, float p3, float t) {
                  (-p0 + 3 * p1 - 3 * p2 + p3) * t3);
 }
 
-// Smooth interpolation through the control points (Catmull-Rom in both axes,
-// with clamped borders). Degenerates to bilinear for a 2x2 grid.
+// Smooth interpolation through the control points (Catmull-Rom in both axes).
+// Beyond the border the grid is extended in a straight line, so a regular
+// grid maps exactly linearly (a 2x2 grid is bilinear) and the outer cells
+// keep their slope (repeating the border point halved it: up to 47 px of
+// distortion at the edges of a projector warp).
 static Vec2 gridInterp(const std::vector<Vec2> &grid, int meshCols, int meshRows, float u, float v);
 
 Vec2 Warp::meshInterp(float u, float v) const { return gridInterp(mesh, meshCols, meshRows, u, v); }
@@ -121,13 +124,20 @@ static Vec2 gridInterp(const std::vector<Vec2> &grid, int meshCols, int meshRows
   int cx = std::min(int(fx), meshCols - 2), cy = std::min(int(fy), meshRows - 2);
   float tx = fx - float(cx), ty = fy - float(cy);
 
-  auto P = [&](int c, int r) -> const Vec2 & {
-    return meshAt(std::clamp(c, 0, meshCols - 1), std::clamp(r, 0, meshRows - 1));
+  auto Q = [&](int c, int r) -> Vec2 { // a column past the border: straight line
+    if (c < 0) return meshAt(0, r) * 2.0f - meshAt(1, r);
+    if (c > meshCols - 1) return meshAt(meshCols - 1, r) * 2.0f - meshAt(meshCols - 2, r);
+    return meshAt(c, r);
+  };
+  auto P = [&](int c, int r) -> Vec2 { // and a row past it
+    if (r < 0) return Q(c, 0) * 2.0f - Q(c, 1);
+    if (r > meshRows - 1) return Q(c, meshRows - 1) * 2.0f - Q(c, meshRows - 2);
+    return Q(c, r);
   };
   Vec2 rows[4];
   for (int j = 0; j < 4; ++j) {
     int r = cy - 1 + j;
-    const Vec2 &a = P(cx - 1, r), &b = P(cx, r), &c = P(cx + 1, r), &d = P(cx + 2, r);
+    Vec2 a = P(cx - 1, r), b = P(cx, r), c = P(cx + 1, r), d = P(cx + 2, r);
     rows[j] = {catmull(a.x, b.x, c.x, d.x, tx), catmull(a.y, b.y, c.y, d.y, tx)};
   }
   return {catmull(rows[0].x, rows[1].x, rows[2].x, rows[3].x, ty),
@@ -300,7 +310,9 @@ bool Warp::unmap(Vec2 p, Vec2 &uv) const {
     uv = {std::clamp(uv.x - (f.x * dv.y - f.y * dv.x) / det, 0.0f, 1.0f),
           std::clamp(uv.y - (du.x * f.y - du.y * f.x) / det, 0.0f, 1.0f)};
   }
-  return (map(uv.x, uv.y) - p).length() < 1.0f + 1e-3f * (corners[2] - corners[0]).length();
+  // Relative to the warp's size: canvas warps are in pixels, output warps in
+  // 0..1 (an absolute 1.0 accepted any point of the output as "inside").
+  return (map(uv.x, uv.y) - p).length() < 2e-3f * std::max((corners[2] - corners[0]).length(), 1e-3f);
 }
 
 bool Warp::operator==(const Warp &o) const {

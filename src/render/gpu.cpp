@@ -81,6 +81,8 @@ static void pixelFormat(GLenum internal, GLenum &format, GLenum &type, int &byte
   case GL_RG8: format = GL_RG; type = GL_UNSIGNED_BYTE; bytesPerPixel = 2; break;
   case GL_R16: format = GL_RED; type = GL_UNSIGNED_SHORT; bytesPerPixel = 2; break;
   case GL_RG16: format = GL_RG; type = GL_UNSIGNED_SHORT; bytesPerPixel = 4; break;
+  case GL_RGBA16F: format = GL_RGBA; type = GL_HALF_FLOAT; bytesPerPixel = 8; break;
+  case GL_RGBA32F: format = GL_RGBA; type = GL_FLOAT; bytesPerPixel = 16; break;
   default: format = GL_RGBA; type = GL_UNSIGNED_BYTE; bytesPerPixel = 4; break;
   }
 }
@@ -89,6 +91,11 @@ void Texture::allocate(int w, int h, GLenum fmt) {
   if (id_ && w == w_ && h == h_ && fmt == fmt_) return;
   if (!id_) glGenTextures(1, &id_);
   w_ = w; h_ = h; fmt_ = fmt;
+  // The active unit may hold a texture a shader is about to sample (a render
+  // target resized between binding the inputs and drawing): put it back, or
+  // that pass would read its own target (black frames in ISF effects).
+  GLint previous = 0;
+  glGetIntegerv(GL_TEXTURE_BINDING_2D, &previous);
   glBindTexture(GL_TEXTURE_2D, id_);
   GLenum ext, type;
   int bpp;
@@ -98,6 +105,7 @@ void Texture::allocate(int w, int h, GLenum fmt) {
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+  glBindTexture(GL_TEXTURE_2D, GLuint(previous));
 }
 
 void Texture::upload(const void *rgba, int w, int h, int stride) {

@@ -26,10 +26,14 @@ public:
   void render(const MediaItem &m, double time, Framebuffer &target, DynamicMesh &mesh);
   // Copies a framebuffer texture (bottom-up) into `target` as an image (row 0 = top).
   void copyFlipped(const Texture &src, Framebuffer &target, DynamicMesh &mesh);
+  // Cross-dissolve of two images (row 0 = top) at `t` (0 = a, 1 = b) into
+  // `target`, sized like b. A real mix: the middle of a fade between two
+  // opaque images is as bright as both, unlike two layers drawn one over the other.
+  void crossfade(const Texture &a, const Texture &b, float t, Framebuffer &target, DynamicMesh &mesh);
 
 private:
   Shader shaders_[int(GeneratorKind::COUNT)];
-  Shader copy_;
+  Shader copy_, mix_;
 };
 
 // A camera / capture card / stream / Spout sender. Shared by every layer that
@@ -114,10 +118,16 @@ public:
   double time() const { return clock_; }
   double duration() const;
   bool hasAudio() const { return voice_ != nullptr; }
+  bool audioPacing() const { return audioClock_; } // the sound card drives the picture
   float audioPeak() const { return voice_ ? voice_->peak() : 0.0f; }
   void setGain(float g);
   void setRoute(int firstOutput, const std::vector<AudioPatch> &matrix);
   int audioChannels() const { return voice_ ? voice_->channels() : 0; }
+  // Files and generated media can jump in time; live inputs (camera, NDI,
+  // Spout, canvas) cannot.
+  bool seekable() const {
+    return type_ != MediaType::Live && type_ != MediaType::NDI && type_ != MediaType::Spout && type_ != MediaType::Canvas;
+  }
   std::string hwaccel() const { return decoder_ ? decoder_->hwaccel() : std::string(); }
   float speed = 1;
   bool loop = true;
@@ -141,6 +151,13 @@ private:
   std::shared_ptr<AudioVoice> voice_;
   std::unique_ptr<AudioDecoder> audioDecoder_;
   bool audioClock_ = false;
+  // Why the sound stopped pacing the picture; it comes back in step when the
+  // cause goes away (speed back to 1, sound card reopened).
+  enum class AudioOff { No, Speed, Stall, Ended };
+  AudioOff audioOff_ = AudioOff::No;
+  double lastPlayed_ = -1, stallFor_ = 0;
+  int audioGen_ = 0;
+  void watchAudio(double dt);
 };
 
 } // namespace lumen

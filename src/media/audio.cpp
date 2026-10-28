@@ -29,6 +29,10 @@ extern "C" {
 
 namespace lumen {
 
+static long long steadyNs() {
+  return std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+
 // ------------------------------------------------------------------ voice
 
 AudioVoice::AudioVoice(size_t capacityFrames)
@@ -47,6 +51,11 @@ void AudioVoice::setChannels(int channels) {
 size_t AudioVoice::space() {
   std::lock_guard<std::mutex> lock(mutex_);
   return capacity_ - count_;
+}
+
+size_t AudioVoice::buffered() {
+  std::lock_guard<std::mutex> lock(mutex_);
+  return count_;
 }
 
 size_t AudioVoice::write(const float *in, size_t frames) {
@@ -76,8 +85,12 @@ void AudioVoice::setRoute(int firstOutput, const std::vector<AudioPatch> &custom
   routeOut_ = -1;
 }
 
-void AudioVoice::mixInto(float *out, size_t frames, int outChannels) {
-  if (!active) { peak_ = 0; return; }
+void AudioVoice::mixInto(float *out, size_t frames, int stride, int outChannels) {
+  if (!active) {
+    peak_ = 0;
+    if (retiring) retired = true;
+    return;
+  }
   std::lock_guard<std::mutex> lock(mutex_);
   int src = channels_.load();
   if (routeOut_ != outChannels || routeSrc_ != src) { // rare: device or file changed
@@ -87,12 +100,12 @@ void AudioVoice::mixInto(float *out, size_t frames, int outChannels) {
   }
   size_t n = std::min(frames, count_);
   starving_ = n < frames;
-  float target = gain.load();
+  float target = retiring ? 0.0f : gain.load(); // a removed voice fades out: no click
   float g = currentGain_;
   // Linear ramp over the buffer avoids clicks when the gain changes.
   float step = frames ? (target - g) / float(frames) : 0.0f;
   float pk = 0;
-  size_t oc = size_t(outChannels);
+  size_t oc = size_t(stride);
   for (size_t i = 0; i < n; ++i) {
     size_t p = (readPos_ + i) % capacity_;
     g += step;
@@ -109,6 +122,7 @@ void AudioVoice::mixInto(float *out, size_t frames, int outChannels) {
   count_ -= n;
   played_ += n;
   peak_ = std::max(pk, peak_.load() * 0.9f);
+  if (retiring) retired = true; // ramped to silence in this buffer
 }
 
 // ------------------------------------------------------------------ engine
@@ -183,6 +197,27 @@ bool AudioEngine::start(const std::string &name, const AudioDeviceOptions &opt) 
       return false;
     }
     impl_->hasDevice = true;
+    // More channels asked than the device has: miniaudio would fold the extra
+    // ones into the real outputs. Reopen with the device's own count instead.
+    ma_uint32 native = impl_->device.playback.internalChannels;
+    if (cfg.playback.channels > 0 && native > 0 && cfg.playback.channels > native) {
+      ma_device_uninit(&impl_->device);
+      impl_->hasDevice = false;
+      cfg.playback.channels = native;
+      if (ma_device_init(&impl_->context, &cfg, &impl_->device) != MA_SUCCESS) {
+        ma_context_uninit(&impl_->context);
+        impl_->hasContext = false;
+        return false;
+      }
+      impl_->hasDevice = true;
+    }
+    // The callback mixes with this layout: it must be right before the device
+    // starts calling it (a stale, larger count overflows the buffer). Devices
+    // with more than kMaxOutputChannels outputs keep their own frame layout
+    // (stride); only the first kMaxOutputChannels are used.
+    stride_ = std::max(1, int(impl_->device.playback.channels));
+    channels_ = std::min(stride_.load(), kMaxOutputChannels);
+    lastCallbackNs_ = steadyNs(); // a device that never calls back counts as stalled
     if (ma_device_start(&impl_->device) != MA_SUCCESS) {
       stop();
       return false;
@@ -208,12 +243,11 @@ bool AudioEngine::start(const std::string &name, const AudioDeviceOptions &opt) 
     silent_ = true;
     deviceName_ = "(sem saída de áudio)";
   }
-  // What the device really gave us (miniaudio converts if it had to).
-  channels_ = std::clamp(int(impl_->device.playback.channels), 1, kMaxOutputChannels);
   latencyMs_ = int(impl_->device.playback.internalPeriodSizeInFrames * 1000 /
                    std::max<ma_uint32>(1, impl_->device.playback.internalSampleRate));
   for (auto &p : peak_) p = 0;
   running_ = true;
+  ++generation_;
   return true;
 }
 
@@ -237,26 +271,78 @@ std::shared_ptr<AudioVoice> AudioEngine::createVoice() {
 }
 
 void AudioEngine::removeVoice(const std::shared_ptr<AudioVoice> &v) {
+  if (v) v->retiring = true; // the callback ramps it to silence (no click on a cut)
+  purge();
+}
+
+void AudioEngine::purge() {
+  // Without a running callback nothing fades: drop the removed voices at once.
+  bool now = !running_ || stalled();
   std::lock_guard<std::mutex> lock(voicesMutex_);
-  voices_.erase(std::remove(voices_.begin(), voices_.end(), v), voices_.end());
+  std::erase_if(voices_, [&](const std::shared_ptr<AudioVoice> &v) { return v->retired || (now && v->retiring); });
+}
+
+bool AudioEngine::stalled() const {
+  return running_ && steadyNs() - lastCallbackNs_.load() > 500'000'000LL;
+}
+
+void AudioEngine::debugStall() {
+  if (impl_->hasDevice) ma_device_stop(&impl_->device);
+}
+
+void AudioEngine::debugRecord(double seconds) {
+  recording_ = false;
+  recChannels_ = stride_;
+  rec_.assign(size_t(seconds * kAudioRate) * size_t(recChannels_), 0.0f);
+  recPos_ = 0;
+  recording_.store(true, std::memory_order_release);
+}
+
+bool AudioEngine::saveRecording(const std::string &path) const {
+  if (!recording_) return false;
+  FILE *f = std::fopen(path.c_str(), "wb");
+  if (!f) return false;
+  uint32_t data = uint32_t(recPos_.load() * sizeof(float)), ch = uint32_t(recChannels_);
+  auto u32 = [&](uint32_t v) { std::fwrite(&v, 4, 1, f); };
+  auto u16 = [&](uint16_t v) { std::fwrite(&v, 2, 1, f); };
+  std::fwrite("RIFF", 1, 4, f); u32(36 + data); std::fwrite("WAVEfmt ", 1, 8, f);
+  u32(16); u16(3); u16(uint16_t(ch)); u32(kAudioRate); u32(kAudioRate * ch * 4); u16(uint16_t(ch * 4)); u16(32);
+  std::fwrite("data", 1, 4, f); u32(data);
+  std::fwrite(rec_.data(), 1, data, f);
+  std::fclose(f);
+  return true;
 }
 
 void AudioEngine::callback(float *out, size_t frames) {
-  const int ch = channels_;
-  std::memset(out, 0, frames * size_t(ch) * sizeof(float));
+  lastCallbackNs_ = steadyNs();
+  const int ch = channels_, stride = stride_;
+  std::memset(out, 0, frames * size_t(stride) * sizeof(float));
   {
     std::lock_guard<std::mutex> lock(voicesMutex_);
-    for (auto &v : voices_) v->mixInto(out, frames, ch);
+    for (auto &v : voices_)
+      if (!v->bypassMaster) v->mixInto(out, frames, stride, ch);
   }
   float m = master.load();
+  for (size_t i = 0; i < frames; ++i) {
+    float *f = &out[i * size_t(stride)];
+    // Soft clip keeps several loud voices from wrapping around.
+    for (int c = 0; c < ch; ++c) f[c] = std::tanh(f[c] * m);
+  }
+  {
+    // Timecode goes out after the master: a master at zero must not cut it.
+    std::lock_guard<std::mutex> lock(voicesMutex_);
+    for (auto &v : voices_)
+      if (v->bypassMaster) v->mixInto(out, frames, stride, ch);
+  }
+  if (recording_.load(std::memory_order_acquire) && stride == recChannels_) {
+    size_t pos = recPos_, n = std::min(frames * size_t(stride), rec_.size() - pos);
+    std::memcpy(rec_.data() + pos, out, n * sizeof(float));
+    recPos_ = pos + n;
+  }
   float pk[kMaxOutputChannels] = {};
   for (size_t i = 0; i < frames; ++i) {
-    float *f = &out[i * size_t(ch)];
-    for (int c = 0; c < ch; ++c) {
-      // Soft clip keeps several loud voices from wrapping around.
-      f[c] = std::tanh(f[c] * m);
-      pk[c] = std::max(pk[c], std::fabs(f[c]));
-    }
+    const float *f = &out[i * size_t(stride)];
+    for (int c = 0; c < ch; ++c) pk[c] = std::max(pk[c], std::fabs(f[c]));
   }
   for (int c = 0; c < ch; ++c) peak_[c] = std::max(pk[c], peak_[c].load() * 0.92f);
 }
@@ -266,12 +352,13 @@ void AudioEngine::callback(float *out, size_t frames) {
 AudioDecoder::~AudioDecoder() { close(); }
 
 bool AudioDecoder::open(const std::string &path, std::shared_ptr<AudioVoice> voice, bool loop,
-                        double loopLength, std::string *error) {
+                        double loopLength, double videoStart, std::string *error) {
   close();
   path_ = path;
   voice_ = std::move(voice);
   loop_ = loop;
   loopLength_ = loopLength;
+  videoStart_ = std::isfinite(videoStart) ? videoStart : 0.0;
   finished_ = false;
   running_ = true;
   thread_ = std::thread(&AudioDecoder::run, this);
@@ -334,22 +421,31 @@ void AudioDecoder::run() {
     return;
   }
 
-  // Exact frame count per loop: identical to the video loop length.
-  const int64_t framesPerLoop = loopLength_ > 0 ? int64_t(std::llround(loopLength_ * kAudioRate)) : -1;
-  int64_t loopFrames = 0;
+  // Exact frame count of each loop: the video's loop length, with the
+  // fraction of a sample carried from one loop to the next, so the sound never
+  // drifts from the picture in installations that loop for days.
+  const double loopSamples = loopLength_ > 0 ? loopLength_ * kAudioRate : 0;
+  auto loopSize = [&](int64_t k) -> int64_t {
+    if (loopSamples <= 0) return -1;
+    return std::llround(double(k + 1) * loopSamples) - std::llround(double(k) * loopSamples);
+  };
+  int64_t loopIndex = 0, framesPerLoop = loopSize(0), loopFrames = 0;
   std::vector<float> buf;
   std::vector<float> pending; // converted audio not yet accepted by the voice
   size_t pendingPos = 0;
   bool eof = false;
 
-  // Samples to drop after a seek, counted from the first decoded frame.
-  int64_t skipFrames = 0;
-  bool measureSkip = false;
+  // After a seek: samples to drop (the audio starts before the target) or
+  // silence to add (it starts after it), from the first decoded frame. Times
+  // are on the video's clock: file time minus the video stream's start.
+  int64_t skipFrames = 0, padFrames = 0;
+  bool measureSkip = true; // also from the start of the file
   double seekInside = 0;
   auto seekInFile = [&](double inside) {
-    int64_t ts = inside <= 0 ? 0 : av_rescale_q(int64_t(inside * AV_TIME_BASE), AV_TIME_BASE_Q, st->time_base);
-    if (st->start_time != AV_NOPTS_VALUE) ts += st->start_time;
-    av_seek_frame(fmt, stream, ts, AVSEEK_FLAG_BACKWARD);
+    double fileTime = inside + videoStart_;
+    int64_t ts = av_rescale_q(int64_t(fileTime * AV_TIME_BASE), AV_TIME_BASE_Q, st->time_base);
+    if (av_seek_frame(fmt, stream, ts, AVSEEK_FLAG_BACKWARD) < 0)
+      av_seek_frame(fmt, stream, st->start_time != AV_NOPTS_VALUE ? st->start_time : 0, AVSEEK_FLAG_BACKWARD);
     avcodec_flush_buffers(codec);
     swr_init(swr);
     loopFrames = int64_t(std::llround(inside * kAudioRate));
@@ -357,8 +453,8 @@ void AudioDecoder::run() {
     pendingPos = 0;
     eof = false;
     seekInside = inside;
-    measureSkip = inside > 0;
-    skipFrames = 0;
+    measureSkip = true;
+    skipFrames = padFrames = 0;
   };
   auto rewind = [&] { seekInFile(0); };
 
@@ -366,9 +462,13 @@ void AudioDecoder::run() {
     if (restart_.exchange(false)) {
       double target = seekTo_.load();
       double len = loopLength_ > 0 ? loopLength_ : 0;
-      double loops = len > 0 && loop_ ? std::floor(target / len) : 0;
-      double inside = std::max(0.0, target - loops * len);
+      int64_t loops = len > 0 && loop_ ? int64_t(std::floor(target / len)) : 0;
+      double inside = std::max(0.0, target - double(loops) * len);
       seekInFile(inside);
+      loopIndex = loops;
+      framesPerLoop = loopSize(loops);
+      if (loopSamples > 0) // frames already played in this loop, on the exact loop grid
+        loopFrames = std::max<int64_t>(0, std::llround(target * kAudioRate) - std::llround(double(loops) * loopSamples));
       voice_->reset(target);
     }
     // Feed what we already have first.
@@ -390,7 +490,11 @@ void AudioDecoder::run() {
         loopFrames += n;
         continue;
       }
-      if (loop_) { rewind(); continue; }
+      if (loop_) {
+        framesPerLoop = loopSize(++loopIndex);
+        rewind();
+        continue;
+      }
       finished_ = true;
       std::this_thread::sleep_for(std::chrono::milliseconds(20));
       continue;
@@ -412,21 +516,25 @@ void AudioDecoder::run() {
       if (out > 0) {
         buf.resize(size_t(out) * size_t(ch));
         uint8_t *dst = reinterpret_cast<uint8_t *>(buf.data());
-        int got = swr_convert(swr, &dst, out, nullptr, 0);
+        int64_t got = std::max(0, swr_convert(swr, &dst, out, nullptr, 0));
+        // Never past the loop's length (the resampler's tail made every loop
+        // a little longer than the video's).
+        if (framesPerLoop > 0 && loop_) got = std::min(got, std::max<int64_t>(0, framesPerLoop - loopFrames));
         if (got > 0) pending.assign(buf.begin(), buf.begin() + got * ch);
-        loopFrames += got > 0 ? got : 0;
+        loopFrames += got;
       }
       eof = true;
       continue;
     }
     if (r < 0) { eof = true; continue; }
 
-    if (measureSkip) { // first frame after a seek: how far before the target it starts
+    if (measureSkip) { // first frame after a seek: how far before (or after) the target it starts
       int64_t ts = frame->best_effort_timestamp != AV_NOPTS_VALUE ? frame->best_effort_timestamp : frame->pts;
       if (ts != AV_NOPTS_VALUE) {
-        if (st->start_time != AV_NOPTS_VALUE) ts -= st->start_time;
-        double at = double(ts) * av_q2d(st->time_base);
-        skipFrames = std::max<int64_t>(0, std::llround((seekInside - at) * kAudioRate));
+        double at = double(ts) * av_q2d(st->time_base) - videoStart_;
+        int64_t d = std::llround((seekInside - at) * kAudioRate);
+        if (d > 0) skipFrames = d;
+        else padFrames = std::min<int64_t>(-d, 30 * kAudioRate); // sound starts later than the picture
       }
       measureSkip = false;
     }
@@ -442,11 +550,17 @@ void AudioDecoder::run() {
       skipFrames -= start;
       if (start == got) continue;
     }
-    int64_t keep = got - start;
-    if (framesPerLoop > 0 && loop_) keep = std::min<int64_t>(keep, framesPerLoop - loopFrames);
-    if (keep <= 0) { eof = true; continue; } // audio longer than the video: cut
-    pending.assign(buf.begin() + start * ch, buf.begin() + (start + keep) * ch);
-    loopFrames += keep;
+    int64_t keep = got - start, pad = padFrames;
+    padFrames = 0;
+    if (framesPerLoop > 0 && loop_) {
+      int64_t room = std::max<int64_t>(0, framesPerLoop - loopFrames);
+      pad = std::min(pad, room);
+      keep = std::min(keep, room - pad);
+    }
+    if (keep <= 0 && pad <= 0) { eof = true; continue; } // audio longer than the video: cut
+    pending.assign(size_t(pad) * size_t(ch), 0.0f);
+    if (keep > 0) pending.insert(pending.end(), buf.begin() + start * ch, buf.begin() + (start + keep) * ch);
+    loopFrames += pad + std::max<int64_t>(keep, 0);
   }
   av_channel_layout_uninit(&outLayout);
   cleanup();

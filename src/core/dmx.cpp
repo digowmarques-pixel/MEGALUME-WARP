@@ -132,11 +132,13 @@ bool decodeArtDmx(const uint8_t *p, size_t size, int &universe, DmxUniverse &dat
   return true;
 }
 
-bool decodeSacn(const uint8_t *p, size_t size, int &universe, DmxUniverse &data, int &count) {
+bool decodeSacn(const uint8_t *p, size_t size, int &universe, DmxUniverse &data, int &count, int *priority) {
   static const char acn[12] = {'A', 'S', 'C', '-', 'E', '1', '.', '1', '7', 0, 0, 0};
   if (size < 126 || std::memcmp(p + 4, acn, 12) != 0) return false;
   if (p[21] != 0x04 || p[43] != 0x02 || p[117] != 0x02) return false; // data packet
   if (p[125] != 0) return false;                                       // DMX start code only
+  if (p[112] & 0xC0) return false; // Preview_Data (a console's blind edit) or Stream_Terminated
+  if (priority) *priority = p[108];
   universe = (p[113] << 8) | p[114];
   int props = (p[123] << 8) | p[124]; // start code + channels
   count = std::clamp(std::min(props - 1, int(size) - 126), 0, 512);

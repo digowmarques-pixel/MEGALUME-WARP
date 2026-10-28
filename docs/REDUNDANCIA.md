@@ -22,6 +22,15 @@ podem apagar.
   *comandos ao assumir*.
 - Quando a principal volta, a reserva **continua no comando** até alguém clicar em
   *Voltar a seguir*. Assim o show não fica alternando entre as máquinas.
+- A reserva confere **cada layer** a cada pacote: uma célula disparada sozinha, um
+  "parar" sem fade ou um "parar tudo" na principal também acontecem nela.
+- Cada vez que a principal abre (ou reabre) a sincronia ela ganha um **número de
+  sessão**: a reserva percebe que a principal reiniciou e volta a segui-la do zero.
+- A reserva segue **uma principal só**: o endereço de *Par* (ou, sem ele, a primeira
+  que ela ouvir). Pacotes de outra máquina são ignorados e aparecem no log.
+- Uma reserva ligada **antes** da principal fica *aguardando*; se não ouvir nenhuma
+  principal por 30 s (ou pelo *tempo para assumir*, se for maior), ela assume e
+  dispara a coluna inicial do projeto. A tela mostra a contagem regressiva.
 
 ## Montagem
 

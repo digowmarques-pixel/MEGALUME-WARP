@@ -1,8 +1,15 @@
 #include "control/osc.h"
 
+#include <algorithm>
+#include <chrono>
+#include <cmath>
+#include <condition_variable>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <map>
+#include <mutex>
+#include <thread>
 
 #ifdef _WIN32
 #include <winsock2.h>
@@ -118,7 +125,23 @@ bool parseMessage(const uint8_t *data, size_t size, OscMessage &m) {
     case 'T': m.args.emplace_back(true); break;
     case 'F': m.args.emplace_back(false); break;
     case 'N':
-    case 'I': break;
+    case 'I':
+    case '[': // array brackets carry no data: the elements are read as plain arguments
+    case ']': break;
+    case 'c': // ASCII character, RGBA colour, MIDI message: 32 bits each, read as integers
+    case 'r':
+    case 'm': {
+      if (pos + 4 > size) return false;
+      m.args.emplace_back(int32_t(readU32(data + pos)));
+      pos += 4;
+      break;
+    }
+    case 't': { // time tag: whole seconds
+      if (pos + 8 > size) return false;
+      m.args.emplace_back(int32_t(readU32(data + pos)));
+      pos += 8;
+      break;
+    }
     case 'b': {
       if (pos + 4 > size) return false;
       size_t n = readU32(data + pos);
@@ -210,13 +233,16 @@ bool matchSegment(const char *p, const char *pe, const char *a, const char *ae) 
 float OscMessage::number(size_t i, float def) const {
   if (i >= args.size()) return def;
   const OscArg &a = args[i];
-  if (auto v = std::get_if<int32_t>(&a)) return float(*v);
-  if (auto v = std::get_if<float>(&a)) return *v;
-  if (auto v = std::get_if<bool>(&a)) return *v ? 1.0f : 0.0f;
-  if (auto v = std::get_if<std::string>(&a)) {
-    try { return std::stof(*v); } catch (...) { return def; }
+  float v = def;
+  if (auto x = std::get_if<int32_t>(&a)) v = float(*x);
+  else if (auto x = std::get_if<float>(&a)) v = *x;
+  else if (auto x = std::get_if<bool>(&a)) v = *x ? 1.0f : 0.0f;
+  else if (auto x = std::get_if<std::string>(&a)) {
+    try { v = std::stof(*x); } catch (...) { v = def; }
   }
-  return def;
+  // NaN / infinity (a float on the wire, the text "nan" from a sensor) would
+  // spread into parameters, the redundancy state and the saved project.
+  return std::isfinite(v) ? v : def;
 }
 
 std::string OscMessage::toString() const {
@@ -365,7 +391,11 @@ void OscServer::run() {
     if (!parseOsc(buf.data(), size_t(n), msgs)) {
       // Plain text is accepted too, one message per line:
       //   echo "/lumen/go" | nc -u 127.0.0.1 8000
+      // Only real text: a binary OSC packet (it always has NUL bytes) that did
+      // not parse is dropped, not read as an address with no argument (which
+      // the handlers take as "fire": GO, blackout on...).
       msgs.clear();
+      if (std::memchr(buf.data(), 0, size_t(n))) continue;
       std::string text(reinterpret_cast<const char *>(buf.data()), size_t(n)), line;
       for (size_t i = 0; i <= text.size(); ++i) {
         if (i == text.size() || text[i] == '\n' || text[i] == '\r' || text[i] == 0) {
@@ -410,20 +440,81 @@ bool OscSender::send(const std::string &host, int port, const OscMessage &m) {
   return sendRaw(host, port, data.data(), data.size());
 }
 
+namespace {
+
+// Host names are resolved on a thread of their own and cached: senders run on
+// the render thread (LEDs, redundancy, feedback), and a lookup with an
+// unreachable DNS server (an isolated show network) blocks for seconds. Until
+// a name is resolved its packets are dropped; it is looked up again every 30 s.
+class Resolver {
+public:
+  static Resolver &get() {
+    // Never destroyed: a lookup still waiting on the DNS at exit must not hold
+    // the program open (the thread is detached and ends with the process).
+    static Resolver *r = new Resolver();
+    return *r;
+  }
+  bool lookup(const std::string &host, in_addr &out) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto now = std::chrono::steady_clock::now();
+    auto it = cache_.find(host);
+    if (it != cache_.end() && now - it->second.at < std::chrono::seconds(30)) {
+      out = it->second.addr;
+      return it->second.ok;
+    }
+    if (pending_.size() < 64 && std::find(pending_.begin(), pending_.end(), host) == pending_.end()) {
+      pending_.push_back(host);
+      cv_.notify_one();
+    }
+    if (it != cache_.end() && it->second.ok) { out = it->second.addr; return true; } // stale but usable
+    return false;
+  }
+private:
+  Resolver() { std::thread([this] { run(); }).detach(); }
+  void run() {
+    std::unique_lock<std::mutex> lock(mutex_);
+    while (!quit_) {
+      cv_.wait(lock, [&] { return quit_ || !pending_.empty(); });
+      if (quit_) break;
+      std::string host = pending_.front();
+      pending_.erase(pending_.begin());
+      lock.unlock();
+      Entry e;
+      addrinfo hints{}, *res = nullptr;
+      hints.ai_family = AF_INET;
+      hints.ai_socktype = SOCK_DGRAM;
+      if (getaddrinfo(host.c_str(), nullptr, &hints, &res) == 0 && res) {
+        e.addr = reinterpret_cast<sockaddr_in *>(res->ai_addr)->sin_addr;
+        e.ok = true;
+        freeaddrinfo(res);
+      }
+      e.at = std::chrono::steady_clock::now();
+      lock.lock();
+      cache_[host] = e;
+    }
+  }
+  struct Entry {
+    in_addr addr{};
+    bool ok = false;
+    std::chrono::steady_clock::time_point at;
+  };
+  std::mutex mutex_;
+  std::condition_variable cv_;
+  std::vector<std::string> pending_;
+  std::map<std::string, Entry> cache_;
+  bool quit_ = false;
+};
+
+} // namespace
+
 bool OscSender::sendRaw(const std::string &host, int port, const uint8_t *data, size_t size) {
   if (!ensureSocket()) return false;
   sockaddr_in addr{};
   addr.sin_family = AF_INET;
   addr.sin_port = htons(uint16_t(port));
-  if (inet_pton(AF_INET, host.c_str(), &addr.sin_addr) != 1) {
-    // Host name: resolve (cached by the OS resolver).
-    addrinfo hints{}, *res = nullptr;
-    hints.ai_family = AF_INET;
-    hints.ai_socktype = SOCK_DGRAM;
-    if (getaddrinfo(host.c_str(), nullptr, &hints, &res) != 0 || !res) return false;
-    addr.sin_addr = reinterpret_cast<sockaddr_in *>(res->ai_addr)->sin_addr;
-    freeaddrinfo(res);
-  }
+  // A name (or a half-typed address, "192.168."): never resolved on this thread.
+  if (inet_pton(AF_INET, host.c_str(), &addr.sin_addr) != 1 && !Resolver::get().lookup(host, addr.sin_addr))
+    return false;
   int r = int(sendto(Sock(socket_), reinterpret_cast<const char *>(data), int(size), 0,
                      reinterpret_cast<sockaddr *>(&addr), sizeof(addr)));
   return r == int(size);

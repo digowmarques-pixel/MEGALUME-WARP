@@ -1,5 +1,5 @@
 ; Lumen installer (NSIS 3). Builds on Windows (CI) or Linux (apt install nsis):
-;   makensis -DVERSION=0.10.0 -DSRCDIR=path\to\Lumen -DOUTFILE=Lumen-setup.exe installer/lumen.nsi
+;   makensis -DVERSION=0.10.1 -DSRCDIR=path\to\Lumen -DOUTFILE=Lumen-setup.exe installer/lumen.nsi
 ; SRCDIR is the packaged folder (lumen.exe, DLLs, effects, examples, docs).
 
 Unicode true
@@ -22,7 +22,9 @@ Unicode true
 Name "${APP} ${VERSION}"
 OutFile "${OUTFILE}"
 InstallDir "$PROGRAMFILES64\${APP}"
-InstallDirRegKey HKLM "Software\${APP}" "InstallDir"
+; The folder of a previous install is read in .onInit, in the 64-bit registry
+; view it was written to (InstallDirRegKey reads the 32-bit one, so a custom
+; folder was forgotten and a second copy went to Program Files).
 RequestExecutionLevel admin
 SetCompressor /SOLID lzma
 BrandingText "Lumen ${VERSION}"
@@ -30,7 +32,10 @@ BrandingText "Lumen ${VERSION}"
 !define MUI_ICON "..\assets\lumen.ico"
 !define MUI_UNICON "..\assets\lumen.ico"
 !define MUI_ABORTWARNING
-!define MUI_FINISHPAGE_RUN "$INSTDIR\lumen.exe"
+; Started through Explorer: not as administrator (an elevated Lumen cannot take
+; files dragged from Explorer).
+!define MUI_FINISHPAGE_RUN
+!define MUI_FINISHPAGE_RUN_FUNCTION LaunchLumen
 
 !insertmacro MUI_PAGE_WELCOME
 !insertmacro MUI_PAGE_DIRECTORY
@@ -58,18 +63,27 @@ Function .onInit
     Abort
   ${EndIf}
   SetRegView 64
+  SetShellVarContext all ; shortcuts for every user of the machine
+  ReadRegStr $0 HKLM "Software\${APP}" "InstallDir"
+  StrCmp $0 "" +2
+    StrCpy $INSTDIR $0
   !insertmacro MUI_LANGDLL_DISPLAY
 FunctionEnd
 
 Function un.onInit
   SetRegView 64
+  SetShellVarContext all
+FunctionEnd
+
+Function LaunchLumen
+  Exec '"$WINDIR\explorer.exe" "$INSTDIR\lumen.exe"'
 FunctionEnd
 
 Section "Lumen" SecMain
   SectionIn RO
   SetOutPath "$INSTDIR"
-  ; An update replaces the program but keeps nothing stale from the old effects.
-  RMDir /r "$INSTDIR\effects"
+  ; An update overwrites the shipped effects and keeps the user's own .fs files
+  ; (EFEITOS.md tells users to put downloaded effects in this folder).
   File /r "${SRCDIR}\*.*"
   File "..\assets\lumen.ico"
   WriteUninstaller "$INSTDIR\uninstall.exe"
@@ -106,8 +120,36 @@ SectionEnd
 Section "Uninstall"
   Delete "$DESKTOP\Lumen.lnk"
   RMDir /r "$SMPROGRAMS\${APP}"
-  ; Only what the installer put there: projects and media saved elsewhere stay.
-  RMDir /r "$INSTDIR\effects"
+  ; Only what the installer put there: projects and media saved elsewhere stay,
+  ; and so do the user's effects (the folder goes only when it is empty).
+  ; Shipped effects (the unit tests check this list against effects/):
+  Delete "$INSTDIR\effects\Aneis.fs"
+  Delete "$INSTDIR\effects\Bordas.fs"
+  Delete "$INSTDIR\effects\Brilho.fs"
+  Delete "$INSTDIR\effects\Caleidoscopio.fs"
+  Delete "$INSTDIR\effects\ChromaKey.fs"
+  Delete "$INSTDIR\effects\Degrade.fs"
+  Delete "$INSTDIR\effects\Desfoque.fs"
+  Delete "$INSTDIR\effects\DeslocarRGB.fs"
+  Delete "$INSTDIR\effects\Duotone.fs"
+  Delete "$INSTDIR\effects\Espelho.fs"
+  Delete "$INSTDIR\effects\Limiar.fs"
+  Delete "$INSTDIR\effects\Niveis.fs"
+  Delete "$INSTDIR\effects\Onda.fs"
+  Delete "$INSTDIR\effects\Pixelizar.fs"
+  Delete "$INSTDIR\effects\Posterizar.fs"
+  Delete "$INSTDIR\effects\Rastro.fs"
+  Delete "$INSTDIR\effects\RecorteSuave.fs"
+  Delete "$INSTDIR\effects\Ruido.fs"
+  Delete "$INSTDIR\effects\T_Circulo.fs"
+  Delete "$INSTDIR\effects\T_Cortina.fs"
+  Delete "$INSTDIR\effects\T_Dissolver.fs"
+  Delete "$INSTDIR\effects\T_Glitch.fs"
+  Delete "$INSTDIR\effects\T_Pixels.fs"
+  Delete "$INSTDIR\effects\T_Zoom.fs"
+  Delete "$INSTDIR\effects\Varredura.fs"
+  Delete "$INSTDIR\effects\Vinheta.fs"
+  RMDir "$INSTDIR\effects"
   RMDir /r "$INSTDIR\examples"
   RMDir /r "$INSTDIR\docs"
   Delete "$INSTDIR\*.exe"

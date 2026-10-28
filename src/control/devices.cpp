@@ -7,6 +7,8 @@
 #include <rtmidi/RtMidi.h>
 
 #include <algorithm>
+#include <cctype>
+#include <cerrno>
 #include <chrono>
 #include <cstdlib>
 #include <cstring>
@@ -87,65 +89,111 @@ static bool resolve(const std::string &host, int port, sockaddr_in &addr) {
   return true;
 }
 
-// Connect with a timeout, send, then read until a line ends or the timeout.
-static bool tcpExchange(const std::string &host, int port, const std::string &send, std::string *reply,
-                        int timeoutMs, std::string *error) {
+#ifdef _WIN32
+static bool wouldBlock() { int e = WSAGetLastError(); return e == WSAEWOULDBLOCK || e == WSAEINPROGRESS; }
+#else
+static bool wouldBlock() { return errno == EAGAIN || errno == EWOULDBLOCK || errno == EINPROGRESS || errno == EINTR; }
+#endif
+
+// A connected, non-blocking TCP socket, or LUMEN_BADSOCK. The connection
+// result is checked (SO_ERROR): a refused port is an error, not a socket that
+// looks writable and then fails.
+static Sock tcpConnect(const std::string &host, int port, int timeoutMs, std::string *error) {
   netInit();
   sockaddr_in addr;
-  if (!resolve(host, port, addr)) { if (error) *error = "endereço inválido"; return false; }
+  if (!resolve(host, port, addr)) { if (error) *error = "endereço inválido"; return LUMEN_BADSOCK; }
   Sock s = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-  if (s == LUMEN_BADSOCK) { if (error) *error = "socket"; return false; }
+  if (s == LUMEN_BADSOCK) { if (error) *error = "socket"; return LUMEN_BADSOCK; }
 #ifdef _WIN32
   u_long nb = 1;
   ioctlsocket(s, FIONBIO, &nb);
 #else
   fcntl(s, F_SETFL, fcntl(s, F_GETFL) | O_NONBLOCK);
+#ifdef SO_NOSIGPIPE // macOS: no SIGPIPE from this socket
+  int one = 1;
+  setsockopt(s, SOL_SOCKET, SO_NOSIGPIPE, &one, sizeof(one));
 #endif
-  connect(s, reinterpret_cast<sockaddr *>(&addr), sizeof(addr));
-  fd_set w;
+#endif
+  if (connect(s, reinterpret_cast<sockaddr *>(&addr), sizeof(addr)) != 0 && !wouldBlock()) {
+    LUMEN_CLOSESOCK(s);
+    if (error) *error = "sem conexão";
+    return LUMEN_BADSOCK;
+  }
+  fd_set w, x;
   FD_ZERO(&w);
   FD_SET(s, &w);
+  FD_ZERO(&x);
+  FD_SET(s, &x); // Windows reports a failed connect here
   timeval tv{timeoutMs / 1000, (timeoutMs % 1000) * 1000};
-  if (select(int(s + 1), nullptr, &w, nullptr, &tv) <= 0) {
+  int soErr = 0;
+  socklen_t len = sizeof(soErr);
+  if (select(int(s + 1), nullptr, &w, &x, &tv) <= 0 || FD_ISSET(s, &x) ||
+      getsockopt(s, SOL_SOCKET, SO_ERROR, reinterpret_cast<char *>(&soErr), &len) != 0 || soErr != 0) {
     LUMEN_CLOSESOCK(s);
-    if (error) *error = "sem resposta";
-    return false;
+    if (error) *error = soErr ? "conexão recusada" : "sem resposta";
+    return LUMEN_BADSOCK;
   }
-  auto readLine = [&](std::string &out) {
-    out.clear();
-    char c;
-    auto until = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs);
-    while (std::chrono::steady_clock::now() < until) {
-      fd_set r;
-      FD_ZERO(&r);
-      FD_SET(s, &r);
-      timeval t2{0, 100000};
-      if (select(int(s + 1), &r, nullptr, nullptr, &t2) <= 0) continue;
-      int n = int(recv(s, &c, 1, 0));
-      if (n <= 0) break;
-      if (c == '\r' || c == '\n') { if (!out.empty()) return true; continue; }
-      out += c;
-    }
-    return !out.empty();
-  };
-  const std::string &data = send;
+  return s;
+}
+
+// Sends everything within the time limit; stops at the first real error.
+static bool tcpSendAll(Sock s, const std::string &data, int timeoutMs) {
+#ifdef MSG_NOSIGNAL
+  const int flags = MSG_NOSIGNAL; // Linux: a closed peer is an error, not SIGPIPE
+#else
+  const int flags = 0;
+#endif
+  auto until = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs);
   size_t pos = 0;
   while (pos < data.size()) {
-    int n = int(::send(s, data.data() + pos, int(data.size() - pos), 0));
-    if (n <= 0) {
-      fd_set w2;
-      FD_ZERO(&w2);
-      FD_SET(s, &w2);
-      timeval t3{1, 0};
-      if (select(int(s + 1), nullptr, &w2, nullptr, &t3) <= 0) break;
-      continue;
-    }
-    pos += size_t(n);
+    int n = int(::send(s, data.data() + pos, int(data.size() - pos), flags));
+    if (n > 0) { pos += size_t(n); continue; }
+    if (!wouldBlock() || std::chrono::steady_clock::now() >= until) return false;
+    fd_set w;
+    FD_ZERO(&w);
+    FD_SET(s, &w);
+    timeval t{0, 100000};
+    select(int(s + 1), nullptr, &w, nullptr, &t);
   }
-  if (reply) readLine(*reply);
-  LUMEN_CLOSESOCK(s);
-  return pos == data.size();
+  return true;
 }
+
+// Reads one line (ended by CR or LF, at most maxLen characters) within the time limit.
+static bool tcpReadLine(Sock s, std::string &out, int timeoutMs, size_t maxLen = 1024) {
+  out.clear();
+  auto until = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs);
+  while (std::chrono::steady_clock::now() < until && out.size() < maxLen) {
+    fd_set r;
+    FD_ZERO(&r);
+    FD_SET(s, &r);
+    timeval t{0, 100000};
+    if (select(int(s + 1), &r, nullptr, nullptr, &t) <= 0) continue;
+    char c;
+    int n = int(recv(s, &c, 1, 0));
+    if (n == 0) break; // closed
+    if (n < 0) { if (wouldBlock()) continue; break; }
+    if (c == '\r' || c == '\n') { if (!out.empty()) return true; continue; }
+    out += c;
+  }
+  return !out.empty();
+}
+
+// Connect with a timeout, send, then read until a line ends or the timeout.
+static bool tcpExchange(const std::string &host, int port, const std::string &send, std::string *reply,
+                        int timeoutMs, std::string *error) {
+  Sock s = tcpConnect(host, port, timeoutMs, error);
+  if (s == LUMEN_BADSOCK) return false;
+  bool ok = tcpSendAll(s, send, timeoutMs);
+  if (!ok && error) *error = "conexão caiu";
+  if (ok && reply) tcpReadLine(s, *reply, timeoutMs);
+  LUMEN_CLOSESOCK(s);
+  return ok;
+}
+
+struct DeviceCommands::OpenSerial {
+  SerialPort port;
+  int baud = 9600;
+};
 
 DeviceCommands::DeviceCommands() {
   std::random_device rd;
@@ -201,6 +249,16 @@ std::vector<std::string> DeviceCommands::midiOutPorts() {
   return out;
 }
 
+void DeviceCommands::releaseSerial(const std::string &port) {
+  auto lower = [](std::string s) {
+    for (auto &c : s) c = char(std::tolower(static_cast<unsigned char>(c)));
+    return s;
+  };
+  std::lock_guard<std::mutex> lock(serialMutex_);
+  for (auto it = serial_.begin(); it != serial_.end();)
+    it = lower(it->first) == lower(port) ? serial_.erase(it) : std::next(it);
+}
+
 void DeviceCommands::worker() {
   while (running_) {
     Job job;
@@ -242,40 +300,36 @@ RtMidiOut *DeviceCommands::midiPort(const std::string &match) {
   return raw;
 }
 
+bool DeviceCommands::heldDmx(HeldDmx &out, uint64_t &version) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  if (version == dmxVersion_) return false;
+  version = dmxVersion_;
+  out = dmx_;
+  return true;
+}
+
 std::string DeviceCommands::pjlink(const std::string &host, const std::string &password, const std::string &cmd) {
   // Class 1: the projector greets "PJLINK 0" (no password) or "PJLINK 1 <seed>";
   // with a password every command is prefixed by md5(seed + password).
-  netInit();
-  sockaddr_in addr;
-  if (!resolve(host, 4352, addr)) return "erro: endereço inválido";
-  Sock s = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-  if (s == LUMEN_BADSOCK) return "erro: socket";
-  timeval tv{3, 0};
-  setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, reinterpret_cast<const char *>(&tv), sizeof(tv));
-  setsockopt(s, SOL_SOCKET, SO_SNDTIMEO, reinterpret_cast<const char *>(&tv), sizeof(tv));
-  if (connect(s, reinterpret_cast<sockaddr *>(&addr), sizeof(addr)) != 0) {
-    LUMEN_CLOSESOCK(s);
-    return "erro: sem conexão";
-  }
-  auto readLine = [&]() {
-    std::string out;
-    char c;
-    while (recv(s, &c, 1, 0) == 1) {
-      if (c == '\r') break;
-      out += c;
-    }
-    return out;
-  };
-  std::string greet = readLine();
+  // Non-blocking with 3 s limits: a projector that is off (or on eco standby)
+  // must not hold the device worker for the OS's 21 s connect timeout.
+  std::string err;
+  Sock s = tcpConnect(host, 4352, 3000, &err);
+  if (s == LUMEN_BADSOCK) return "erro: " + err;
+  std::string greet;
+  tcpReadLine(s, greet, 3000, 256);
   std::string prefix;
   if (greet.rfind("PJLINK 1 ", 0) == 0) prefix = md5Hex(greet.substr(9) + password);
   else if (greet.rfind("PJLINK 0", 0) != 0) {
     LUMEN_CLOSESOCK(s);
     return "erro: não é PJLink (" + greet + ")";
   }
-  std::string msg = prefix + cmd + "\r";
-  ::send(s, msg.data(), int(msg.size()), 0);
-  std::string reply = readLine();
+  std::string reply;
+  if (!tcpSendAll(s, prefix + cmd + "\r", 3000)) {
+    LUMEN_CLOSESOCK(s);
+    return "erro: conexão caiu";
+  }
+  tcpReadLine(s, reply, 3000, 256);
   LUMEN_CLOSESOCK(s);
   if (reply.find("ERRA") != std::string::npos) return "erro: senha";
   return reply;
@@ -321,10 +375,19 @@ void DeviceCommands::exec(const std::string &line, const Job &job) {
     return;
   }
   if (cmd == "pjlink" && w.size() >= 3) {
+    // The projector: its name, which may have spaces ("Projetor 1"), or its address.
     std::string host = w[1], password;
-    for (auto &pj : job.projectors)
-      if (pj.name == w[1] || pj.host == w[1]) { host = pj.host; password = pj.password; }
-    std::string a = w[2], b = w.size() > 3 ? w[3] : "";
+    size_t used = 1;
+    for (auto &pj : job.projectors) {
+      auto nw = words(pj.name);
+      if (!nw.empty() && w.size() >= nw.size() + 2 && std::equal(nw.begin(), nw.end(), w.begin() + 1)) {
+        if (nw.size() >= used) { host = pj.host; password = pj.password; used = nw.size(); }
+      } else if (pj.host == w[1] && used == 1) {
+        host = pj.host;
+        password = pj.password;
+      }
+    }
+    std::string a = w[1 + used], b = w.size() > 2 + used ? w[2 + used] : "";
     std::transform(a.begin(), a.end(), a.begin(), ::tolower);
     std::transform(b.begin(), b.end(), b.begin(), ::tolower);
     std::string pj;
@@ -335,10 +398,13 @@ void DeviceCommands::exec(const std::string &line, const Job &job) {
     else { log("[pjlink] comando desconhecido: " + line); return; }
     std::string r = pjlink(host, password, pj);
     std::string state;
-    if (r.rfind("%1POWR=", 0) == 0 && r.size() > 7) {
+    static const char *pjErrors[] = {"", "comando não suportado", "parâmetro inválido", "indisponível agora",
+                                     "falha no projetor"};
+    if (r.size() > 7 && r.compare(r.size() - 4, 3, "ERR") == 0 && r.back() >= '1' && r.back() <= '4') {
+      state = std::string("erro: ") + pjErrors[r.back() - '0']; // "%1POWR=ERR3"...
+    } else if (r.rfind("%1POWR=", 0) == 0 && r.size() == 8 && r[7] >= '0' && r[7] <= '3') {
       static const char *names[] = {"desligado", "ligado", "esfriando", "aquecendo"};
-      int v = r[7] - '0';
-      state = (v >= 0 && v <= 3) ? names[v] : r;
+      state = names[r[7] - '0'];
     } else if (r.rfind("erro", 0) == 0) {
       state = r;
     } else if (a == "power") {
@@ -383,21 +449,12 @@ void DeviceCommands::exec(const std::string &line, const Job &job) {
     int c0 = std::atoi(chs.c_str()), c1 = c0;
     if (size_t d = chs.find('-'); d != std::string::npos) c1 = std::atoi(chs.substr(d + 1).c_str());
     int v = std::clamp(std::atoi(w[i + 2].c_str()), 0, 255);
-    DmxUniverse &u = dmx_[{int(proto), uni}];
-    for (int c = std::max(1, c0); c <= std::min(512, c1); ++c) u[size_t(c - 1)] = uint8_t(v);
-    std::vector<uint8_t> pkt = proto == DmxProtocol::ArtNet ? encodeArtDmx(uni, ++seq_, u)
-                                                             : encodeSacn(uni, ++seq_, u, cid_, "Lumen");
-    OscSender sender;
-    bool sent = false;
-    for (auto &d : job.dmx)
-      if (d.enabled && d.protocol == proto) {
-        std::string host = d.host.empty() ? (proto == DmxProtocol::ArtNet ? "255.255.255.255" : sacnMulticastAddress(uni)) : d.host;
-        sender.sendRaw(host, proto == DmxProtocol::ArtNet ? 6454 : 5568, pkt.data(), pkt.size());
-        sent = true;
-      }
-    if (!sent)
-      sender.sendRaw(proto == DmxProtocol::ArtNet ? "255.255.255.255" : sacnMulticastAddress(uni),
-                     proto == DmxProtocol::ArtNet ? 6454 : 5568, pkt.data(), pkt.size());
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      DmxUniverse &u = dmx_[{int(proto), uni}];
+      for (int c = std::max(1, c0); c <= std::min(512, c1); ++c) u[size_t(c - 1)] = uint8_t(v);
+      ++dmxVersion_;
+    }
     log("[dmx] " + line);
     return;
   }
@@ -429,10 +486,21 @@ void DeviceCommands::exec(const std::string &line, const Job &job) {
       baud = std::atoi(port.substr(a + 1).c_str());
       port = port.substr(0, a);
     }
-    SerialPort sp;
-    std::string err;
-    if (!sp.open(port, baud, &err)) { log("[serial] " + err); return; }
-    sp.write(expandDeviceText(rest(line, 2)));
+    std::lock_guard<std::mutex> lock(serialMutex_);
+    auto &open = serial_[port];
+    if (open && open->baud != baud) open.reset();
+    if (!open) {
+      auto o = std::make_unique<OpenSerial>();
+      std::string err;
+      if (!o->port.open(port, baud, &err)) { log("[serial] " + err); return; }
+      o->baud = baud;
+      open = std::move(o);
+    }
+    if (!open->port.write(expandDeviceText(rest(line, 2)))) {
+      open.reset(); // unplugged: opened again by the next command
+      log("[serial] falhou ao enviar: " + line);
+      return;
+    }
     log("[serial] " + line);
     return;
   }

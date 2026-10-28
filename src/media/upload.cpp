@@ -59,8 +59,16 @@ void main() {
 }
 )";
 
-Shader &converter() {
+// Shared by every uploader; released by FrameUploader::releaseShared() while the
+// GL context still exists (a static destroyed after glfwTerminate would call GL
+// without a context at exit).
+std::unique_ptr<Shader> &converterSlot() {
   static std::unique_ptr<Shader> s;
+  return s;
+}
+
+Shader &converter() {
+  auto &s = converterSlot();
   if (!s) {
     s = std::make_unique<Shader>();
     s->build(kPixelVertexShader, kConvertFS);
@@ -71,6 +79,8 @@ Shader &converter() {
 int pad4(int v) { return (v + 3) & ~3; }
 
 } // namespace
+
+void FrameUploader::releaseShared() { converterSlot().reset(); }
 
 bool FrameUploader::supportsS3tc() {
   static int cached = -1;

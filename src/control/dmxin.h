@@ -7,6 +7,7 @@
 #include "core/dmx.h"
 
 #include <atomic>
+#include <chrono>
 #include <map>
 #include <mutex>
 #include <string>
@@ -35,6 +36,7 @@ private:
   std::atomic<int> packets_{0};
   mutable std::mutex mutex_;
   std::map<int, DmxUniverse> live_, seen_;
+  std::map<int, std::pair<int, std::chrono::steady_clock::time_point>> priority_; // receiver thread only
   std::map<int, std::string> source_;
   intptr_t socket_ = -1;
   DmxProtocol protocol_ = DmxProtocol::ArtNet;

@@ -16,7 +16,9 @@ extern "C" {
 #include <chrono>
 #include <cstdio>
 #include <cstring>
+#include <mutex>
 #include <sstream>
+#include <thread>
 
 namespace lumen {
 
@@ -29,11 +31,12 @@ std::string averr(int code) {
 }
 
 void ensureDevices() {
-  static bool done = false;
-  if (!done) {
-    avdevice_register_all();
-    done = true;
-  }
+  static std::once_flag once; // decoder threads may get here together
+  std::call_once(once, [] { avdevice_register_all(); });
+}
+
+long long steadyNs() {
+  return std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
 }
 
 // "a=1:b=2" -> AVDictionary
@@ -85,6 +88,20 @@ struct Pipeline {
   bool nativeHap = false; // packets parsed by us, no FFmpeg decode
   bool packetPending = false;
   std::string hwName;
+  int hapErrors = 0;
+  double lastPts = 0; // of the last frame skipped by next()
+  // Blocking FFmpeg calls (network open/read) give up when the decoder closes,
+  // or, for live sources, when nothing arrives in time: closing a clip whose
+  // stream stalled must not freeze the program.
+  const std::atomic<bool> *keepRunning = nullptr;
+  bool live = false;
+  long long deadlineNs = 0;
+  static int interrupted(void *opaque) {
+    auto *p = static_cast<Pipeline *>(opaque);
+    if (p->keepRunning && !p->keepRunning->load()) return 1;
+    return p->deadlineNs && steadyNs() > p->deadlineNs ? 1 : 0;
+  }
+  void arm(double seconds) { deadlineNs = live ? steadyNs() + (long long)(seconds * 1e9) : 0; }
 
   ~Pipeline() {
     if (sws) sws_freeContext(sws);
@@ -107,6 +124,10 @@ struct Pipeline {
 #endif
     };
     // Probing devices that are not installed logs scary errors: keep it quiet.
+    // One probe at a time: interleaved save/restore pairs of two decoder
+    // threads would leave FFmpeg's log silenced for good.
+    static std::mutex quiet;
+    std::lock_guard<std::mutex> lock(quiet);
     int level = av_log_get_level();
     av_log_set_level(AV_LOG_QUIET);
     struct Restore { int l; ~Restore() { av_log_set_level(l); } } restore{level};
@@ -135,11 +156,21 @@ struct Pipeline {
       if (!ifmt) { if (error) *error = "unknown input format " + src.format; return false; }
     }
     AVDictionary *opts = parseOptions(src.options);
+    live = src.live;
     if (src.live) av_dict_set(&opts, "fflags", "nobuffer", 0);
-    int r = avformat_open_input(&fmt, src.url.c_str(), ifmt, &opts);
+    // Network streams: a read that waits more than 5 s fails (and the stream is reopened).
+    if (src.live && src.url.find("://") != std::string::npos && !av_dict_get(opts, "rw_timeout", nullptr, 0))
+      av_dict_set(&opts, "rw_timeout", "5000000", 0);
+    fmt = avformat_alloc_context();
+    if (!fmt) { av_dict_free(&opts); if (error) *error = "out of memory"; return false; }
+    fmt->interrupt_callback.callback = &Pipeline::interrupted;
+    fmt->interrupt_callback.opaque = this;
+    arm(15);
+    int r = avformat_open_input(&fmt, src.url.c_str(), ifmt, &opts); // frees fmt on failure
     av_dict_free(&opts);
     if (r < 0) { if (error) *error = "open: " + averr(r); return false; }
     if (src.live) fmt->flags |= AVFMT_FLAG_NOBUFFER;
+    arm(15);
     r = avformat_find_stream_info(fmt, nullptr);
     if (r < 0) { if (error) *error = "stream info: " + averr(r); return false; }
 
@@ -151,6 +182,7 @@ struct Pipeline {
     AVStream *st = fmt->streams[stream];
     timeBase = av_q2d(st->time_base);
     startTime = st->start_time != AV_NOPTS_VALUE ? double(st->start_time) * timeBase : 0.0;
+    info.startTime = startTime;
     AVRational fr = av_guess_frame_rate(fmt, st, nullptr);
     if (fr.num > 0 && fr.den > 0) frameDuration = 1.0 / av_q2d(fr);
 
@@ -198,6 +230,7 @@ struct Pipeline {
   // Reads the next packet of our stream. Returns 1, 0 on EOF, <0 on error.
   int readPacket() {
     while (true) {
+      arm(5);
       int r = av_read_frame(fmt, pkt);
       if (r < 0) return r == AVERROR_EOF ? 0 : r;
       if (pkt->stream_index == stream) return 1;
@@ -205,11 +238,18 @@ struct Pipeline {
     }
   }
 
-  // Decodes the next frame into `frame`. Returns 1 on frame, 0 on EOF, <0 on error.
-  int next() {
+  // Decodes the next frame into `frame`. Returns 1 on frame, 2 for a frame
+  // earlier than `skipBefore` (after a seek: not copied from the GPU), 0 on
+  // EOF, <0 on error.
+  int next(double skipBefore = -1) {
     while (true) {
       int r = avcodec_receive_frame(codec, frame);
       if (r == 0) {
+        if (skipBefore >= 0 && framePts() < skipBefore) {
+          lastPts = framePts();
+          av_frame_unref(frame);
+          return 2;
+        }
         if (hwDevice && frame->format == hwFormat) {
           av_frame_unref(swFrame);
           int t = av_hwframe_transfer_data(swFrame, frame, 0);
@@ -225,6 +265,7 @@ struct Pipeline {
       }
       if (r == AVERROR_EOF) return 0;
       if (r != AVERROR(EAGAIN)) return r;
+      arm(5);
       r = av_read_frame(fmt, pkt);
       if (r < 0) {
         avcodec_send_packet(codec, nullptr); // flush remaining frames
@@ -239,9 +280,16 @@ struct Pipeline {
 
   // Lands on the keyframe at or before `seconds`; the caller drops the frames
   // before the target.
+  // MPEG-TS lands on the keyframe *after* the target: the decoder thread then
+  // seeks again further back (see seekRetries).
   void seekTo(double seconds) {
-    int64_t ts = seconds <= 0 ? 0 : int64_t((seconds + startTime) / timeBase);
-    if (av_seek_frame(fmt, stream, ts, AVSEEK_FLAG_BACKWARD) < 0) av_seek_frame(fmt, stream, 0, AVSEEK_FLAG_BACKWARD);
+    // The start: timestamp 0 is before every frame (TS files start at a few
+    // seconds, and their exact first timestamp lands on the second keyframe).
+    int64_t ts = seconds <= 0 ? 0 : int64_t(std::llround((seconds + startTime) / timeBase));
+    if (av_seek_frame(fmt, stream, ts, AVSEEK_FLAG_BACKWARD) < 0 &&
+        av_seek_frame(fmt, stream, ts, AVSEEK_FLAG_BACKWARD | AVSEEK_FLAG_ANY) < 0 &&
+        !(fmt->iformat->flags & AVFMT_NO_BYTE_SEEK))
+      av_seek_frame(fmt, -1, 0, AVSEEK_FLAG_BYTE); // last resort: the first byte of the file
     if (codec) avcodec_flush_buffers(codec);
   }
 
@@ -317,19 +365,27 @@ struct Pipeline {
     toRGBA(out); // anything else (RGB, alpha, palettes...) via swscale
   }
 
-  // Native HAP: parse the packet into compressed texture data.
-  int nextHap(VideoFrame &out, double &pts) {
+  // Native HAP: parse the packet into compressed texture data. A packet
+  // before `skipBefore` (after a seek) is not decompressed: `skipped` is set.
+  int nextHap(VideoFrame &out, double &pts, double skipBefore, bool &skipped) {
+    skipped = false;
     int r = readPacket();
     if (r <= 0) return r;
+    pts = tsToSeconds(pkt->pts != AV_NOPTS_VALUE ? pkt->pts : pkt->dts);
+    if (skipBefore >= 0 && pts < skipBefore) {
+      av_packet_unref(pkt);
+      skipped = true;
+      return 1;
+    }
     HapFrame hf;
     std::string err;
     bool ok = decodeHapFrame(pkt->data, size_t(pkt->size), hf, &err);
-    pts = tsToSeconds(pkt->pts != AV_NOPTS_VALUE ? pkt->pts : pkt->dts);
     av_packet_unref(pkt);
     if (!ok) {
-      std::fprintf(stderr, "[hap] %s\n", err.c_str());
+      if (hapErrors++ % 100 == 0) std::fprintf(stderr, "[hap] %s\n", err.c_str());
       return AVERROR_INVALIDDATA;
     }
+    hapErrors = 0;
     out.width = fmt->streams[stream]->codecpar->width;
     out.height = fmt->streams[stream]->codecpar->height;
     switch (hf.format) {
@@ -476,12 +532,16 @@ bool VideoDecoder::fetch(double time, VideoFrame &out, bool force) {
 }
 
 void VideoDecoder::run() {
+  DecoderSettings settings = settings_;
+  // lavfi test sources make frames as fast as they are read: pace them in real time.
+  const bool pace = src_.live && src_.format == "lavfi";
   while (running_) {
     Pipeline p;
+    p.keepRunning = &running_;
     MediaInfo info;
     std::string err;
-    if (!p.open(src_, settings_, info, &err)) {
-      std::fprintf(stderr, "[decoder] %s: %s\n", src_.url.c_str(), err.c_str());
+    if (!p.open(src_, settings, info, &err)) {
+      if (running_) std::fprintf(stderr, "[decoder] %s: %s\n", src_.url.c_str(), err.c_str());
       if (!src_.live) {
         std::lock_guard<std::mutex> lock(mutex_);
         eof_ = true;
@@ -501,8 +561,13 @@ void VideoDecoder::run() {
 
     double loopOffset = 0; // added to pts so time keeps increasing across loops
     double maxPts = 0;
-    double skipBefore = -1; // after a seek: frames earlier than this are dropped
-    bool reopen = false;
+    double skipBefore = -1;  // after a seek: frames earlier than this are dropped
+    double lastSkipped = -1; // the latest frame dropped that way
+    double seekInside = 0;   // the seek target, inside the file
+    int seekRetries = 0;
+    bool reopen = false, switchDecoder = false;
+    long long paceStart = 0;
+    double paceFirst = 0;
 
     while (running_ && !reopen) {
       if (restart_.exchange(false)) {
@@ -510,6 +575,7 @@ void VideoDecoder::run() {
         {
           std::lock_guard<std::mutex> lock(mutex_);
           target = seekTo_;
+          eof_ = false;
         }
         // Which loop the target falls in, and where inside the file.
         double len = loopLength_ > 0 ? loopLength_ : 0;
@@ -521,6 +587,9 @@ void VideoDecoder::run() {
         if (inside > 0) p.seekTo(inside);
         else p.rewind();
         skipBefore = inside > 0 ? inside - p.frameDuration * 0.5 : -1;
+        lastSkipped = -1;
+        seekInside = inside;
+        seekRetries = 0;
       }
       if (!src_.live) {
         std::unique_lock<std::mutex> lock(mutex_);
@@ -538,25 +607,61 @@ void VideoDecoder::run() {
       }
       double pts = 0;
       int r;
+      bool skipped = false;
       if (p.nativeHap) {
-        r = p.nextHap(f, pts);
+        r = p.nextHap(f, pts, skipBefore, skipped);
+        // A HAP variant the GPU path does not read (HAP Alpha-Only, HAP R):
+        // FFmpeg's decoder instead, from where we are.
+        if (r == AVERROR_INVALIDDATA && p.hapErrors >= 3) {
+          std::fprintf(stderr, "[hap] %s: usando o decodificador do FFmpeg\n", src_.url.c_str());
+          settings.nativeHap = false;
+          switchDecoder = reopen = true;
+          std::lock_guard<std::mutex> lock(mutex_);
+          if (!restart_) {
+            seekTo_ = loopOffset + maxPts;
+            restart_ = true;
+          }
+          continue;
+        }
       } else {
-        r = p.next();
-        if (r == 1) {
+        // Decoded from the keyframe but not at the seek target yet: no copy.
+        r = p.next(skipBefore);
+        if (r == 2) {
+          r = 1;
+          skipped = true;
+          pts = p.lastPts;
+        } else if (r == 1) {
           pts = p.framePts();
           p.toNative(f);
         }
       }
+      // Some files (MPEG-TS) land the seek on the keyframe *after* the target:
+      // the picture would wait for the clock. Seek again, further back.
+      if (r == 1 && seekRetries < 4 && skipBefore >= 0 && lastSkipped < 0 &&
+          pts > seekInside + p.frameDuration * 1.5) {
+        double back = std::max(0.0, seekInside - double(1 << seekRetries));
+        ++seekRetries;
+        if (back > 0) p.seekTo(back);
+        else p.rewind();
+        std::lock_guard<std::mutex> lock(mutex_);
+        pool_.push_back(std::move(f));
+        continue;
+      }
 
-      if (r == 1 && skipBefore >= 0) {
-        if (pts < skipBefore) { // decoded from the keyframe: not there yet
-          std::lock_guard<std::mutex> lock(mutex_);
-          pool_.push_back(std::move(f));
-          continue;
-        }
-        skipBefore = -1;
+      if (r == 1 && skipped) {
+        lastSkipped = pts;
+        std::lock_guard<std::mutex> lock(mutex_);
+        pool_.push_back(std::move(f));
+        continue;
       }
       if (r == 1) {
+        skipBefore = -1;
+        if (pace) {
+          if (!paceStart) { paceStart = steadyNs(); paceFirst = pts; }
+          long long due = paceStart + (long long)((pts - paceFirst) * 1e9);
+          while (running_ && steadyNs() < due)
+            std::this_thread::sleep_for(std::chrono::nanoseconds(std::min(due - steadyNs(), 50'000'000LL)));
+        }
         maxPts = std::max(maxPts, pts);
         f.pts = loopOffset + pts;
         std::lock_guard<std::mutex> lock(mutex_);
@@ -564,6 +669,20 @@ void VideoDecoder::run() {
         if (src_.live) // never block a live source: keep only the newest frames
           while (queue_.size() >= queueSize_) { pool_.push_back(std::move(queue_.front())); queue_.pop_front(); }
         queue_.push_back(std::move(f));
+      } else if (r == 0 && skipBefore >= 0 && (lastSkipped >= 0 || seekRetries < 4)) {
+        // The seek target is past the last frame (end of a clip that holds its
+        // last image): go back and keep that frame instead of showing nothing.
+        if (lastSkipped >= 0) {
+          p.seekTo(lastSkipped);
+          skipBefore = lastSkipped - p.frameDuration * 0.5;
+          seekRetries = 4;
+        } else { // the seek landed past every frame: further back
+          double back = std::max(0.0, seekInside - double(1 << seekRetries));
+          ++seekRetries;
+          if (back > 0) p.seekTo(back);
+          else p.rewind();
+        }
+        lastSkipped = -1;
       } else if (r == 0 && src_.live) {
         reopen = true; // stream ended: reconnect
       } else if (r == 0 && loop_) {
@@ -575,13 +694,13 @@ void VideoDecoder::run() {
       } else if (r == AVERROR_INVALIDDATA) {
         continue; // skip a damaged frame
       } else {
-        if (r < 0) std::fprintf(stderr, "[decoder] %s: %s\n", src_.url.c_str(), averr(r).c_str());
+        if (r < 0 && running_) std::fprintf(stderr, "[decoder] %s: %s\n", src_.url.c_str(), averr(r).c_str());
         if (src_.live) { reopen = true; continue; }
         std::lock_guard<std::mutex> lock(mutex_);
-        eof_ = true;
+        if (!restart_) eof_ = true; // a seek that came meanwhile wins: no stuck "end"
       }
     }
-    if (!src_.live) break;
+    if (!src_.live && !switchDecoder) break;
   }
 }
 

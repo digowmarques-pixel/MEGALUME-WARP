@@ -708,3 +708,16 @@
 {"RESERVA", "BACKUP"},
 {"RESERVA NO COMANDO", "BACKUP IN CHARGE"},
 {"saída %d", "output %d"},
+{"Alterações não salvas", "Unsaved changes"},
+{"Existem alterações não salvas.", "There are unsaved changes."},
+{"Modo show: soltar arquivos está desativado (Ctrl+Shift+L destrava)", "Show mode: dropping files is disabled (Ctrl+Shift+L unlocks)"},
+{"O soft edge entre dois projetores é a largura (em px) em que eles se sobrepõem. "
+ "Use o padrão Grade para alinhar e Branco para conferir a emenda.",
+ "The soft edge between two projectors is the width (in px) where they overlap. "
+ "Use the Grid pattern to align and White to check the seam."},
+{"hh mm ss qq", "hh mm ss ff"},
+{"Duplo clique na faixa: nova chave · arraste: tempo e valor (Shift: só tempo) · botão direito: curva",
+ "Double click the track: new key · drag: time and value (Shift: time only) · right click: curve"},
+{"Remover canvas?", "Remove canvas?"},
+{"um projeto não salvo", "an unsaved project"},
+{"%s desconectada: tentando de novo a cada segundo", "%s disconnected: retrying every second"},

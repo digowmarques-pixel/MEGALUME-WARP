@@ -61,8 +61,18 @@ bool parseTimecode(const std::string &text, double fps, double &seconds) {
     }
   }
   if (n < 3) return false;
-  seconds = v[0] * 3600.0 + v[1] * 60.0 + v[2] + (n == 4 ? v[3] / fps : 0.0);
-  if (n == 3) seconds = v[0] * 3600.0 + v[1] * 60.0 + std::atof(text.substr(text.rfind(':') + 1).c_str());
+  if (n == 4) { // frames: through the frame count, right for 29.97 drop frame too
+    Timecode tc;
+    tc.fps = fps > 0 ? fps : 25;
+    tc.dropFrame = std::fabs(tc.fps - 29.97) < 0.01;
+    tc.h = std::max(0, v[0]);
+    tc.m = std::clamp(v[1], 0, 59);
+    tc.s = std::clamp(v[2], 0, 59);
+    tc.f = std::clamp(v[3], 0, nominal(tc.fps) - 1);
+    seconds = tc.seconds();
+    return true;
+  }
+  seconds = v[0] * 3600.0 + v[1] * 60.0 + std::atof(text.substr(text.rfind(':') + 1).c_str());
   return true;
 }
 

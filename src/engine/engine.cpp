@@ -112,7 +112,16 @@ void Engine::setProject(Project p, bool keepPlayback) {
   if (!keepPlayback) {
     states_.clear();
     activeColumn_ = -1;
+    activeColumnId_ = -1;
     cache.clear();
+    // Nothing of the previous show keeps running: timelines (and their
+    // flags), parameter animations, a pending stinger cut, a manual fade.
+    timelineRuns_.clear();
+    tweens_.clear();
+    pendingColumn_ = pendingColumnId_ = -1;
+    stinger_.reset();
+    stingerTex_ = nullptr;
+    manualActive_ = false;
   }
   // Drop playback of layers that no longer exist.
   for (auto it = states_.begin(); it != states_.end();) {
@@ -125,7 +134,7 @@ void Engine::setProject(Project p, bool keepPlayback) {
     }
   }
   mappingStates_.assign(project.mappings.size(), {});
-  if (activeColumn_ >= int(project.columns.size())) activeColumn_ = -1;
+  resolveActiveColumn();
   if (portChanged || !keepPlayback) restartOsc();
   if (midiChanged || !keepPlayback) restartMidi();
   if (audioInUse_ != audioKey()) restartAudio();
@@ -134,6 +143,20 @@ void Engine::setProject(Project p, bool keepPlayback) {
                                [&](const ParamTween &t) { return !project.layer(t.layerId); }),
                 tweens_.end());
   project.resolveSurfaces();
+}
+
+void Engine::resolveActiveColumn() {
+  // The cue on air (and the one a stinger will cut to) are kept by id: when
+  // columns are moved or removed during the show, the index follows them.
+  auto indexOf = [&](int id) {
+    for (size_t i = 0; i < project.columns.size(); ++i)
+      if (project.columns[i].id == id) return int(i);
+    return -1;
+  };
+  activeColumn_ = activeColumnId_ >= 0 ? indexOf(activeColumnId_) : -1;
+  if (activeColumn_ < 0) activeColumnId_ = -1;
+  pendingColumn_ = pendingColumnId_ >= 0 ? indexOf(pendingColumnId_) : -1;
+  if (pendingColumn_ < 0) pendingColumnId_ = -1;
 }
 
 void Engine::restartDmxInput() {
@@ -199,6 +222,8 @@ void Engine::startTransition(int layerId, const Cell *cell, float duration, int 
   st.fade = duration > 0 ? 0.0f : 1.0f;
   st.fadeDuration = duration;
   st.type = type;
+  st.manual = false; // launchColumnNow sets it again for a manual column
+  st.composed = false;
   ++st.run;
   st.fadingOut = !media;
   st.columnId = media ? columnId : -1;
@@ -231,9 +256,13 @@ void Engine::runColumnActions(const Column &c, int index) {
 void Engine::launchColumn(int index) {
   if (index < 0 || index >= int(project.columns.size()) || localBlocked()) return;
   const Column &col = project.columns[size_t(index)];
+  if (pendingColumn_ >= 0) {
+    if (index == pendingColumn_) return; // already coming at the stinger's cut
+    pendingColumn_ = pendingColumnId_ = -1; // another cue replaces the pending one
+  }
   // Stinger: a video (with alpha) plays over everything and the cue changes
   // with a cut in the middle of it, hidden by the stinger.
-  if (const MediaItem *sm = project.media(col.stingerMediaId); sm && pendingColumn_ < 0) {
+  if (const MediaItem *sm = project.media(col.stingerMediaId); sm) {
     Cell c;
     c.mediaId = sm->id;
     c.setEndMode(EndMode::Stop);
@@ -242,7 +271,9 @@ void Engine::launchColumn(int index) {
     double dur = stinger_->duration();
     if (dur <= 0) dur = 1.0;
     pendingColumn_ = index;
+    pendingColumnId_ = col.id;
     pendingAt_ = time_ + dur * double(std::clamp(col.stingerCut, 0.0f, 1.0f));
+    ++stingerRun_;
     return;
   }
   launchColumnNow(index, false);
@@ -269,6 +300,7 @@ void Engine::launchColumnNow(int index, bool cut) {
     }
   }
   activeColumn_ = index;
+  activeColumnId_ = col.id;
   columnLaunchedAt_ = time_;
   ++columnRun_;
   autoGoFired_ = false;
@@ -304,7 +336,13 @@ void Engine::stopTimeline(int id) { timelineRuns_.erase(id); }
 void Engine::seekTimeline(int id, double t) {
   Timeline *tl = project.timeline(id);
   if (!tl) return;
-  TimelineRun &r = timelineRuns_[id];
+  auto it = timelineRuns_.find(id);
+  if (it == timelineRuns_.end()) { // positioning a stopped timeline does not start it
+    TimelineRun stopped;
+    stopped.playing = false;
+    it = timelineRuns_.emplace(id, stopped).first;
+  }
+  TimelineRun &r = it->second;
   r.time = std::clamp(t, 0.0, double(tl->duration));
   applyTimeline(*tl, float(r.time));
 }
@@ -345,6 +383,7 @@ static bool parseEffectParam(const std::string &p, int &index, std::string &name
 }
 
 bool Engine::setNamedParam(int layerId, const std::string &param, float v) {
+  if (!std::isfinite(v)) return false;
   if (layerId < 0) {
     if (param == "master") masterOpacity = std::clamp(v, 0.0f, 1.0f);
     else if (param == "masterVolume") project.masterVolume = std::clamp(v, 0.0f, 2.0f);
@@ -412,11 +451,14 @@ void Engine::applyTimeline(const Timeline &tl, double t) {
 
 void Engine::updateTimelines(double dt) {
   bool next = false;
+  // Flag commands run after the loop: a command can launch a column, which
+  // starts and stops timelines (and erases the entries being iterated).
+  std::vector<std::string> commands;
   for (auto it = timelineRuns_.begin(); it != timelineRuns_.end();) {
     Timeline *tl = project.timeline(it->first);
     if (!tl) { it = timelineRuns_.erase(it); continue; }
     TimelineRun &r = it->second;
-    double before = r.time;
+    double before = r.time, ls = 0;
     bool wrapped = false;
     if (tl->followTimecode && timecodeValid_) {
       r.time = std::clamp(timecodeSeconds_ - double(tl->timecodeOffset), 0.0, double(tl->duration));
@@ -425,7 +467,7 @@ void Engine::updateTimelines(double dt) {
       double dur = std::max(0.01f, tl->duration);
       if (r.time >= dur) {
         if (tl->loop) {
-          double ls = std::clamp(double(tl->loopStart), 0.0, dur - 0.01);
+          ls = std::clamp(double(tl->loopStart), 0.0, dur - 0.01);
           r.time = ls + std::fmod(r.time - ls, dur - ls);
           wrapped = true;
         } else {
@@ -435,15 +477,18 @@ void Engine::updateTimelines(double dt) {
         }
       }
     }
-    // Flags crossed this frame (both parts when the loop wrapped).
+    // Flags crossed this frame (both parts when the loop wrapped; the intro
+    // before the loop start plays only once).
     for (auto &f : tl->flags) {
       double ft = f.time;
-      bool hit = wrapped ? (ft > before || ft <= r.time) : (ft > before && ft <= r.time) || (before == 0 && ft == 0 && r.time > 0);
-      if (hit && !f.command.empty() && !following()) runCommand(f.command);
+      bool hit = wrapped ? (ft > before || (ft >= ls && ft <= r.time))
+                         : (ft > before && ft <= r.time) || (before == 0 && ft == 0 && r.time > 0);
+      if (hit && !f.command.empty() && !following()) commands.push_back(f.command);
     }
     if (r.playing || tl->followTimecode || before != r.time) applyTimeline(*tl, r.time);
     ++it;
   }
+  for (auto &c : commands) runCommand(c);
   if (next && !following()) go();
 }
 
@@ -467,7 +512,8 @@ void Engine::updateTimecode(double dt) {
   bool got = cfg.source == TimecodeSource::MTC ? midi_.timecode(tc, age)
            : cfg.source == TimecodeSource::LTC ? ltcIn_.latest(tc, age) : false;
   if (got && age < 0.25) {
-    double t = tc.seconds() + age;
+    // An LTC frame is read when its last bit arrives: one frame after its label.
+    double t = tc.seconds() + age + (cfg.source == TimecodeSource::LTC && tc.fps > 0 ? 1.0 / tc.fps : 0.0);
     // Small jitter: keep the running clock smooth; big differences jump.
     if (!timecodeValid_ || std::fabs(t - timecodeSeconds_) > 0.12) timecodeSeconds_ = t;
     else timecodeSeconds_ += dt + (t - timecodeSeconds_) * 0.1;
@@ -495,16 +541,18 @@ void Engine::updateTimecode(double dt) {
   const TimelineRun *run = timelineRun(cfg.genTimelineId);
   genActive_ = cfg.generate && run && run->playing;
   if (!genActive_) {
-    mtcClock_ = ltcClock_ = -1;
+    mtcClock_ = -1;
+    ltcFrame_ = -1;
     if (ltcVoice_) ltcVoice_->active = false;
     return;
   }
   genTime_ = cfg.genStart + run->time;
   double fps = cfg.genFps > 0 ? cfg.genFps : 25;
   if (cfg.genMtc) {
-    if (mtcPortInUse_ != cfg.genMtcPort || !mtcOut_.isOpen()) {
+    if (mtcPortInUse_ != cfg.genMtcPort || (!mtcOut_.isOpen() && time_ >= mtcRetryAt_)) {
       mtcPortInUse_ = cfg.genMtcPort;
       mtcOut_.open(cfg.genMtcPort);
+      mtcRetryAt_ = time_ + 2; // a missing port is looked for every 2 s, not at every frame
     }
     double qf = 1.0 / (fps * 4.0);
     if (mtcClock_ < 0 || std::fabs(genTime_ - mtcClock_) > 0.5) { // start or jump: full frame
@@ -521,13 +569,12 @@ void Engine::updateTimecode(double dt) {
     }
   }
   if (cfg.genLtc && audio.running()) {
-    if (!ltcVoice_) ltcVoice_ = audio.createVoice();
+    if (!ltcVoice_) {
+      ltcVoice_ = audio.createVoice();
+      ltcVoice_->bypassMaster = true; // the master volume must not cut the timecode
+    }
     ltcVoice_->active = true;
     ltcVoice_->gain = 1.0f;
-    if (ltcClock_ < 0 || std::fabs(genTime_ - ltcClock_) > 0.5) {
-      ltcVoice_->reset();
-      ltcClock_ = genTime_;
-    }
     // A mono voice routed to the chosen output: left, right, both or any
     // channel of a multichannel interface (a dedicated LTC output).
     ltcVoice_->setChannels(1);
@@ -536,12 +583,27 @@ void Engine::updateTimecode(double dt) {
     if (cfg.genLtcChannel == 1 || cfg.genLtcChannel == 2) route.push_back({0, 1, 1});
     if (cfg.genLtcChannel >= 3) route.push_back({0, cfg.genLtcChannel - 1, 1});
     ltcVoice_->setRoute(0, route);
+    // Paced by the sound card: frames are added as it consumes them (~100 ms
+    // queued), each labelled with the time at which it will actually be
+    // heard. Consecutive labels normally; a jump, a stall of the program or
+    // the card's clock drifting from the computer's moves the label to the
+    // right time (a frame repeated or skipped) instead of a lasting delay.
+    double queued = double(ltcVoice_->buffered()) / kAudioRate;
+    if (ltcFrame_ < 0 || queued > 0.5) { // start, or the card stopped draining
+      ltcVoice_->reset();
+      queued = 0;
+      ltcFrame_ = -1;
+    }
     std::vector<float> mono;
-    while (ltcClock_ < genTime_ + 0.12) { // keep ~100 ms queued
+    while (queued < 0.1) {
+      double ideal = (genTime_ + queued) * fps; // in frames, when this one starts playing
+      long long next = ltcFrame_ + 1;
+      if (ltcFrame_ < 0 || std::fabs(double(next) - ideal) > 1.5) next = std::llround(ideal);
       mono.clear();
-      ltcEnc_.encode(Timecode::fromSeconds(ltcClock_, fps), mono, 0.5f);
-      ltcVoice_->write(mono.data(), mono.size());
-      ltcClock_ += 1.0 / fps;
+      ltcEnc_.encode(Timecode::fromSeconds((double(next) + 0.5) / fps, fps), mono, 0.5f);
+      if (mono.empty() || ltcVoice_->write(mono.data(), mono.size()) == 0) break;
+      queued += double(mono.size()) / kAudioRate;
+      ltcFrame_ = next;
     }
   }
 }
@@ -656,13 +718,15 @@ void Engine::updateSchedule() {
 }
 
 void Engine::go() {
-  if (project.columns.empty()) return;
-  launchColumn(std::min(activeColumn_ + 1, int(project.columns.size()) - 1));
+  // During a stinger the cue is already the pending one: GO goes past it.
+  int from = pendingColumn_ >= 0 ? pendingColumn_ : activeColumn_;
+  // On the last cue GO does nothing (relaunching it would run its commands again).
+  if (from + 1 < int(project.columns.size())) launchColumn(from + 1);
 }
 
 void Engine::back() {
-  if (project.columns.empty()) return;
-  launchColumn(std::max(activeColumn_ - 1, 0));
+  int from = pendingColumn_ >= 0 ? pendingColumn_ : activeColumn_;
+  if (from > 0) launchColumn(from - 1);
 }
 
 void Engine::launchCell(int columnIndex, int layerId) {
@@ -683,16 +747,25 @@ void Engine::launchCell(int columnIndex, int layerId) {
 }
 
 void Engine::stopLayer(int layerId, float fade) {
+  if (localBlocked()) return; // on a backup only the main stops layers
   startTransition(layerId, nullptr, fade < 0 ? project.defaultTransition : fade, -1);
 }
 
 void Engine::stopAll(float fade) {
   if (localBlocked()) return;
+  // Timelines started by columns stop with them (their flags would keep
+  // firing commands, and "GO at the end" would launch a cue again).
+  for (auto it = timelineRuns_.begin(); it != timelineRuns_.end();)
+    it = it->second.fromColumn ? timelineRuns_.erase(it) : std::next(it);
+  pendingColumn_ = pendingColumnId_ = -1;
+  stinger_.reset();
+  stingerTex_ = nullptr;
+  manualActive_ = false;
   for (auto &l : project.layers) stopLayer(l.id, fade);
   if (activeColumn_ >= 0 && activeColumn_ < int(project.columns.size()) && !project.oscTargets.empty())
     sendOsc(OscMessage{"/millumin/board/stoppedColumn",
                        {int32_t(activeColumn_ + 1), project.columns[size_t(activeColumn_)].name}, ""}, true);
-  activeColumn_ = -1;
+  activeColumn_ = activeColumnId_ = -1;
   ++columnRun_;
   if (!project.oscTargets.empty()) sendOsc(OscMessage{"/lumen/status/column", {int32_t(0), std::string()}, ""}, true);
 }
@@ -722,7 +795,19 @@ void Engine::restartMidi() {
 void Engine::update(double dt) {
   time_ += dt;
   ++frame_;
-  if (audioInUse_ != audioKey()) restartAudio();
+  resolveActiveColumn();
+  if (audioInUse_ != audioKey()) {
+    restartAudio();
+  } else if (audio.stalled() && time_ >= audioRetryAt_) {
+    // The sound card stopped asking for sound (unplugged, driver): reopen it,
+    // or the default device, or the silent clock. Meanwhile the videos with
+    // sound run on their frame clock instead of freezing.
+    oscLog.push_back("[audio] a placa de som parou; reabrindo");
+    std::fprintf(stderr, "[audio] a placa de som parou; reabrindo\n");
+    audioRetryAt_ = time_ + 3;
+    restartAudio();
+  }
+  audio.purge();
   audio.master = project.masterVolume;
 
   // Control input first so parameter changes apply to this frame.
@@ -740,6 +825,7 @@ void Engine::update(double dt) {
       serialBaudInUse_ = cfg.baud;
       serialIn_.stop();
       serialError_.clear();
+      if (!want.empty()) devices.releaseSerial(want);
       if (!want.empty() && !serialIn_.start(want, cfg.baud, &serialError_))
         std::fprintf(stderr, "[serial] %s\n", serialError_.c_str());
     }
@@ -812,13 +898,19 @@ void Engine::update(double dt) {
   // Stinger and the cue change it hides.
   if (pendingColumn_ >= 0 && time_ >= pendingAt_) {
     int c = pendingColumn_;
-    pendingColumn_ = -1;
+    pendingColumn_ = pendingColumnId_ = -1;
     if (c < int(project.columns.size())) launchColumnNow(c, true);
   }
 
   MediaContext ctx = context();
   std::vector<int> ended;
   for (auto it = states_.begin(); it != states_.end();) {
+    if (!project.layer(it->first)) { // layer removed during the show: stop its media
+      compositor_.releaseLayer(it->first);
+      for (auto &[id, c] : extraCompositors_) c->releaseLayer(it->first);
+      it = states_.erase(it);
+      continue;
+    }
     LayerState &st = it->second;
     if (st.manual) {
       st.fade = manualActive_ ? manualProgress_ : 1.0f;
@@ -842,6 +934,9 @@ void Engine::update(double dt) {
       if (layer) pb->setRoute(layer->audioOutput, layer->audioMatrix);
       tex = pb->update(dt, *m, ctx);
     };
+    // The sound always crossfades: `composed` (one picture holding both
+    // contents) is about drawing, and is set again below for this frame.
+    st.composed = false;
     tick(st.current, st.currentTex, incomingOpacity(st));
     tick(st.previous, st.previousTex, outgoingOpacity(st));
     if (layer && !layer->effects.empty()) {
@@ -867,6 +962,16 @@ void Engine::update(double dt) {
         st.previousTex = nullptr;
         st.composed = true;
       }
+    } else if (st.type == TransitionType::Crossfade && st.fade < 1 && st.currentTex && st.previousTex &&
+               !st.currentTex->empty() && !st.previousTex->empty()) {
+      // Mixed into one image: two layers drawn one over the other at 1-f and f
+      // let the background through (25% darker in the middle of a white-to-white fade).
+      auto &fb = crossfadeFbs_[it->first];
+      if (!fb) fb = std::make_unique<Framebuffer>();
+      generators.crossfade(*st.previousTex, *st.currentTex, st.fade, *fb, mesh);
+      st.currentTex = &fb->texture();
+      st.previousTex = nullptr;
+      st.composed = true;
     }
     if (st.current && !st.fadingOut && !st.endHandled && st.endMode != EndMode::Loop &&
         st.endMode != EndMode::Freeze && st.current->finished()) {
@@ -904,6 +1009,11 @@ void Engine::update(double dt) {
       stingerTex_ = stinger_->update(dt, *sm, ctx);
       stinger_->setGain(1);
     }
+  }
+  for (auto it = crossfadeFbs_.begin(); it != crossfadeFbs_.end();) {
+    auto st = states_.find(it->first);
+    bool busy = st != states_.end() && st->second.type == TransitionType::Crossfade && st->second.fade < 1;
+    it = busy ? std::next(it) : crossfadeFbs_.erase(it);
   }
   for (auto it = transitionIsf_.begin(); it != transitionIsf_.end();) {
     auto st = states_.find(it->first);
@@ -954,6 +1064,8 @@ void Engine::render() {
   for (int canvasId : project.canvasIds()) renderCanvas(canvasId);
   // LEDs sample the final canvases, so master and blackout darken them too;
   // the DMX master dims only the LEDs.
+  leds.transmit = !following(); // the main drives the lights; the backup only previews
+  devices.heldDmx(leds.held, heldDmxVersion_); // values of "dmx" commands, sent with the LEDs
   leds.update(project, [this](int id) -> const Texture & { return canvasTexture(id); }, mesh, time_);
 
   // NDI of the main canvas: asynchronous read back, sent a frame later.

@@ -15,7 +15,7 @@ for d in GLFW libavcodec libavformat libavutil libswscale libswresample libavdev
   [ -d /usr/include/x86_64-linux-gnu/$d ] && cp -r /usr/include/x86_64-linux-gnu/$d "$INC/" 2>/dev/null || true
 done
 CXX=${CXX:-x86_64-w64-mingw32-g++-posix}
-FLAGS="-std=c++20 -fsyntax-only -Wall -Wno-unused-parameter -DNOMINMAX -DWIN32_LEAN_AND_MEAN -DGLFW_INCLUDE_NONE -DLUMEN_VERSION=\"check\" -I$ROOT/src -I$ROOT/third_party -I$ROOT/third_party/khr -I$ROOT/third_party/imgui -I$ROOT/third_party/imgui/backends -I$INC -I$ROOT/third_party/spout -I$ROOT/third_party/spout/shim -D__WINDOWS_MM__ -DSPOUT_BUILD_STATIC -DIMGUI_USER_CONFIG=\"lumen_imconfig.h\" $EXTRA_FLAGS"
+FLAGS="-std=c++20 -fsyntax-only -Wall -Wno-unused-parameter -DNOMINMAX -DWIN32_LEAN_AND_MEAN -DGLFW_INCLUDE_NONE -DLUMEN_VERSION=\"check\" -DLUMEN_SOURCE_DIR=\"$ROOT\" -I$ROOT/src -I$ROOT/third_party -I$ROOT/third_party/khr -I$ROOT/third_party/imgui -I$ROOT/third_party/imgui/backends -I$INC -I$ROOT/third_party/spout -I$ROOT/third_party/spout/shim -D__WINDOWS_MM__ -DSPOUT_BUILD_STATIC -DIMGUI_USER_CONFIG=\"lumen_imconfig.h\" $EXTRA_FLAGS"
 fail=0
 for f in $(cd "$ROOT" && find src tests -name '*.cpp' | sort) $EXTRA_SOURCES; do
   if ! $CXX $FLAGS "$ROOT/$f" 2> "$OUT/err.txt"; then

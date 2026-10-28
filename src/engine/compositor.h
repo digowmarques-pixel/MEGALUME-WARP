@@ -17,10 +17,6 @@ struct LayerDraw {
   float opacity = 1; // transition fade, multiplied with the layer opacity
 };
 
-// Applies position / scale / rotation of the layer to a slice warp.
-Warp transformedWarp(const Layer &layer, const Slice &slice);
-Vec2 layerPivot(const Layer &layer);
-
 class Compositor {
 public:
   bool init();

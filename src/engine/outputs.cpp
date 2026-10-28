@@ -20,6 +20,8 @@ uniform int uUseMask;
 uniform vec4 uRect;       // canvas region, normalised: x y w h (y down)
 uniform vec2 uCanvasPx;   // canvas size in pixels
 uniform vec4 uSoft;       // left right top bottom (fraction)
+uniform vec4 uSpanLR;     // blended part of the left and right edges (from, to; along y)
+uniform vec4 uSpanTB;     // and of the top and bottom edges (along x)
 uniform float uGamma;     // display gamma of the projector
 uniform float uPower;
 uniform int uPattern;     // 0 none, 1 card, 2 blend grid, 3 white, 4 black
@@ -30,6 +32,13 @@ uniform float uBlack;     // blackout
 uniform vec4 uColorAdj;   // brightness, contrast, gamma, -
 uniform vec3 uGain;
 uniform vec3 uBlackLevel; // projector black leak (linear)
+
+// 1 inside [span.x, span.y] along the edge, 0 outside: a neighbour's edge is
+// sharp, so the blend stops just as sharply (sub-pixel smoothing only).
+float inSpan(float x, vec2 span, float f) {
+  if (span.x <= 0.0 && span.y >= 1.0) return 1.0;
+  return smoothstep(span.x - f, span.x + f, x) * (1.0 - smoothstep(span.y - f, span.y + f, x));
+}
 
 float ramp(float x, float width) {
   if (width <= 0.0) return 1.0;
@@ -104,8 +113,12 @@ void main() {
   col = clamp((col - 0.5) * uColorAdj.y + 0.5, 0.0, 1.0) * uColorAdj.x * uGain;
   col = pow(max(col, vec3(0.0)), vec3(1.0 / max(uColorAdj.z, 0.05)));
 
-  float s = ramp(vUV.x, uSoft.x) * ramp(1.0 - vUV.x, uSoft.y) *
-            ramp(vUV.y, uSoft.z) * ramp(1.0 - vUV.y, uSoft.w);
+  // Each ramp only where that edge has a neighbour (its span along the edge).
+  vec2 fpx = 0.5 / uRes;
+  float inL = inSpan(vUV.y, uSpanLR.xy, fpx.y), inR = inSpan(vUV.y, uSpanLR.zw, fpx.y);
+  float inT = inSpan(vUV.x, uSpanTB.xy, fpx.x), inB = inSpan(vUV.x, uSpanTB.zw, fpx.x);
+  float s = mix(1.0, ramp(vUV.x, uSoft.x), inL) * mix(1.0, ramp(1.0 - vUV.x, uSoft.y), inR) *
+            mix(1.0, ramp(vUV.y, uSoft.z), inT) * mix(1.0, ramp(1.0 - vUV.y, uSoft.w), inB);
   col *= s * (1.0 - uBlack);
 
   // Black level compensation: inside an overlap N projectors add their black
@@ -113,9 +126,8 @@ void main() {
   if (any(greaterThan(uBlackLevel, vec3(0.0)))) {
     // The neighbour's black starts at its physical edge, which is sharp: the
     // lift must switch just as sharply (sub-pixel smoothing only).
-    vec2 fpx = 0.5 / uRes;
-    float hz = max(zone(vUV.x, uSoft.x, fpx.x), zone(1.0 - vUV.x, uSoft.y, fpx.x));
-    float vz = max(zone(vUV.y, uSoft.z, fpx.y), zone(1.0 - vUV.y, uSoft.w, fpx.y));
+    float hz = max(zone(vUV.x, uSoft.x, fpx.x) * inL, zone(1.0 - vUV.x, uSoft.y, fpx.x) * inR);
+    float vz = max(zone(vUV.y, uSoft.z, fpx.y) * inT, zone(1.0 - vUV.y, uSoft.w, fpx.y) * inB);
     float n = (1.0 + hz) * (1.0 + vz);
     float nmax = ((uSoft.x > 0.0 || uSoft.y > 0.0) ? 2.0 : 1.0) * ((uSoft.z > 0.0 || uSoft.w > 0.0) ? 2.0 : 1.0);
     vec3 lift = uBlackLevel * (nmax - n) / n * (1.0 - uBlack);
@@ -475,6 +487,10 @@ void OutputManager::draw(const Project &p, const OutputConfig &o, int index,
   float cw = float(p.canvasWidth(o.canvasId)), ch = float(p.canvasHeight(o.canvasId));
   shader_.set("uRect", o.srcX / cw, o.srcY / ch, o.srcW / cw, o.srcH / ch);
   shader_.set("uSoft", o.softEdge.left, o.softEdge.right, o.softEdge.top, o.softEdge.bottom);
+  float span[4][2];
+  softEdgeSpans(p, o, span);
+  shader_.set("uSpanLR", span[0][0], span[0][1], span[1][0], span[1][1]);
+  shader_.set("uSpanTB", span[2][0], span[2][1], span[3][0], span[3][1]);
   shader_.set("uGamma", std::max(0.1f, o.softEdge.gamma));
   shader_.set("uPower", std::max(0.1f, o.softEdge.power));
   shader_.set("uPattern", identifying() ? int(TestPattern::Card) : int(o.pattern));

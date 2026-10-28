@@ -116,7 +116,38 @@ out vec4 fragColor;
 uniform sampler2D uTex;
 void main() { fragColor = texture(uTex, vUV); }
 )");
+  // Cross-dissolve with premultiplied alpha, back to straight alpha.
+  ok &= mix_.build(kPixelVertexShader, R"(#version 330 core
+in vec2 vUV;
+out vec4 fragColor;
+uniform sampler2D uA;
+uniform sampler2D uB;
+uniform float uT;
+void main() {
+  vec4 a = texture(uA, vUV), b = texture(uB, vUV);
+  vec4 m = mix(vec4(a.rgb * a.a, a.a), vec4(b.rgb * b.a, b.a), uT);
+  fragColor = m.a > 0.0 ? vec4(m.rgb / m.a, m.a) : vec4(0.0);
+}
+)");
   return ok;
+}
+
+void Generators::crossfade(const Texture &a, const Texture &b, float t, Framebuffer &fb, DynamicMesh &mesh) {
+  int w = b.width(), h = b.height();
+  fb.resize(w, h);
+  fb.bind();
+  glDisable(GL_BLEND);
+  mix_.use();
+  mix_.set("uTarget", float(w), float(h));
+  mix_.set("uA", 0);
+  mix_.set("uB", 1);
+  mix_.set("uT", std::clamp(t, 0.0f, 1.0f));
+  a.bind(0);
+  b.bind(1);
+  // Both images and the result keep row 0 = top.
+  mesh.drawQuad(0, 0, float(w), float(h), 0, 1, 1, 0);
+  Framebuffer::unbind();
+  glActiveTexture(GL_TEXTURE0);
 }
 
 void Generators::copyFlipped(const Texture &src, Framebuffer &fb, DynamicMesh &mesh) {
@@ -332,8 +363,9 @@ Playback::Playback(const MediaItem &m, const Cell &cell, MediaContext &ctx)
     voice_ = audio_->createVoice();
     voice_->gain = 0; // the engine sets the real gain on the first update
     audioDecoder_ = std::make_unique<AudioDecoder>();
-    audioDecoder_->open(m.path, voice_, loop, decoder_->info().duration);
+    audioDecoder_->open(m.path, voice_, loop, decoder_->info().duration, decoder_->info().startTime);
     audioClock_ = true;
+    audioGen_ = audio_->generation();
   }
 }
 
@@ -355,13 +387,61 @@ void Playback::restart() { seek(0); }
 void Playback::seek(double time) {
   time = std::max(0.0, time);
   clock_ = time;
-  hasFrame_ = false;
+  // hasFrame_ stays: the last picture remains until the decoder reaches the
+  // new time (otherwise the layer vanishes for the 0.2-2 s of the seek).
   if (decoder_) decoder_->seek(time);
   if (voice_) voice_->reset(time); // the audio clock must jump immediately
   if (audioDecoder_) {
     audioDecoder_->seek(time);
     audioClock_ = voice_ && voice_->active;
+    if (audioClock_) { // an ended sound track plays again from here
+      audioOff_ = AudioOff::No;
+      lastPlayed_ = -1;
+      stallFor_ = 0;
+    }
   }
+}
+
+// The sound card paces the picture while the clip plays at normal speed. A
+// speed change, or a card that stopped taking sound (unplugged, driver), hands
+// the picture to the frame clock; the sound comes back in step when the cause
+// goes away.
+void Playback::watchAudio(double dt) {
+  if (audioClock_) {
+    if (speed != 1.0f) { // no time-stretching: the picture goes on alone
+      voice_->active = false;
+      audioClock_ = false;
+      audioOff_ = AudioOff::Speed;
+      return;
+    }
+    if (audioDecoder_->finished() && voice_->starving()) { // the sound track ended (or never started)
+      audioClock_ = false;
+      audioOff_ = AudioOff::Ended;
+      return;
+    }
+    // Sound waiting in the voice that the card does not take: a stalled device.
+    double a = voice_->playedSeconds();
+    if (a != lastPlayed_ || voice_->buffered() == 0) {
+      lastPlayed_ = a;
+      stallFor_ = 0;
+    } else if ((stallFor_ += dt) > 0.3) {
+      voice_->active = false;
+      audioClock_ = false;
+      audioOff_ = AudioOff::Stall;
+      audioGen_ = audio_ ? audio_->generation() : 0;
+    }
+    return;
+  }
+  bool back = speed == 1.0f && (audioOff_ == AudioOff::Speed ||
+                                (audioOff_ == AudioOff::Stall && audio_ && audio_->generation() != audioGen_ && !audio_->stalled()));
+  if (!back) return;
+  voice_->reset(clock_); // sound again from where the picture is now
+  audioDecoder_->seek(clock_);
+  voice_->active = true;
+  audioClock_ = true;
+  audioOff_ = AudioOff::No;
+  lastPlayed_ = -1;
+  stallFor_ = 0;
 }
 
 bool Playback::finished() {
@@ -426,16 +506,9 @@ const Texture *Playback::update(double dt, const MediaItem &m, MediaContext &ctx
     if (!decoder_) return nullptr;
     decoder_->setLoop(loop);
     if (audioDecoder_) audioDecoder_->setLoop(loop);
-    if (voice_ && speed != 1.0f && audioClock_) {
-      voice_->active = false; // changed speed: picture continues on its own clock
-      audioClock_ = false;
-    }
+    if (voice_) watchAudio(dt);
     if (audioClock_) {
-      // The sound card paces the picture. If the audio track ends early (or
-      // never starts), fall back to the frame clock.
-      double a = voice_->playedSeconds();
-      if (audioDecoder_->finished() && voice_->starving()) audioClock_ = false;
-      else clock_ = std::max(clock_, a);
+      clock_ = std::max(clock_, voice_->playedSeconds());
     } else {
       if (started_) clock_ += dt * double(speed);
       started_ = true;

@@ -55,6 +55,7 @@ void LedEngine::update(const Project &p, const std::function<const Texture &(int
   if (p.ledMappings.empty()) {
     universes_.clear();
     conflicts_.clear();
+    if (!held.empty()) send(p, now); // "dmx" commands still go out
     return;
   }
 
@@ -126,6 +127,40 @@ void LedEngine::send(const Project &p, double now) {
     }
   }
 
+  // Universes held by "dmx" commands, on every enabled device of their protocol.
+  bool anyDevice[2] = {false, false};
+  for (auto &d : p.dmxDevices)
+    if (d.enabled && int(d.protocol) >= 0 && int(d.protocol) < 2) anyDevice[int(d.protocol)] = true;
+  for (auto &[pu, values] : held) {
+    for (auto &d : p.dmxDevices) {
+      if (!d.enabled || int(d.protocol) != pu.first) continue;
+      DmxUniverse &u = universes_.try_emplace(UniverseKey{d.id, pu.second}, DmxUniverse{}).first->second;
+      for (size_t c = 0; c < u.size(); ++c) u[c] = std::max(u[c], values[c]);
+    }
+  }
+
+  if (!transmit) return;
+  // Held universes with no device of their protocol: broadcast (Art-Net) or
+  // multicast (sACN), when they change and once a second.
+  for (auto &[pu, values] : held) {
+    if (pu.first < 0 || pu.first > 1 || anyDevice[pu.first]) continue;
+    double &last = heldSent_[pu];
+    auto lastValues = heldLast_.find(pu);
+    bool changed = lastValues == heldLast_.end() || lastValues->second != values;
+    if (!changed && now - last < 1.0) continue;
+    last = now;
+    heldLast_[pu] = values;
+    uint8_t &seq = sequence_[UniverseKey{-1 - pu.first, pu.second}];
+    seq = uint8_t(seq + 1);
+    if (pu.first == int(DmxProtocol::ArtNet)) {
+      if (seq == 0) seq = 1;
+      auto pkt = encodeArtDmx(pu.second, seq, values);
+      if (socket_.sendRaw("255.255.255.255", 6454, pkt.data(), pkt.size())) ++packetsSent_;
+    } else {
+      auto pkt = encodeSacn(pu.second, seq, values, cid_, "Lumen");
+      if (socket_.sendRaw(sacnMulticastAddress(pu.second), 5568, pkt.data(), pkt.size())) ++packetsSent_;
+    }
+  }
   for (auto &[key, data] : universes_) {
     const DmxDevice *dev = p.dmxDevice(key.deviceId);
     if (!dev || !dev->enabled) continue;

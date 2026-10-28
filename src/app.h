@@ -4,6 +4,7 @@
 #include "engine/engine.h"
 #include "engine/outputs.h"
 
+#include <functional>
 #include <memory>
 #include <map>
 #include <string>
@@ -34,6 +35,8 @@ struct Options {
   std::string syncPeer;
   int syncPort = 0;
   double quitAfter = 0;         // tests in real time: exit after this many seconds
+  double testAudioStall = 0;    // tests: the sound card stops after this many seconds
+  std::string testAudioRecord;  // tests: WAV file with what was sent to the sound card
   int width = 1600, height = 900;
   std::string blend;             // "3x1:0.15:1920x1080" applies the blend assistant at start
   int pattern = -1;              // test pattern for every output (TestPattern value)
@@ -125,6 +128,9 @@ public:
   bool recoveryPending() const { return !recoveryFile_.empty(); }
   const std::string &recoveryInfo() const { return recoveryInfo_; }
   void recover(bool yes);
+  // Runs `action` now, or after asking what to do with unsaved changes
+  // (save / discard / cancel): quit, new, open, dropping a project.
+  void unlessUnsaved(std::function<void()> action);
   // Redundancy role of this computer, saved in the machine settings.
   void applySync(SyncRole role, const std::string &peer, int port, bool save);
   // System self-test (GPU, shaders, monitors, audio, MIDI, serial, Spout, NDI).
@@ -132,8 +138,12 @@ public:
 
 private:
   void commitIfNeeded();
+  std::function<void()> afterUnsaved_;
+  bool askUnsaved_ = false;
+  bool popupWasOpen_ = false; // a menu or dialog was open in the last frame
   void autosave();
-  void clearAutosave();
+  void clearAutosave() { clearAutosave(engine.project.filePath); }
+  void clearAutosave(const std::string &projectPath);
   void checkRecovery();
   double lastAutosave_ = 0;
   std::string recoveryFile_, recoveryInfo_;

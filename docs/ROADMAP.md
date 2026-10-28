@@ -95,6 +95,25 @@ Ordem pensada para **videomapping** e **instalações interativas**.
 - *Seek* preciso de vídeo e áudio (também por OSC: `/lumen/layer/<l>/time`)
 - Testes de integração no CI (`scripts/test-integration.sh`)
 
+## ✅ v0.10.1 (revisão geral)
+Revisão de tudo o que foi feito da v0.1 à v0.10 (código lido por área, sanitizers,
+análise estática, testes de cenário e de interface). Corrigidos, entre outros:
+- **Travamentos**: comando `tcp` para porta fechada (Linux/macOS), arquivo que não é
+  fonte escolhido como fonte, cabeçalho ISF inválido, tabela de cues com muitas colunas
+- **Áudio**: deriva do loop, som atrasado em relação ao vídeo, interface de som que
+  para (o vídeo congelava), velocidade ≠ 1 que deixava a layer muda, LTC cortado pelo
+  master, estalo nos cortes
+- **Vídeo**: fechar um stream travado, HAP Alpha-Only, *seek* em .ts, *seek* além do fim,
+  fonte lavfi rápida demais
+- **Imagem**: malha do warp nas bordas, primeiro quadro com efeito, imagens IMPORTED do
+  ISF, efeitos com alpha, master dobrado com matte, queda de brilho no crossfade, blend
+  com projetores desalinhados, recorte espelhado, buffers FLOAT
+- **Equipamentos**: PJLink no Windows, OSC com tipos raros, DMX por comando somado aos
+  LEDs, DNS lento, serial que gastava 100% de CPU depois de desconectar, Arduino
+  reiniciando a cada comando
+- **Instalador**: não apaga mais os efeitos do usuário, lembra a pasta, inclui o runtime
+  do Visual C++ e o `lumen-console.exe`
+
 ## ⚠️ Pendente de teste em Windows real
 Tudo foi compilado para Windows, mas **ainda não rodou numa máquina Windows**:
 Spout, NDI, WASAPI (multicanal e exclusivo), DirectShow, D3D11VA, PBO, WinMM, saída MIDI,

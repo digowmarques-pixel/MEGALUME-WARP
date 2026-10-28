@@ -103,7 +103,7 @@ static float param(const IsfValues &v, const char *name, float def) {
 }
 
 const BlobTracker *EffectChain::tracker() const {
-  for (auto &b : blob_)
+  for (auto &[key, b] : blob_)
     if (b) return &b->tracker;
   return nullptr;
 }
@@ -113,8 +113,18 @@ const Texture *EffectChain::apply(const std::vector<Effect> &effects, const Text
   if (!src || src->empty()) return src;
   bool any = std::any_of(effects.begin(), effects.end(), [](const Effect &e) { return e.enabled; });
   if (!any) return src;
-  isf_.resize(effects.size());
-  blob_.resize(effects.size());
+  // Stable keys (see isf_), and the state of effects that are gone is freed.
+  std::vector<std::string> keys(effects.size());
+  {
+    std::map<std::string, int> seen;
+    for (size_t i = 0; i < effects.size(); ++i) keys[i] = effects[i].path + "#" + std::to_string(seen[effects[i].path]++);
+    auto prune = [&](auto &m) {
+      for (auto it = m.begin(); it != m.end();)
+        it = std::find(keys.begin(), keys.end(), it->first) == keys.end() ? m.erase(it) : std::next(it);
+    };
+    prune(isf_);
+    prune(blob_);
+  }
   int w = src->width(), h = src->height();
 
   // ISF works with GL-native textures (row 0 = bottom).
@@ -124,7 +134,7 @@ const Texture *EffectChain::apply(const std::vector<Effect> &effects, const Text
     const Effect &e = effects[i];
     if (!e.enabled) continue;
     if (e.isBlobTracker()) {
-      auto &b = blob_[i];
+      auto &b = blob_[keys[i]];
       if (!b) b = std::make_unique<BlobState>();
       int dw = std::clamp(int(param(e.params, "resolution", 160)), 32, 640);
       int dh = std::max(8, int(std::lround(float(dw) * float(h) / float(std::max(1, w)))));
@@ -168,7 +178,7 @@ const Texture *EffectChain::apply(const std::vector<Effect> &effects, const Text
       }
       continue;
     }
-    auto &r = isf_[i];
+    auto &r = isf_[keys[i]];
     if (!r) r = std::make_unique<IsfRenderer>();
     if (!r->sync(e.path) || !r->info().filter) continue;
     IsfValues values = e.params;

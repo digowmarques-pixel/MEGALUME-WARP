@@ -39,6 +39,7 @@ Layer *Engine::findLayer(const std::string &key) {
 }
 
 void Engine::setParam(Layer &l, MappingTarget t, float v) {
+  if (!std::isfinite(v)) return;
   switch (t) {
   case MappingTarget::Opacity: l.opacity = std::clamp(v, 0.0f, 1.0f); break;
   case MappingTarget::PositionX: l.transform.position.x = v; break;
@@ -229,9 +230,12 @@ bool Engine::handleMillumin(const std::vector<std::string> &p, const OscMessage 
       else launchColumn(c);
       return true;
     }
-    if (a == "stopcolumn") { stopAll(); return true; }
-    if (a == "launchnextcolumn") { go(); return true; }
-    if (a == "launchpreviouscolumn") { back(); return true; }
+    // Buttons (TouchOSC, Companion) send 1 when pressed and 0 when released:
+    // like /lumen/go, only the press fires.
+    bool release = hasArg && !std::get_if<std::string>(&m.args[0]) && a0 <= 0.5f;
+    if (a == "stopcolumn") { if (!release) stopAll(); return true; }
+    if (a == "launchnextcolumn") { if (!release) go(); return true; }
+    if (a == "launchpreviouscolumn") { if (!release) back(); return true; }
     if (a == "displaytestcard" || a == "hidetestcard") {
       for (auto &o : project.outputs) o.pattern = a == "displaytestcard" ? TestPattern::Card : TestPattern::None;
       return true;

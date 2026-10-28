@@ -40,27 +40,58 @@ struct Font {
   bool ok = false;
 };
 
+// stb_truetype trusts the file: anything that is not a TTF/OTF/TTC (offset
+// -1), or whose table directory points past the end, would be read out of
+// bounds (a crash on every load of the project). Checked before using it.
+bool plausibleFont(const std::string &d, int offset) {
+  auto u16 = [&](size_t p) { return p + 2 <= d.size() ? unsigned(uint8_t(d[p])) << 8 | uint8_t(d[p + 1]) : 0u; };
+  auto u32 = [&](size_t p) { return p + 4 <= d.size() ? (u16(p) << 16) | u16(p + 2) : 0u; };
+  if (offset < 0 || size_t(offset) + 12 > d.size()) return false;
+  size_t tables = u16(size_t(offset) + 4), dir = size_t(offset) + 12;
+  if (tables == 0 || dir + tables * 16 > d.size()) return false;
+  for (size_t t = 0; t < tables; ++t) {
+    size_t at = u32(dir + t * 16 + 8), len = u32(dir + t * 16 + 12);
+    if (at > d.size() || len > d.size() - at) return false;
+  }
+  return true;
+}
+
 Font *loadFont(const std::string &file) {
   static std::map<std::string, std::unique_ptr<Font>> cache;
   auto &f = cache[file];
   if (!f) {
     f = std::make_unique<Font>();
-    if (platform::readFile(file, f->data) && !f->data.empty())
-      f->ok = stbtt_InitFont(&f->info, reinterpret_cast<const unsigned char *>(f->data.data()),
-                             stbtt_GetFontOffsetForIndex(reinterpret_cast<const unsigned char *>(f->data.data()), 0)) != 0;
+    if (platform::readFile(file, f->data) && !f->data.empty()) {
+      auto *bytes = reinterpret_cast<const unsigned char *>(f->data.data());
+      int offset = f->data.size() >= 12 ? stbtt_GetFontOffsetForIndex(bytes, 0) : -1;
+      f->ok = plausibleFont(f->data, offset) && stbtt_InitFont(&f->info, bytes, offset) != 0;
+      if (!f->ok) std::fprintf(stderr, "[texto] fonte inválida: %s\n", file.c_str());
+    }
   }
   return f->ok ? f.get() : nullptr;
 }
 
+// UTF-8; bytes that are not valid UTF-8 are read as Windows-1252 (a .txt saved
+// as "ANSI" by Excel or Notepad: "São Paulo"). A BOM at the start is skipped.
 std::vector<uint32_t> decodeUtf8(const std::string &s) {
+  static const uint16_t cp1252[32] = {0x20AC, 0x81,   0x201A, 0x0192, 0x201E, 0x2026, 0x2020, 0x2021,
+                                      0x02C6, 0x2030, 0x0160, 0x2039, 0x0152, 0x8D,   0x017D, 0x8F,
+                                      0x90,   0x2018, 0x2019, 0x201C, 0x201D, 0x2022, 0x2013, 0x2014,
+                                      0x02DC, 0x2122, 0x0161, 0x203A, 0x0153, 0x9D,   0x017E, 0x0178};
   std::vector<uint32_t> out;
-  for (size_t i = 0; i < s.size();) {
+  size_t i = s.compare(0, 3, "\xEF\xBB\xBF") == 0 ? 3 : 0;
+  while (i < s.size()) {
     unsigned char c = static_cast<unsigned char>(s[i]);
-    uint32_t cp = c;
-    int n = 1;
-    if (c >= 0xF0 && i + 3 < s.size()) { cp = (c & 7u) << 18 | (s[i + 1] & 0x3Fu) << 12 | (s[i + 2] & 0x3Fu) << 6 | (s[i + 3] & 0x3Fu); n = 4; }
-    else if (c >= 0xE0 && i + 2 < s.size()) { cp = (c & 0xFu) << 12 | (s[i + 1] & 0x3Fu) << 6 | (s[i + 2] & 0x3Fu); n = 3; }
-    else if (c >= 0xC0 && i + 1 < s.size()) { cp = (c & 0x1Fu) << 6 | (s[i + 1] & 0x3Fu); n = 2; }
+    int n = c < 0x80 ? 1 : (c >> 5) == 6 ? 2 : (c >> 4) == 14 ? 3 : (c >> 3) == 30 ? 4 : 0;
+    bool valid = n > 0 && i + size_t(n) <= s.size();
+    for (int k = 1; valid && k < n; ++k) valid = (static_cast<unsigned char>(s[i + size_t(k)]) & 0xC0) == 0x80;
+    if (!valid) {
+      out.push_back(c >= 0x80 && c < 0xA0 ? cp1252[c - 0x80] : c);
+      ++i;
+      continue;
+    }
+    uint32_t cp = n == 1 ? c : n == 2 ? c & 0x1Fu : n == 3 ? c & 0x0Fu : c & 0x07u;
+    for (int k = 1; k < n; ++k) cp = cp << 6 | (static_cast<unsigned char>(s[i + size_t(k)]) & 0x3Fu);
     out.push_back(cp);
     i += size_t(n);
   }
@@ -174,9 +205,12 @@ const Texture *TextRenderer::render(const MediaItem &m) {
       std::error_code ec;
       auto t = std::filesystem::last_write_time(platform::toPath(m.path), ec);
       long long tt = ec ? 0 : (long long)t.time_since_epoch().count();
-      if (tt != fileTime_) {
+      std::string fresh;
+      // A file being written can fail to open (locked): keep the last text
+      // and try again in 2 s, instead of going blank until the next change.
+      if (tt != fileTime_ && platform::readFile(m.path, fresh)) {
         fileTime_ = tt;
-        if (!platform::readFile(m.path, fileText_)) fileText_.clear();
+        fileText_ = std::move(fresh);
       }
     }
     text = fileText_;

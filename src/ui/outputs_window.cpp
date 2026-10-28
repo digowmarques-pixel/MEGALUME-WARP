@@ -241,7 +241,8 @@ void Ui::outputsWindow(App &app) {
       ImVec2 av = ImGui::GetContentRegionAvail();
       av.y -= ImGui::GetFrameHeightWithSpacing() * 1.5f;
       float scw = float(p.canvasWidth(sel->canvasId)), sch = float(p.canvasHeight(sel->canvasId));
-      float k = std::min(av.x / scw, av.y / sch);
+      // A window shrunk to nothing must not give a zero-sized (asserting) button.
+      float k = std::max(0.01f, std::min(av.x / scw, av.y / sch));
       ImVec2 o0 = ImGui::GetCursorScreenPos();
       ImVec2 o1{o0.x + scw * k, o0.y + sch * k};
       ImDrawList *dl = ImGui::GetWindowDrawList();
@@ -284,6 +285,7 @@ void Ui::outputsWindow(App &app) {
       }
       ImGui::SameLine();
       if (ImGui::Button(T("reset"))) apply();
+      ImGui::SetItemTooltip("%s", T("Volta a fatia de todas as saídas ao cálculo do layout"));
       ImGui::SameLine();
       if (ImGui::Button(T("blend automático"))) {
         int n = autoBlendOverlaps(p, sel->canvasId);
@@ -291,7 +293,6 @@ void Ui::outputsWindow(App &app) {
         app.edited();
       }
       ImGui::SetItemTooltip("%s", T("Projetores fora de grade: as bordas suaves saem das sobreposições das fatias"));
-      ImGui::SetItemTooltip("%s", T("Volta a fatia de todas as saídas ao cálculo do layout"));
     } else if (mappingTab_ == 1 || mappingTab_ == 2) {
       // Warp (corners / mesh) and masks, edited on the output preview.
       outputsWs_.viewOutputId = sel->id;

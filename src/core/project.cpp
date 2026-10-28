@@ -5,6 +5,8 @@
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
+#include <cmath>
+#include <functional>
 #include <cctype>
 
 namespace lumen {
@@ -110,10 +112,19 @@ Timeline *Project::timeline(int id) {
   return nullptr;
 }
 
+// "Layer 3": the count plus one, or the next number not in use (after removals
+// the count repeats a name, and OSC finds layers, timelines and LEDs by name).
+template <class Items> static std::string nextName(const std::string &prefix, const Items &items) {
+  for (size_t n = items.size() + 1;; ++n) {
+    std::string name = prefix + std::to_string(n);
+    if (std::none_of(items.begin(), items.end(), [&](const auto &it) { return it.name == name; })) return name;
+  }
+}
+
 Timeline &Project::addTimeline() {
   Timeline t;
   t.id = newId();
-  t.name = "Timeline " + std::to_string(timelines.size() + 1);
+  t.name = nextName("Timeline ", timelines);
   timelines.push_back(t);
   return timelines.back();
 }
@@ -127,7 +138,7 @@ Surface *Project::surface(int id) {
 Surface &Project::addSurface(const Warp &w) {
   Surface s;
   s.id = newId();
-  s.name = "Surface " + std::to_string(surfaces.size() + 1);
+  s.name = nextName("Surface ", surfaces);
   static const Color palette[] = {{1.0f, 0.77f, 0.0f, 1}, {0.3f, 0.75f, 1, 1}, {0.5f, 0.9f, 0.4f, 1},
                                   {0.95f, 0.4f, 0.7f, 1},  {0.9f, 0.9f, 0.3f, 1}, {0.6f, 0.5f, 1, 1}};
   s.color = palette[surfaces.size() % 6];
@@ -180,7 +191,7 @@ OutputConfig *Project::output(int id) {
 Layer &Project::addLayer(const std::string &name, int canvasId) {
   Layer l;
   l.id = newId();
-  l.name = name.empty() ? "Layer " + std::to_string(layers.size() + 1) : name;
+  l.name = name.empty() ? nextName("Layer ", layers) : name;
   l.canvasId = hasCanvas(canvasId) ? canvasId : 0;
   Slice s;
   s.warp.setRect({0, 0}, {float(canvasWidth(l.canvasId)), float(canvasHeight(l.canvasId))});
@@ -192,7 +203,7 @@ Layer &Project::addLayer(const std::string &name, int canvasId) {
 Column &Project::addColumn() {
   Column c;
   c.id = newId();
-  c.name = "Cue " + std::to_string(columns.size() + 1);
+  c.name = nextName("Cue ", columns);
   columns.push_back(c);
   return columns.back();
 }
@@ -200,7 +211,7 @@ Column &Project::addColumn() {
 OutputConfig &Project::addOutput() {
   OutputConfig o;
   o.id = newId();
-  o.name = "Output " + std::to_string(outputs.size() + 1);
+  o.name = nextName("Output ", outputs);
   o.srcW = float(canvasW);
   o.srcH = float(canvasH);
   o.warp.setRect({0, 0}, {1, 1});
@@ -404,8 +415,7 @@ DmxDevice &Project::addDmxDevice(DmxProtocol protocol) {
   DmxDevice d;
   d.id = newId();
   d.protocol = protocol;
-  d.name = protocol == DmxProtocol::ArtNet ? "Art-Net " : "sACN ";
-  d.name += std::to_string(dmxDevices.size() + 1);
+  d.name = nextName(protocol == DmxProtocol::ArtNet ? "Art-Net " : "sACN ", dmxDevices);
   dmxDevices.push_back(d);
   return dmxDevices.back();
 }
@@ -413,7 +423,7 @@ DmxDevice &Project::addDmxDevice(DmxProtocol protocol) {
 LedMapping &Project::addLedMapping() {
   LedMapping m;
   m.id = newId();
-  m.name = "Fita LED " + std::to_string(ledMappings.size() + 1);
+  m.name = nextName("Fita LED ", ledMappings);
   // A thin strip across the lower part of the canvas.
   m.area.setRect({float(canvasW) * 0.1f, float(canvasH) * 0.85f}, {float(canvasW) * 0.8f, float(canvasH) * 0.04f});
   if (!dmxDevices.empty()) {
@@ -735,6 +745,84 @@ int autoBlendOverlaps(Project &p, int canvasId) {
       ++seams;
     }
   return seams;
+}
+
+Vec2 layerPivot(const Layer &l) {
+  Vec2 c;
+  int n = 0;
+  for (auto &s : l.slices) {
+    c += s.warp.center();
+    ++n;
+  }
+  return n ? c * (1.0f / float(n)) : c;
+}
+
+Warp transformedWarp(const Layer &l, const Slice &s) {
+  Warp w = s.warp;
+  const LayerTransform &t = l.transform;
+  if (t.scale == 1 && t.rotation == 0 && t.position.x == 0 && t.position.y == 0) return w;
+  Vec2 pivot = layerPivot(l);
+  if (t.scale != 1) w.scaleAround(pivot, t.scale, t.scale);
+  if (t.rotation != 0) w.rotateAround(pivot, t.rotation * 3.14159265f / 180.0f);
+  w.translate(t.position);
+  return w;
+}
+
+Vec2 untransform(const Layer &l, Vec2 p) {
+  const LayerTransform &t = l.transform;
+  if (t.scale == 1 && t.rotation == 0 && t.position.x == 0 && t.position.y == 0) return p;
+  Vec2 pivot = layerPivot(l);
+  p = p - t.position;
+  float a = -t.rotation * 3.14159265f / 180.0f;
+  Vec2 d = p - pivot;
+  d = {d.x * std::cos(a) - d.y * std::sin(a), d.x * std::sin(a) + d.y * std::cos(a)};
+  float s = std::fabs(t.scale) < 1e-4f ? 1e-4f : t.scale;
+  return pivot + d * (1.0f / s);
+}
+
+Vec2 layerDelta(const Layer &l, Vec2 m) {
+  const LayerTransform &t = l.transform;
+  float s = std::fabs(t.scale) < 1e-4f ? 1e-4f : t.scale;
+  float a = -t.rotation * 3.14159265f / 180.0f, cs = std::cos(a), sn = std::sin(a);
+  return Vec2{m.x * cs - m.y * sn, m.x * sn + m.y * cs} * (1.0f / s);
+}
+
+void keepInPlace(Layer &l, const std::function<void()> &edit) {
+  Vec2 before = layerPivot(l);
+  edit();
+  const LayerTransform &t = l.transform;
+  if (t.scale == 1 && t.rotation == 0) return;
+  // Drawn point = pivot + s.R(q - pivot) + position: keep it for every q.
+  Vec2 d = before - layerPivot(l);
+  float a = t.rotation * 3.14159265f / 180.0f, cs = std::cos(a), sn = std::sin(a);
+  Vec2 turned{t.scale * (d.x * cs - d.y * sn), t.scale * (d.x * sn + d.y * cs)};
+  l.transform.position = l.transform.position + d - turned;
+}
+
+void softEdgeSpans(const Project &p, const OutputConfig &o, float span[4][2]) {
+  for (int k = 0; k < 4; ++k) { span[k][0] = 1; span[k][1] = 0; } // empty, grown by each neighbour
+  for (auto &n : p.outputs) {
+    if (&n == &o || !n.enabled || n.canvasId != o.canvasId || n.srcW <= 0 || n.srcH <= 0 || o.srcW <= 0 || o.srcH <= 0)
+      continue;
+    float x0 = std::max(o.srcX, n.srcX), x1 = std::min(o.srcX + o.srcW, n.srcX + n.srcW);
+    float y0 = std::max(o.srcY, n.srcY), y1 = std::min(o.srcY + o.srcH, n.srcY + n.srcH);
+    if (x1 - x0 <= 0.5f || y1 - y0 <= 0.5f) continue; // not overlapping
+    float oc = o.srcX + o.srcW * 0.5f, nc = n.srcX + n.srcW * 0.5f;
+    float om = o.srcY + o.srcH * 0.5f, nm = n.srcY + n.srcH * 0.5f;
+    auto grow = [&](int k, float a, float b) {
+      span[k][0] = std::min(span[k][0], std::clamp(a, 0.0f, 1.0f));
+      span[k][1] = std::max(span[k][1], std::clamp(b, 0.0f, 1.0f));
+    };
+    // A neighbour across an edge covers, along that edge, the overlap's extent.
+    float ya = (y0 - o.srcY) / o.srcH, yb = (y1 - o.srcY) / o.srcH;
+    float xa = (x0 - o.srcX) / o.srcW, xb = (x1 - o.srcX) / o.srcW;
+    if (nc < oc && x0 <= o.srcX + 0.5f) grow(0, ya, yb);                // on the left
+    if (nc > oc && x1 >= o.srcX + o.srcW - 0.5f) grow(1, ya, yb);       // on the right
+    if (nm < om && y0 <= o.srcY + 0.5f) grow(2, xa, xb);                // above
+    if (nm > om && y1 >= o.srcY + o.srcH - 0.5f) grow(3, xa, xb);       // below
+  }
+  for (int k = 0; k < 4; ++k)
+    if (span[k][0] >= span[k][1]) { span[k][0] = 0; span[k][1] = 1; } // no neighbour: the whole edge
 }
 
 std::string serializeProject(const Project &p, const std::string &baseDir) {

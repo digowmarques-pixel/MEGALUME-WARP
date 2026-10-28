@@ -5,9 +5,12 @@
 #include "ui/ui.h"
 #include "ui/i18n.h"
 #include "core/machine_settings.h"
+#include "core/md5.h"
+#include "media/upload.h"
 
 #include <GLFW/glfw3.h>
 #include <imgui.h>
+#include <imgui_internal.h> // ClosePopupsExceptModals
 #include <imgui_impl_glfw.h>
 #include <imgui_impl_opengl3.h>
 
@@ -125,8 +128,15 @@ bool App::openProject(const std::string &path) {
 
 // ---------------------------------------------------------------- autosave
 
-static std::string autosaveFile() { return platform::toUtf8(platform::toPath(platform::settingsDir()) / "autosave.lumen"); }
-static std::string autosaveInfoFile() { return platform::toUtf8(platform::toPath(platform::settingsDir()) / "autosave.txt"); }
+// One autosave per project (named after its path), so recovering or closing
+// one project never throws away another one's; "untitled" for a project that
+// was never saved.
+static std::string autosaveBase(const std::string &projectPath) {
+  std::string key = projectPath.empty() ? std::string("untitled") : md5Hex(projectPath).substr(0, 12);
+  return platform::toUtf8(platform::toPath(platform::settingsDir()) / ("autosave-" + key));
+}
+static std::string autosaveFile(const std::string &projectPath) { return autosaveBase(projectPath) + ".lumen"; }
+static std::string autosaveInfoFile(const std::string &projectPath) { return autosaveBase(projectPath) + ".txt"; }
 
 void App::autosave() {
   // Every minute while there are unsaved changes; the project file itself is
@@ -136,31 +146,33 @@ void App::autosave() {
   lastAutosave_ = now;
   std::string base = engine.project.filePath.empty() ? std::string()
                                                      : platform::toUtf8(platform::toPath(engine.project.filePath).parent_path());
-  if (platform::writeFile(autosaveFile(), serializeProject(engine.project, base)))
-    platform::writeFile(autosaveInfoFile(), engine.project.filePath);
+  const std::string &path = engine.project.filePath;
+  if (platform::writeFile(autosaveFile(path), serializeProject(engine.project, base)))
+    platform::writeFile(autosaveInfoFile(path), path);
 }
 
-void App::clearAutosave() {
+void App::clearAutosave(const std::string &projectPath) {
   std::error_code ec;
-  std::filesystem::remove(platform::toPath(autosaveFile()), ec);
-  std::filesystem::remove(platform::toPath(autosaveInfoFile()), ec);
+  std::filesystem::remove(platform::toPath(autosaveFile(projectPath)), ec);
+  std::filesystem::remove(platform::toPath(autosaveInfoFile(projectPath)), ec);
 }
 
 void App::checkRecovery() {
   std::error_code ec;
-  auto file = platform::toPath(autosaveFile());
+  const std::string &path = engine.project.filePath;
+  auto file = platform::toPath(autosaveFile(path));
   if (!std::filesystem::exists(file, ec)) return;
   std::string orig;
-  platform::readFile(autosaveInfoFile(), orig);
+  platform::readFile(autosaveInfoFile(path), orig);
   // Only for the project that is open now (or an unsaved one), and only if the
   // autosave is newer than the saved file.
-  if (orig != engine.project.filePath) return;
+  if (orig != path) return;
   if (!orig.empty()) {
     auto a = std::filesystem::last_write_time(file, ec), b = std::filesystem::last_write_time(platform::toPath(orig), ec);
     if (!ec && a <= b) return;
   }
-  recoveryFile_ = autosaveFile();
-  recoveryInfo_ = orig.empty() ? "um projeto não salvo" : orig;
+  recoveryFile_ = autosaveFile(path);
+  recoveryInfo_ = orig.empty() ? T("um projeto não salvo") : orig;
 }
 
 void App::recover(bool yes) {
@@ -248,7 +260,7 @@ void App::applySync(SyncRole role, const std::string &peer, int port, bool save)
 }
 
 bool App::saveProject(bool saveAs) {
-  std::string path = engine.project.filePath;
+  std::string path = engine.project.filePath, before = path;
   if (saveAs || path.empty()) {
     path = platform::saveFileDialog("Salvar projeto", kProjectFilter, "show.lumen");
     if (path.empty()) {
@@ -263,9 +275,19 @@ bool App::saveProject(bool saveAs) {
     return false;
   }
   dirty = false;
-  clearAutosave();
+  clearAutosave(before); // "save as": the old name's autosave is saved now too
+  clearAutosave(path);
   status(T("Salvo: ") + path);
   return true;
+}
+
+void App::unlessUnsaved(std::function<void()> action) {
+  if (!dirty) {
+    action();
+    return;
+  }
+  afterUnsaved_ = std::move(action);
+  askUnsaved_ = true;
 }
 
 void App::openDialog() {
@@ -494,13 +516,18 @@ int App::run(const Options &opts) {
     return bad == 0 && n > 0 ? 0 : 2;
   }
   if (!opts.projectPath.empty()) {
-    if (!openProject(opts.projectPath)) newProject();
+    if (!openProject(opts.projectPath)) {
+      newProject();
+      checkRecovery();
+    }
   } else {
     newProject();
+    checkRecovery(); // a crash while working on a project never saved
   }
   if (!engine.project.layers.empty() && sel.layerId < 0) sel.layerId = engine.project.layers.front().id;
   showLocked = opts.showMode;
   engine.forceSyncUpload = opts.syncUpload;
+  if (opts.launchColumn > 0) engine.startColumnOnTakeover = opts.launchColumn - 1;
   {
     // Redundancy: machine settings, or the command line for this run only.
     std::string role = opts.role.empty() ? machineSetting("syncRole") : opts.role;
@@ -532,8 +559,9 @@ int App::run(const Options &opts) {
   else if (engine.project.startColumn > 0) engine.launchColumn(engine.project.startColumn - 1);
 
   double last = glfwGetTime(), fpsTimer = last, started = last;
+  bool audioStallDone = false;
+  if (!opts.testAudioRecord.empty()) engine.audio.debugRecord(opts.quitAfter > 0 ? opts.quitAfter + 1 : 30);
   int frame = 0, fpsFrames = 0;
-  bool showCloseDialog = false;
 
   while (!requestQuit) {
     glfwPollEvents();
@@ -551,8 +579,14 @@ int App::run(const Options &opts) {
     if (!g_droppedFiles.empty()) {
       auto files = std::move(g_droppedFiles);
       g_droppedFiles.clear();
-      if (files.size() == 1 && platform::toPath(files[0]).extension() == ".lumen") openProject(files[0]);
-      else importFiles(files);
+      if (showLocked) {
+        status(T("Modo show: soltar arquivos está desativado (Ctrl+Shift+L destrava)"), true);
+      } else if (files.size() == 1 && platform::toPath(files[0]).extension() == ".lumen") {
+        std::string path = files[0];
+        unlessUnsaved([this, path] { openProject(path); });
+      } else {
+        importFiles(files);
+      }
     }
 
     // Engine: playback, OSC, then compose the canvas.
@@ -580,6 +614,9 @@ int App::run(const Options &opts) {
     ImGui_ImplOpenGL3_NewFrame();
     ImGui_ImplGlfw_NewFrame();
     ImGui::NewFrame();
+    // No Tab focus: in a show, a stray Tab would put the cursor in a text field,
+    // where Space types a space instead of giving GO and Delete erases the name.
+    ImGui::PushItemFlag(ImGuiItemFlags_NoTabStop, true);
 
     ImGuiIO &io = ImGui::GetIO();
     if (!io.WantTextInput) {
@@ -589,11 +626,16 @@ int App::run(const Options &opts) {
         status(showLocked ? T("Modo show: edição travada (Ctrl+Shift+L destrava)") : T("Edição liberada"));
       }
       if (!ctrl && ImGui::IsKeyPressed(ImGuiKey_Space, false)) shift ? engine.back() : engine.go();
-      if (!ctrl && ImGui::IsKeyPressed(ImGuiKey_Escape, false)) engine.stopAll();
+      // Esc closes an open menu (ImGui does it only with keyboard navigation
+      // on), and then it must not also stop the show.
+      if (!ctrl && ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
+        if (popupWasOpen_) ImGui::ClosePopupsExceptModals();
+        else engine.stopAll();
+      }
       if (!ctrl && ImGui::IsKeyPressed(ImGuiKey_B, false)) engine.blackout = !engine.blackout;
       if (ctrl && ImGui::IsKeyPressed(ImGuiKey_S, false)) saveProject(shift);
-      if (!showLocked && ctrl && ImGui::IsKeyPressed(ImGuiKey_O, false)) openDialog();
-      if (!showLocked && ctrl && ImGui::IsKeyPressed(ImGuiKey_N, false)) newProject();
+      if (!showLocked && ctrl && ImGui::IsKeyPressed(ImGuiKey_O, false)) unlessUnsaved([this] { openDialog(); });
+      if (!showLocked && ctrl && ImGui::IsKeyPressed(ImGuiKey_N, false)) unlessUnsaved([this] { newProject(); });
       if (!showLocked && ctrl && ImGui::IsKeyPressed(ImGuiKey_I, false)) importDialog();
       if (ctrl && !shift && ImGui::IsKeyPressed(ImGuiKey_P, false)) outputsOpen = !outputsOpen;
       if (ctrl && shift && ImGui::IsKeyPressed(ImGuiKey_P, false)) ui_->openOutputs();
@@ -612,26 +654,39 @@ int App::run(const Options &opts) {
 
     if (g_closeRequested) {
       g_closeRequested = false;
-      if (dirty) showCloseDialog = true;
-      else requestQuit = true;
+      unlessUnsaved([this] { requestQuit = true; });
     }
-    if (showCloseDialog) {
-      ImGui::OpenPopup("Sair do Lumen");
-      showCloseDialog = false;
+    if (askUnsaved_) {
+      ImGui::OpenPopup("###unsaved");
+      askUnsaved_ = false;
     }
-    if (ImGui::BeginPopupModal("Sair do Lumen", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
-      ImGui::Text("Existem alterações não salvas.");
-      if (ImGui::Button("Salvar e sair")) {
-        if (saveProject(false)) requestQuit = true;
+    std::string unsavedTitle = std::string(T("Alterações não salvas")) + "###unsaved";
+    if (ImGui::BeginPopupModal(unsavedTitle.c_str(), nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+      ImGui::TextUnformatted(T("Existem alterações não salvas."));
+      auto run = [this] {
+        auto action = std::move(afterUnsaved_);
+        afterUnsaved_ = nullptr;
+        if (action) action();
+      };
+      if (ImGui::Button(T("Salvar"))) {
+        if (saveProject(false)) run();
         ImGui::CloseCurrentPopup();
       }
       ImGui::SameLine();
-      if (ImGui::Button("Sair sem salvar")) requestQuit = true;
+      if (ImGui::Button(T("Descartar"))) {
+        run();
+        ImGui::CloseCurrentPopup();
+      }
       ImGui::SameLine();
-      if (ImGui::Button("Cancelar")) ImGui::CloseCurrentPopup();
+      if (ImGui::Button(T("Cancelar"))) {
+        afterUnsaved_ = nullptr;
+        ImGui::CloseCurrentPopup();
+      }
       ImGui::EndPopup();
     }
 
+    ImGui::PopItemFlag();
+    popupWasOpen_ = ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel);
     step("imgui render");
     ImGui::Render();
     int fbw, fbh;
@@ -642,11 +697,18 @@ int App::run(const Options &opts) {
     ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
 
     ++frame;
+    if (opts.testAudioStall > 0 && !audioStallDone && glfwGetTime() - started >= opts.testAudioStall) {
+      audioStallDone = true;
+      engine.audio.debugStall(); // as if the interface were unplugged
+    }
     bool lastFrame = (opts.frames > 0 && frame >= opts.frames) || (opts.quitAfter > 0 && glfwGetTime() - started >= opts.quitAfter);
     if (lastFrame) {
       // Summary for automated tests.
       std::printf("[test] audio device: %s\n", engine.audio.deviceName().c_str());
+      if (!opts.testAudioRecord.empty() && engine.audio.saveRecording(opts.testAudioRecord))
+        std::printf("[test] audio recorded: %s\n", opts.testAudioRecord.c_str());
       std::printf("[test] column=%d\n", engine.activeColumn() + 1);
+      if (recoveryPending()) std::printf("[test] recovery offered: %s\n", recoveryInfo().c_str());
       if (engine.syncRole() != SyncRole::Off)
         std::printf("[test] sync: %s | %s\n", engine.syncStatus().c_str(), engine.syncPeerStatus().c_str());
       for (auto &line : engine.oscLog)
@@ -663,8 +725,9 @@ int App::run(const Options &opts) {
                     engine.layerState(l.id) && engine.layerState(l.id)->current ? 1 : 0);
       for (auto &l : engine.project.layers)
         if (const LayerState *st = engine.layerState(l.id); st && st->current)
-          std::printf("[test] layer %s: t=%.3f fade=%.2f audio=%d hw=%s\n", l.name.c_str(), st->current->time(), st->fade,
-                      st->current->hasAudio() ? 1 : 0, st->current->hwaccel().c_str());
+          std::printf("[test] layer %s: t=%.3f fade=%.2f audio=%d%s hw=%s\n", l.name.c_str(), st->current->time(), st->fade,
+                      st->current->hasAudio() ? 1 : 0, st->current->audioPacing() ? " (paces)" : "",
+                      st->current->hwaccel().c_str());
       std::fflush(stdout);
       std::vector<unsigned char> px;
       if (!opts.screenshotCanvas.empty()) {
@@ -729,6 +792,7 @@ int App::run(const Options &opts) {
   ui_.reset();
   outputsPtr_.reset();
   enginePtr_.reset();
+  FrameUploader::releaseShared();
   ImGui_ImplOpenGL3_Shutdown();
   ImGui_ImplGlfw_Shutdown();
   ImGui::DestroyContext();

@@ -40,7 +40,10 @@ void main() {
   rgb = clamp(rgb * uTint.rgb, 0.0, 1.0);
 
   // Anti-aliased slice edges (the quad borders are otherwise jagged).
-  vec2 local = (vUV - uCrop.xy) / max(uCrop.zw - uCrop.xy, vec2(1e-5));
+  // A mirrored crop (u0 > u1) has a negative extent: keep its sign.
+  vec2 ext = uCrop.zw - uCrop.xy;
+  ext = vec2(abs(ext.x) < 1e-5 ? 1e-5 : ext.x, abs(ext.y) < 1e-5 ? 1e-5 : ext.y);
+  vec2 local = (vUV - uCrop.xy) / ext;
   vec2 fw = max(fwidth(local), vec2(1e-6));
   vec2 edge = min(local, 1.0 - local) / fw;
   float aa = clamp(min(edge.x, edge.y) + 0.5, 0.0, 1.0);
@@ -56,27 +59,6 @@ void main() {
   fragColor = vec4(rgb * a, a); // premultiplied
 }
 )";
-
-Vec2 layerPivot(const Layer &l) {
-  Vec2 c;
-  int n = 0;
-  for (auto &s : l.slices) {
-    c += s.warp.center();
-    ++n;
-  }
-  return n ? c * (1.0f / float(n)) : c;
-}
-
-Warp transformedWarp(const Layer &l, const Slice &s) {
-  Warp w = s.warp;
-  const LayerTransform &t = l.transform;
-  if (t.scale == 1 && t.rotation == 0 && t.position.x == 0 && t.position.y == 0) return w;
-  Vec2 pivot = layerPivot(l);
-  if (t.scale != 1) w.scaleAround(pivot, t.scale, t.scale);
-  if (t.rotation != 0) w.rotateAround(pivot, t.rotation * 3.14159265f / 180.0f);
-  w.translate(t.position);
-  return w;
-}
 
 bool Compositor::init() {
   return layerShader_.build(kPixelVertexShader, kLayerFS) &&
@@ -101,10 +83,12 @@ void Compositor::render(const Project &p, int canvasId, const std::vector<LayerD
 
   const Shader &s = layerShader_;
   std::vector<float> verts;
-  auto drawLayer = [&](const LayerDraw &d, bool forceNormal) {
+  // asMatte: drawn alone into a matte buffer, Normal blend and no master (the
+  // master already dims the layer that the matte cuts; twice would square it).
+  auto drawLayer = [&](const LayerDraw &d, bool asMatte) {
     const Layer &l = *d.layer;
     if (!d.texture || d.texture->empty()) return;
-    switch (forceNormal ? BlendMode::Normal : l.blend) {
+    switch (asMatte ? BlendMode::Normal : l.blend) {
     case BlendMode::Add: glBlendFunc(GL_ONE, GL_ONE); break;
     case BlendMode::Multiply: glBlendFunc(GL_DST_COLOR, GL_ONE_MINUS_SRC_ALPHA); break;
     case BlendMode::Screen: glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_COLOR); break;
@@ -114,7 +98,7 @@ void Compositor::render(const Project &p, int canvasId, const std::vector<LayerD
     auto mask = maskFbs_.find(l.id);
     if (mask != maskFbs_.end()) mask->second->texture().bind(1);
     s.set("uUseMask", mask != maskFbs_.end() ? 1 : 0);
-    s.set("uOpacity", std::clamp(l.opacity * d.opacity * master, 0.0f, 1.0f));
+    s.set("uOpacity", std::clamp(l.opacity * d.opacity * (asMatte ? 1.0f : master), 0.0f, 1.0f));
     s.set("uBrightness", l.fx.brightness);
     s.set("uContrast", l.fx.contrast);
     s.set("uSaturation", l.fx.saturation);

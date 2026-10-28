@@ -14,5 +14,5 @@ void main() {
   float s = max(softness, 0.001);
   float v = smoothstep(threshold - s, threshold + s, l);
   if (invert) v = 1.0 - v;
-  gl_FragColor = vec4(vec3(v) * c.a, c.a);
+  gl_FragColor = vec4(vec3(v), c.a);
 }

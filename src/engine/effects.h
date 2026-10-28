@@ -74,8 +74,12 @@ private:
     std::vector<unsigned char> rgba;
     std::vector<uint8_t> luma;
   };
-  std::vector<std::unique_ptr<IsfRenderer>> isf_;
-  std::vector<std::unique_ptr<BlobState>> blob_;
+  // Runtime state per effect, keyed by its file and how many effects of the
+  // same file come before it: reordering or removing other effects keeps a
+  // blob tracker's background and an ISF effect's trails (by position they
+  // were reset, or handed to another effect).
+  std::map<std::string, std::unique_ptr<IsfRenderer>> isf_;
+  std::map<std::string, std::unique_ptr<BlobState>> blob_;
   Framebuffer in_, out_;
 };
 

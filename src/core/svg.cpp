@@ -126,13 +126,15 @@ void finish(Shape &s, const Affine &m, const std::string &name, std::vector<Mask
   if (s.pts.size() >= 3) {
     Mask mk;
     mk.name = name.empty() ? "SVG " + std::to_string(out.size() + 1) : name;
+    bool finite = true;
     for (size_t i = 0; i < s.pts.size(); ++i) {
       Vec2 p = m.apply(s.pts[i]);
       mk.points.push_back(p);
       mk.tanIn.push_back(m.apply(s.cin[i]) - p);
       mk.tanOut.push_back(m.apply(s.cout[i]) - p);
+      for (Vec2 v : {p, mk.tanIn.back(), mk.tanOut.back()}) finite = finite && std::isfinite(v.x) && std::isfinite(v.y);
     }
-    out.push_back(mk);
+    if (finite) out.push_back(mk); // "inf" / "nan" coordinates: not a usable shape
   }
   s = {};
 }
@@ -337,6 +339,7 @@ std::vector<Mask> masksFromSvg(const std::string &svg, float w, float h, std::st
   std::vector<Affine> stack{Affine{}};
   bool rootSeen = false;
   size_t pos = 0;
+  int skipDepth = 0;
   while ((pos = svg.find('<', pos)) != std::string::npos) {
     if (svg.compare(pos, 4, "<!--") == 0) {
       size_t end = svg.find("-->", pos);
@@ -353,8 +356,17 @@ std::vector<Mask> masksFromSvg(const std::string &svg, float w, float h, std::st
     std::string name;
     for (size_t i = closing ? 1 : 0; i < tag.size() && !std::isspace(static_cast<unsigned char>(tag[i])) && tag[i] != '/'; ++i)
       name += tag[i];
+    // Shapes inside <defs>, <clipPath>, <mask>... are not drawn (an artboard's
+    // clipPath would become a mask covering the whole layer).
+    bool hidden = name == "defs" || name == "clipPath" || name == "mask" || name == "symbol" ||
+                  name == "pattern" || name == "marker";
     if (closing) {
       if ((name == "g" || name == "svg") && stack.size() > 1) stack.pop_back();
+      if (hidden && skipDepth > 0) --skipDepth;
+      continue;
+    }
+    if (hidden) {
+      if (!selfClosing) ++skipDepth;
       continue;
     }
     Affine m = stack.back() * parseTransform(attr(tag, "transform"));
@@ -377,6 +389,7 @@ std::vector<Mask> masksFromSvg(const std::string &svg, float w, float h, std::st
       if (!selfClosing) stack.push_back(m);
       continue;
     }
+    if (skipDepth > 0) continue;
     std::string label = attr(tag, "inkscape:label");
     if (label.empty()) label = attr(tag, "id");
     if (name == "path") {

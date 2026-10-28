@@ -17,7 +17,8 @@ MadMapper. Os parâmetros aparecem sozinhos no painel.
 
 **Mais efeitos:** baixe arquivos `.fs` em [editor.isf.video](https://editor.isf.video) ou na
 coleção da Vidvox, e use *+ Efeito → Abrir arquivo ISF*, ou coloque-os na pasta `effects` ao
-lado do `lumen.exe` (*Recarregar a pasta de efeitos*). Dos 327 shaders da coleção oficial, 324
+lado do `lumen.exe` (*Recarregar a pasta de efeitos*); o instalador de uma versão nova
+não apaga os efeitos que você colocou lá. Dos 327 shaders da coleção oficial, 324
 funcionam sem mudança (multi-passes, buffers persistentes e imagens importadas incluídos).
 
 **Editar ao vivo:** abra o `.fs` em qualquer editor de texto e salve. O Lumen recarrega em

@@ -14,6 +14,7 @@ public:
   const Texture *upload(const VideoFrame &f, DynamicMesh &mesh);
   // Whether HAP (S3TC) textures can be uploaded compressed on this GPU.
   static bool supportsS3tc();
+  static void releaseShared(); // GPU objects shared by all uploaders (before the context goes)
 
 private:
   // Sends the planes through the PBO ring, or directly for small frames / when

@@ -27,6 +27,11 @@ public:
   // Samples the canvas and (at each device's rate) sends the universes.
   void update(const Project &p, const std::function<const Texture &(int canvasId)> &canvas,
               DynamicMesh &mesh, double now);
+  bool transmit = true; // false: sample (preview, monitor) without sending packets
+  // Universes set by "dmx" commands ((protocol, universe) -> channels): merged
+  // into the LED universes of devices of that protocol (highest value wins),
+  // or sent alone. Without such a device: broadcast / multicast, once a second.
+  std::map<std::pair<int, int>, DmxUniverse> held;
 
   // Last sampled colours of a mapping (cols*rows RGB, 0..1, row 0 = top).
   const std::vector<float> *colours(int mappingId) const;
@@ -49,6 +54,8 @@ private:
   std::map<UniverseKey, DmxUniverse> universes_;
   std::map<UniverseKey, uint8_t> sequence_;
   std::map<int, double> lastSend_;
+  std::map<std::pair<int, int>, double> heldSent_; // broadcast sends of held universes
+  std::map<std::pair<int, int>, DmxUniverse> heldLast_;
   std::vector<std::string> conflicts_;
   OscSender socket_;
   std::array<uint8_t, 16> cid_{};

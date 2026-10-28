@@ -43,6 +43,8 @@ private:
   float zoom_ = 1;
   ImVec2 pan_{0, 0};
   bool fitted_ = false;
+  int lastCanvas_ = 0, lastView_ = -2; // per workspace: the main one and the Outputs window's
+  Vec2 dragLast_;                      // mask move: last mouse position in mask units
   bool dragging_ = false;
   ImVec2 dragStart_{0, 0};
   int dragKind_ = 0; // 1 corner, 2 mesh, 3 slice move, 4 mask point, 5 mask move, 6 output corner, 7 output mesh

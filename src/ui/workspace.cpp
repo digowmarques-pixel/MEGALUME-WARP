@@ -26,19 +26,6 @@ std::vector<Vec2> warpOutline(const Warp &w, int perEdge = 12) {
   return pts;
 }
 
-// Inverse of the layer transform (position / rotation / scale around the pivot).
-Vec2 untransform(const Layer &l, Vec2 p) {
-  const LayerTransform &t = l.transform;
-  if (t.scale == 1 && t.rotation == 0 && t.position.x == 0 && t.position.y == 0) return p;
-  Vec2 pivot = layerPivot(l);
-  p = p - t.position;
-  float a = -t.rotation * 3.14159265f / 180.0f;
-  Vec2 d = p - pivot;
-  d = {d.x * std::cos(a) - d.y * std::sin(a), d.x * std::sin(a) + d.y * std::cos(a)};
-  float s = std::fabs(t.scale) < 1e-4f ? 1e-4f : t.scale;
-  return pivot + d * (1.0f / s);
-}
-
 float distToSegment(Vec2 p, Vec2 a, Vec2 b) {
   Vec2 ab = b - a, ap = p - a;
   float len2 = ab.x * ab.x + ab.y * ab.y;
@@ -123,6 +110,7 @@ bool Workspace::editMask(Mask &m, int &point, const std::function<ImVec2(Vec2)> 
     } else if (io.KeyShift && n >= 3 && pointInPolygon(mouse, maskOutline(m))) {
       dragging_ = true;
       dragKind_ = base + 1;
+      dragLast_ = mouse;
     } else {
       // Insert on the closest edge if the click is near one, else append.
       int at = int(n);
@@ -158,7 +146,10 @@ bool Workspace::editMask(Mask &m, int &point, const std::function<ImVec2(Vec2)> 
     }
   }
   if (dragging_ && dragKind_ == base + 1 && (io.MouseDelta.x != 0 || io.MouseDelta.y != 0)) {
-    for (auto &pt : m.points) pt += Vec2{io.MouseDelta.x / ppu, io.MouseDelta.y / ppu};
+    // The move in the mask's own units (an output's 0..1 is not square on screen).
+    Vec2 d = mouse - dragLast_;
+    dragLast_ = mouse;
+    for (auto &pt : m.points) pt += d;
     changed = true;
   }
   return changed;
@@ -180,9 +171,8 @@ void Workspace::draw(App &app, ImVec2 size) {
   if (!p.hasCanvas(viewCanvas)) viewCanvas = 0;
   std::string viewName = viewOut ? T("Saída: ") + viewOut->name : p.canvasLabel(viewCanvas);
   bool refit = false;
-  static int lastView = -2;
-  if (lockView && lastView != viewOutputId) refit = true; // switched output in the embedded view
-  if (lockView) lastView = viewOutputId;
+  if (lockView && lastView_ != viewOutputId) refit = true; // switched output in the embedded view
+  if (lockView) lastView_ = viewOutputId;
   if (lockView) {
     ImGui::TextDisabled("%s", viewName.c_str());
   } else if (ImGui::BeginCombo("##view", viewName.c_str())) {
@@ -217,9 +207,8 @@ void Workspace::draw(App &app, ImVec2 size) {
   ImVec2 avail = ImGui::GetContentRegionAvail();
   if (avail.x < 50 || avail.y < 50) return;
 
-  static int lastCanvas = 0;
-  if (!viewOut && lastCanvas != viewCanvas) refit = true;
-  lastCanvas = viewCanvas;
+  if (!viewOut && lastCanvas_ != viewCanvas) refit = true;
+  lastCanvas_ = viewCanvas;
   float cw = float(p.canvasWidth(viewCanvas)), ch = float(p.canvasHeight(viewCanvas));
   if (viewOut) {
     auto mons = OutputManager::monitors();
@@ -384,12 +373,13 @@ void Workspace::drawCanvasOverlay(App &app, ImDrawList *dl, ImVec2 origin, float
       if (dragging_ && dragKind_ == 3 && ImGui::IsMouseDragging(ImGuiMouseButton_Left, 0)) {
         Layer *l = p.layer(app.sel.layerId);
         if (l && (io.MouseDelta.x != 0 || io.MouseDelta.y != 0)) {
-          float s = std::fabs(l->transform.scale) < 1e-4f ? 1.0f : l->transform.scale;
-          Vec2 d{io.MouseDelta.x / scale / s, io.MouseDelta.y / scale / s};
-          if (io.KeyShift)
-            for (auto &sl : l->slices) sl.warp.translate(d);
-          else
-            l->slices[size_t(std::clamp(app.sel.slice, 0, int(l->slices.size()) - 1))].warp.translate(d);
+          Vec2 d = layerDelta(*l, {io.MouseDelta.x / scale, io.MouseDelta.y / scale});
+          keepInPlace(*l, [&] {
+            if (io.KeyShift)
+              for (auto &sl : l->slices) sl.warp.translate(d);
+            else
+              l->slices[size_t(std::clamp(app.sel.slice, 0, int(l->slices.size()) - 1))].warp.translate(d);
+          });
           app.edited();
         }
       }
@@ -420,10 +410,11 @@ void Workspace::drawCanvasOverlay(App &app, ImDrawList *dl, ImVec2 origin, float
         }
       }
       if (dragging_ && dragKind_ == 1 && app.sel.corner >= 0) {
-        slice.warp.corners[size_t(app.sel.corner)] = untransform(*sel, mc);
+        keepInPlace(*sel, [&] { slice.warp.corners[size_t(app.sel.corner)] = untransform(*sel, mc); });
         app.edited();
       } else if (dragging_ && dragKind_ == 3 && (io.MouseDelta.x != 0 || io.MouseDelta.y != 0)) {
-        slice.warp.translate({io.MouseDelta.x / scale, io.MouseDelta.y / scale});
+        Vec2 d = layerDelta(*sel, {io.MouseDelta.x / scale, io.MouseDelta.y / scale});
+        keepInPlace(*sel, [&] { slice.warp.translate(d); });
         app.edited();
       }
       break;
@@ -746,10 +737,10 @@ void Workspace::handleShortcuts(App &app) {
   Slice &s = l->slices[size_t(std::clamp(app.sel.slice, 0, int(l->slices.size()) - 1))];
   switch (tool) {
   case Tool::Led: break;
-  case Tool::Select: s.warp.translate(d); break;
+  case Tool::Select: keepInPlace(*l, [&] { s.warp.translate(layerDelta(*l, d)); }); break;
   case Tool::Perspective:
     if (app.sel.corner < 0) return;
-    s.warp.corners[size_t(app.sel.corner)] += d;
+    keepInPlace(*l, [&] { s.warp.corners[size_t(app.sel.corner)] += layerDelta(*l, d); });
     break;
   case Tool::Mesh: {
     if (app.sel.meshPoint < 0 || app.sel.meshPoint >= int(s.warp.mesh.size())) return;
@@ -762,8 +753,11 @@ void Workspace::handleShortcuts(App &app) {
     if (app.sel.mask < 0 || app.sel.mask >= int(l->masks.size())) return;
     Mask &m = l->masks[size_t(app.sel.mask)];
     if (app.sel.maskPoint < 0 || app.sel.maskPoint >= int(m.points.size())) return;
-    if (del) {
+    if (del) { // the curve handles go with their point, or the next points get them
+      m.ensureTangents();
       m.points.erase(m.points.begin() + app.sel.maskPoint);
+      m.tanIn.erase(m.tanIn.begin() + app.sel.maskPoint);
+      m.tanOut.erase(m.tanOut.begin() + app.sel.maskPoint);
       app.sel.maskPoint = -1;
     } else {
       m.points[size_t(app.sel.maskPoint)] += d;

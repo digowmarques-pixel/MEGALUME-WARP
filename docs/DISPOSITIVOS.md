@@ -28,16 +28,17 @@ comando*; o resultado (e a resposta do equipamento) aparece no *Monitor OSC*.
 | `midi cc <canal> <n> <valor>` | `midi cc 1 7 100` | Control Change |
 | `midi pc <canal> <programa>` | `midi pc 1 5` | Program Change (troca de cena em mesas de som) |
 | `midi@<porta> ...` | `midi@QLab note 1 60 127` | Escolhe a saída MIDI pelo nome (parte do nome basta) |
-| `dmx [artnet\|sacn] <universo> <canal> <valor>` | `dmx 0 1 255` | Ajusta um canal DMX (0–255); o valor fica guardado |
+| `dmx [artnet\|sacn] <universo> <canal> <valor>` | `dmx 0 1 255` | Ajusta um canal DMX (0–255); o valor fica guardado e é reenviado |
 | `dmx ... <canal>-<último> <valor>` | `dmx sacn 1 1-12 0` | Uma faixa de canais |
 | `tcp <ip>:<porta> <texto>` | `tcp 192.168.1.20:23 PWR ON[CR]` | Envia texto por TCP e mostra a resposta |
 | `udp <ip>:<porta> <texto>` | `udp 192.168.1.30:7000 [HEX_02]PLAY[HEX_03]` | Envia texto por UDP |
-| `serial <porta>[@baud] <texto>` | `serial COM3@9600 rele1 on\n` | Envia texto pela porta serial (Arduino, relés) |
+| `serial <porta>[@baud] <texto>` | `serial COM3@9600 rele1 on\n` | Envia texto pela porta serial (Arduino, relés); a porta fica aberta |
 | `osc <ip>:<porta> /endereço args` | `osc 192.168.1.40:53000 /go` | Mensagem OSC (QLab, TouchDesigner...) |
 | `wait <segundos>` | `wait 2.5` | Espera antes da próxima linha |
 
 **Projetores**: cadastre em *Interação → Projetores (PJLink)* com nome, IP e senha
-(se houver). Nos comandos use o nome (`pjlink Sala ...`) ou direto o IP. Os botões
+(se houver). Nos comandos use o nome (`pjlink Sala ...`, ou `pjlink Projetor 1 ...`
+quando o nome tem espaço) ou direto o IP. Os botões
 ao lado de cada projetor ligam, desligam e fecham o obturador, e mostram o estado.
 Ative o PJLink no menu de rede do projetor (Epson: *Rede → Protocolo de controle*;
 Panasonic: *Rede → PJLink*). Sem senha, deixe o campo vazio.
@@ -45,7 +46,9 @@ Panasonic: *Rede → PJLink*). Sem senha, deixe o campo vazio.
 **DMX**: o comando usa os controladores de *Propriedades → LED* (Art-Net / sACN) do
 mesmo protocolo; sem nenhum, vai em broadcast (Art-Net) ou multicast (sACN).
 Cada universo guarda o último valor de cada canal, então `dmx 0 1 255` seguido de
-`dmx 0 2 128` mantém o canal 1 em 255.
+`dmx 0 2 128` mantém o canal 1 em 255. Os valores são reenviados uma vez por segundo
+(um pacote perdido não perde a cena, e receptores sACN não soltam a fonte). Se o
+mesmo universo também tem LEDs, os dois se juntam: vale o maior valor de cada canal.
 
 **Texto em tcp / udp / serial**: `[CR]`, `[LF]`, `[TAB]`, `\r`, `\n`, `\t` e
 `[HEX_xx]` (um byte em hexadecimal) viram os caracteres de controle.
@@ -116,9 +119,15 @@ void loop() {
 No Lumen: mapeamento `/serial/A0`, entrada 0–1023, alvo *Opacidade* de uma layer; e
 `/serial/botao`, transformação *Chave*, alvo *Disparar coluna*.
 
+Se o Arduino for desligado ou desconectado (ou ainda não estiver ligado quando o
+Lumen abrir), o Lumen tenta abrir a porta de novo a cada segundo; a seção Serial
+mostra "Lendo COM3" ou "COM3 desconectada: tentando de novo a cada segundo".
+
 Para enviar ao Arduino (relés, motores), use o comando `serial COM3@115200 rele 1\n`
-nas colunas — mas não na mesma porta que está recebendo (o Windows só deixa um
-programa abrir a porta; use a seção Serial ou o comando, não os dois).
+nas colunas. A porta fica aberta depois do primeiro comando: abrir a porta reinicia a
+maioria dos Arduinos, e reabrir a cada linha perdia o que foi enviado. Não use a mesma
+porta para receber e enviar (o Windows só deixa abrir a porta uma vez); ao ligar a
+recepção numa porta na seção Serial, o comando solta essa porta.
 
 ## NDI
 

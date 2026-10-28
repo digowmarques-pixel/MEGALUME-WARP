@@ -13,11 +13,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # The runner image (compiler, vcpkg) is part of the key: after an image
+      # update the old cache is only a starting point, and the rebuilt
+      # libraries are saved under the new key (with the old key alone nothing
+      # was saved again, and every run rebuilt FFmpeg).
+      - name: Runner image version
+        run: echo "IMAGE_VERSION=$env:ImageVersion" >> $env:GITHUB_ENV
+
       - name: Restore vcpkg binary cache
         uses: actions/cache/restore@v4
         with:
           path: vcpkg-cache
-          key: vcpkg-${{ runner.os }}-${{ hashFiles('vcpkg.json') }}
+          key: vcpkg-${{ runner.os }}-${{ env.IMAGE_VERSION }}-${{ hashFiles('vcpkg.json') }}
           restore-keys: vcpkg-${{ runner.os }}-
 
       - name: Create cache dir
@@ -36,7 +43,7 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: vcpkg-cache
-          key: vcpkg-${{ runner.os }}-${{ hashFiles('vcpkg.json') }}
+          key: vcpkg-${{ runner.os }}-${{ env.IMAGE_VERSION }}-${{ hashFiles('vcpkg.json') }}
 
       - name: Build
         run: cmake --build build --config Release --parallel

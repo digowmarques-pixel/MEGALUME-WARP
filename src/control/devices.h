@@ -41,6 +41,15 @@ public:
   std::vector<std::string> midiOutPorts();
   // Last known PJLink power state by host ("ligado", "desligado", "erro: ...").
   std::string projectorStatus(const std::string &host);
+  // DMX set by "dmx" commands, held until changed: (protocol, universe) ->
+  // channels. Sent by the LED engine, merged with the LED universes and
+  // refreshed like them (a single packet was lost, dropped by sACN receivers
+  // after 2.5 s, or zeroed by the next LED frame on a shared universe).
+  using HeldDmx = std::map<std::pair<int, int>, DmxUniverse>;
+  bool heldDmx(HeldDmx &out, uint64_t &version); // copies when it changed since `version`
+  // Closes the port a "serial" command keeps open, so the serial input can
+  // take it (Windows lets only one handle open a COM port).
+  void releaseSerial(const std::string &port);
 
 private:
   struct Job {
@@ -62,8 +71,13 @@ private:
   std::vector<std::string> log_;
   std::map<std::string, std::string> status_;
   std::map<std::string, std::unique_ptr<RtMidiOut>> midi_;
-  std::map<std::pair<int, int>, DmxUniverse> dmx_; // (protocol, universe)
-  uint8_t seq_ = 0;
+  // Serial ports of "serial" commands stay open: opening one resets an Arduino
+  // (DTR), so a port opened per line rebooted the board and lost the bytes.
+  struct OpenSerial;
+  std::map<std::string, std::unique_ptr<OpenSerial>> serial_; // under serialMutex_
+  std::mutex serialMutex_;
+  std::map<std::pair<int, int>, DmxUniverse> dmx_; // (protocol, universe), under mutex_
+  uint64_t dmxVersion_ = 0;
   std::array<uint8_t, 16> cid_{};
 };
 

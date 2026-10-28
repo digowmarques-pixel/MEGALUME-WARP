@@ -123,9 +123,13 @@ const Texture *IsfRenderer::render(int w, int h, double time, const std::map<std
   for (size_t pi = 0; pi < info_.passes.size(); ++pi) {
     const IsfPass &pass = info_.passes[pi];
     bool last = pi + 1 == info_.passes.size();
-    int pw = w, ph = h;
-    if (!pass.width.empty()) pw = std::max(1, int(isfEval(pass.width, vars)));
-    if (!pass.height.empty()) ph = std::max(1, int(isfEval(pass.height, vars)));
+    // Sizes from expressions: a NaN or a huge value must not reach GL.
+    auto dim = [&](const std::string &expr, int def) {
+      if (expr.empty()) return def;
+      float v = isfEval(expr, vars);
+      return std::isfinite(v) ? int(std::clamp(v, 1.0f, 8192.0f)) : def;
+    };
+    int pw = dim(pass.width, w), ph = dim(pass.height, h);
     // Every target is readable by name; a pass writes the other buffer of
     // its target so it can read its own previous frame (feedback).
     unit = targetBase;
@@ -145,7 +149,8 @@ const Texture *IsfRenderer::render(int w, int h, double time, const std::map<std
       auto &f = tgt->fb[write];
       if (!f) f = std::make_unique<Framebuffer>();
       bool fresh = f->width() != pw || f->height() != ph;
-      f->resize(pw, ph, false, pass.floatTarget ? GL_RGBA16F : GL_RGBA8);
+      // FLOAT: 32-bit, as the ISF spec says (16-bit cannot accumulate small steps).
+      f->resize(pw, ph, false, pass.floatTarget ? GL_RGBA32F : GL_RGBA8);
       fb = f.get();
       if (fresh) { // new buffers start transparent black
         fb->bind();
@@ -192,6 +197,7 @@ bool IsfRenderer::sync(const std::string &path) {
   if (fresh.load(path, &err)) {
     info_ = fresh.info_;
     shader_.swap(fresh.shader_);
+    imported_ = std::move(fresh.imported_); // IMPORTED images come with the new shader
     targets_.clear();
     frame_ = 0;
     error_.clear();

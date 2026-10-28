@@ -14,5 +14,9 @@ void main() {
   float gy = -lum(vec2(-1, -1)) - 2.0 * lum(vec2(0, -1)) - lum(vec2(1, -1)) + lum(vec2(-1, 1)) + 2.0 * lum(vec2(0, 1)) + lum(vec2(1, 1));
   float e = clamp(length(vec2(gx, gy)) * strength, 0.0, 1.0);
   vec4 c = IMG_THIS_PIXEL(inputImage);
-  gl_FragColor = vec4(color.rgb * e + c.rgb * keepImage * (1.0 - e), max(e, c.a * keepImage));
+  // The edge colour over the (kept) image, back to straight alpha.
+  float ka = c.a * keepImage;
+  float a = e + ka * (1.0 - e);
+  vec3 pm = color.rgb * e + c.rgb * ka * (1.0 - e);
+  gl_FragColor = vec4(a > 0.0 ? pm / a : vec3(0.0), a);
 }

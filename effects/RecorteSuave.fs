@@ -15,5 +15,6 @@ void main() {
   float s = max(softness, 0.0001);
   float a = smoothstep(left, left + s, uv.x) * smoothstep(right, right + s, 1.0 - uv.x) *
             smoothstep(bottom, bottom + s, uv.y) * smoothstep(top, top + s, 1.0 - uv.y);
-  gl_FragColor = IMG_THIS_PIXEL(inputImage) * a;
+  vec4 c = IMG_THIS_PIXEL(inputImage);
+  gl_FragColor = vec4(c.rgb, c.a * a); // straight alpha, like every layer image
 }

@@ -40,7 +40,7 @@ struct LayerState {
   int columnId = -1;       // column the current content came from
   EndMode endMode = EndMode::Loop;
   bool manual = false;     // transition progress follows the transition fader
-  bool composed = false;   // shader transition: currentTex holds both contents
+  bool composed = false;   // shader transition or crossfade: currentTex holds both contents
   std::string transitionShader;
   bool endHandled = false; // the end of the current media was acted upon
   const Texture *currentTex = nullptr, *previousTex = nullptr;
@@ -80,6 +80,7 @@ public:
   bool syncMainBack() const { return syncMainBack_; } // backup took over and the main is alive again
   void syncTakeOver();  // backup: take over now
   void syncFollow();    // backup: go back to following the main
+  int startColumnOnTakeover = -1; // --launch: a backup that never heard the main starts here
   // True while the backup mirrors the main: local triggers (inputs, auto-GO,
   // schedule, timecode cues, column commands) must not fire twice.
   bool following() const { return syncState_ == SyncState::Waiting || syncState_ == SyncState::Following; }
@@ -228,9 +229,10 @@ private:
   std::map<int, std::unique_ptr<Compositor>> extraCompositors_; // other canvases
   std::map<int, LayerState> states_;
   std::vector<MappingState> mappingStates_;
-  int activeColumn_ = -1;
+  int activeColumn_ = -1, activeColumnId_ = -1; // index (follows the id, see resolveActiveColumn)
   double columnLaunchedAt_ = 0;
   int columnRun_ = 0; // changes at every column launch / stop all (redundancy)
+  int stingerRun_ = 0; // changes when a stinger starts (redundancy)
   bool autoGoFired_ = false;
   std::vector<ParamTween> tweens_;
   std::vector<OscMessage> injected_;
@@ -254,8 +256,10 @@ private:
   int ltcChannelInUse_ = -1;
   MidiOutPort mtcOut_;
   std::string mtcPortInUse_ = "\x01";
+  double mtcRetryAt_ = 0;
   bool genActive_ = false;
-  double genTime_ = 0, mtcClock_ = -1, ltcClock_ = -1;
+  double genTime_ = 0, mtcClock_ = -1;
+  long long ltcFrame_ = -1; // last LTC frame queued (frame number at the generator's fps)
   int mtcPiece_ = 0;
   LtcEncoder ltcEnc_{kAudioRate};
   std::shared_ptr<AudioVoice> ltcVoice_;
@@ -265,11 +269,12 @@ private:
   // Shader transitions (one per layer) and the stinger.
   std::map<int, std::unique_ptr<IsfRenderer>> transitionIsf_;
   std::map<int, std::unique_ptr<Framebuffer>> transitionIn_[2], transitionOut_;
+  std::map<int, std::unique_ptr<Framebuffer>> crossfadeFbs_; // per layer, during a crossfade
   Texture clearTex_;
   std::unique_ptr<Playback> stinger_;
   const Texture *stingerTex_ = nullptr;
   Layer stingerLayer_;
-  int pendingColumn_ = -1;
+  int pendingColumn_ = -1, pendingColumnId_ = -1;
   double pendingAt_ = 0;
   const Texture *composeTransition(int layerId, LayerState &st);
   double time_ = 0;
@@ -279,8 +284,10 @@ private:
 
   // Redundancy (engine/sync.cpp).
   void updateSync();
+  void resolveActiveColumn();
   void syncSendState();
   void syncApply(const std::string &json);
+  void syncResetFollow();
   std::string syncProjectSignature() const;
   SyncRole syncRole_ = SyncRole::Off;
   SyncState syncState_ = SyncState::Off;
@@ -289,17 +296,30 @@ private:
   OscServer syncIn_;
   OscSender syncOut_;
   double syncLastRx_ = -1, syncLastTx_ = -10, syncLastPeerRx_ = -1, syncSignatureAt_ = -10;
-  long long syncSeq_ = 0, syncRxSeq_ = -1;
+  long long syncSeq_ = 0, syncRxSeq_ = -1, syncSession_ = 0, syncMainSession_ = -1;
+  double syncWaitingSince_ = 0;
+  std::string syncIgnoredHost_;
   int syncSentColumnRun_ = -1, syncSentColumn_ = -2, syncAppliedColumnRun_ = -1;
   bool syncSentBlackout_ = false, syncMainBack_ = false, syncApplying_ = false;
   std::map<int, int> syncAppliedRun_; // layer -> main's run already applied
-  std::map<int, double> syncSeekedAt_; // layer -> time of the last drift correction
+  // Drift of a layer's media against the main, averaged over the messages:
+  // a single late packet or frame must not trigger a jump.
+  struct SyncDrift {
+    double average = 0;
+    int samples = 0;
+    double seekedAt = -10;
+  };
+  std::map<int, SyncDrift> syncDrift_;
+  int syncAppliedStingerRun_ = -1;
+  bool syncStingerFollow_ = false; // our stinger mirrors the main's: its cut is ours too
   int oscSent_ = 0;
   std::string oscError_;
   MidiInputs midi_;
   double midiRescanAt_ = 0;
   std::vector<OscMessage> inbox_;
   std::string audioInUse_ = "\x01"; // device + options in use; forces the first start
+  double audioRetryAt_ = 0;         // next reopen of a sound card that stopped
+  uint64_t heldDmxVersion_ = 0;     // of the "dmx" command values copied to the LEDs
   std::string audioKey() const;
   SpoutOut spoutOut_;
   std::string spoutStatus_, ndiStatus_;

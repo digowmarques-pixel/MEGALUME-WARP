@@ -37,7 +37,21 @@ static std::vector<float> floats(const json &j) {
   return v;
 }
 
+static bool parseIsfHeader(const std::string &src, IsfInfo &out, std::string *error);
+
+// A header with a value of the wrong type ("LABEL": null, a number as NAME)
+// is an invalid file, not a crash: effects folders hold downloaded shaders.
 bool parseIsf(const std::string &src, IsfInfo &out, std::string *error) {
+  try {
+    return parseIsfHeader(src, out, error);
+  } catch (const std::exception &e) {
+    out = {};
+    if (error) *error = std::string("cabeçalho ISF com valor de tipo errado: ") + e.what();
+    return false;
+  }
+}
+
+static bool parseIsfHeader(const std::string &src, IsfInfo &out, std::string *error) {
   out = {};
   size_t start = src.find("/*");
   size_t end = start == std::string::npos ? std::string::npos : src.find("*/", start + 2);
@@ -70,7 +84,7 @@ bool parseIsf(const std::string &src, IsfInfo &out, std::string *error) {
       if (x.contains("MAX")) in.max = floats(x["MAX"]);
       if (x.contains("VALUES") && x["VALUES"].is_array())
         for (auto &v : x["VALUES"])
-          if (v.is_number()) in.values.push_back(v.get<int>());
+          if (v.is_number()) in.values.push_back(int(std::clamp(v.get<double>(), -1e9, 1e9)));
       if (x.contains("LABELS") && x["LABELS"].is_array())
         for (auto &v : x["LABELS"])
           if (v.is_string()) in.labels.push_back(v.get<std::string>());
@@ -218,7 +232,16 @@ struct Parser {
       else return v;
     }
   }
+  int depth = 0;
   float factor() {
+    // Bounded nesting: a WIDTH full of "(" must not overflow the stack.
+    if (depth >= 64) { ok = false; i = s.size(); return 0; }
+    ++depth;
+    float v = primary();
+    --depth;
+    return v;
+  }
+  float primary() {
     ws();
     if (eat('-')) return -factor();
     if (eat('+')) return factor();

@@ -21,6 +21,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <filesystem>
+#include <fstream>
 #include <cstdio>
 #include <cstring>
 #include <string>
@@ -61,6 +63,54 @@ static void testWarp() {
   m.meshAt(2, 1) = {0.5f, 0.2f};
   CHECK(!m.meshIsIdentity());
   CHECK(near(m.map(0.5f, 1.0f / 3.0f), m.meshPointDest(2, 1), 0.5f));
+
+  // A regular grid is exactly linear up to the borders (repeating the border
+  // point bent the outer cells: up to 47 px on a 1000 px projector).
+  {
+    Warp g;
+    g.setRect({0, 0}, {1000, 1000});
+    g.resetMesh(5, 5);
+    g.meshAt(2, 2).x += 1e-5f; // no longer an identity mesh: the spline is used
+    for (float u : {0.05f, 0.125f, 0.25f, 0.6f, 0.95f}) CHECK(near(g.map(u, 0.1f), {u * 1000, 100}, 0.05f));
+    Warp h;
+    h.setRect({0, 0}, {1000, 1000});
+    h.resampleMesh(4, 4);
+    CHECK(near(h.map(0.25f, 0.5f), {250, 500}, 0.05f));
+    Warp k;
+    k.setRect({0, 0}, {1000, 1000});
+    k.resetMesh(2, 2);
+    k.meshAt(1, 1).x += 1e-5f; // 2x2: bilinear
+    CHECK(near(k.map(0.25f, 0.25f), {250, 250}, 0.05f));
+  }
+
+  // Editing a scaled / rotated layer in the workspace: the dragged corner
+  // lands under the mouse in one step and stays there (the pivot moves with
+  // the corner; re-solving against it drifted and ran away below scale 0.2),
+  // and the rest of the layer does not move on screen.
+  for (float sc : {0.15f, 0.5f, 2.0f}) {
+    Layer l;
+    Slice a, b;
+    a.warp.setRect({0, 0}, {1000, 600});
+    b.warp.setRect({1200, 0}, {400, 300});
+    l.slices = {a, b};
+    l.transform.scale = sc;
+    l.transform.rotation = 30;
+    l.transform.position = {50, -20};
+    Warp otherBefore = transformedWarp(l, l.slices[1]);
+    Vec2 c0 = transformedWarp(l, l.slices[0]).corners[0];
+    Vec2 mouse{700, 400};
+    for (int frame = 0; frame < 8; ++frame) // mouse held still while dragging
+      keepInPlace(l, [&] { l.slices[0].warp.corners[2] = untransform(l, mouse); });
+    CHECK(near(transformedWarp(l, l.slices[0]).corners[2], mouse, 0.05f));
+    CHECK(near(transformedWarp(l, l.slices[0]).corners[0], c0, 0.05f));
+    for (int k = 0; k < 4; ++k) CHECK(near(transformedWarp(l, l.slices[1]).corners[size_t(k)], otherBefore.corners[size_t(k)], 0.05f));
+    // Moving a slice by 100 px on the canvas moves it 100 px, whatever the scale.
+    Vec2 before = transformedWarp(l, l.slices[1]).corners[1];
+    Vec2 d = layerDelta(l, {100, 0});
+    keepInPlace(l, [&] { l.slices[1].warp.translate(d); });
+    CHECK(near(transformedWarp(l, l.slices[1]).corners[1], before + Vec2{100, 0}, 0.05f));
+    CHECK(near(transformedWarp(l, l.slices[0]).corners[0], c0, 0.05f));
+  }
 
   // Tessellation produces whole triangles of (x, y, u, v).
   std::vector<float> verts;
@@ -132,6 +182,15 @@ static void testOsc() {
   uint8_t junk[] = {'/', 'x', 0, 0, ',', 'f', 0, 0, 1};
   out.clear();
   CHECK(!parseOsc(junk, sizeof(junk), out));
+  // Every standard type tag is read (an unread type made the packet fall to the
+  // text reader, which kept only the address: a "fire" with no argument).
+  {
+    const uint8_t pk[] = {'/', 'x', 0, 0, ',', 'r', 'c', '[', 'm', 't', ']', 'i', 0, 0, 0, 0,
+                          0xff, 0, 0, 0xff, 0, 0, 0, 'A', 0x90, 60, 100, 0, 0, 0, 0, 7, 0, 0, 0, 0, 0, 0, 0, 5};
+    out.clear();
+    CHECK(parseOsc(pk, sizeof(pk), out) && out.size() == 1 && out[0].args.size() == 5);
+    CHECK(out.size() == 1 && std::get<int32_t>(out[0].args[1]) == 'A' && std::get<int32_t>(out[0].args[4]) == 5);
+  }
 
   // Address patterns.
   CHECK(oscMatch("/sensor/*", "/sensor/dist"));
@@ -348,6 +407,17 @@ static void testV06() {
   CHECK(uni == 5 && count == 512 && got[9] == 128);
   CHECK(!decodeArtDmx(sacn.data(), sacn.size(), uni, got, count));
   CHECK(!decodeSacn(art.data(), art.size(), uni, got, count));
+  {
+    // Priority is read; preview (blind) and stream-terminated packets are not live data.
+    int prio = -1;
+    CHECK(decodeSacn(sacn.data(), sacn.size(), uni, got, count, &prio) && prio == sacn[108]);
+    auto preview = sacn;
+    preview[112] |= 0x80;
+    CHECK(!decodeSacn(preview.data(), preview.size(), uni, got, count));
+    auto ended = sacn;
+    ended[112] |= 0x40;
+    CHECK(!decodeSacn(ended.data(), ended.size(), uni, got, count));
+  }
 
   // Plain-text OSC.
   OscMessage m;
@@ -448,6 +518,17 @@ static void testV07() {
   // unmap is the inverse of map, mesh included.
   Vec2 uv;
   CHECK(before.unmap(before.map(0.37f, 0.61f), uv) && near(uv, {0.37f, 0.61f}, 1e-3f));
+  // An output warp is in 0..1: a point outside it is not "inside" (an absolute
+  // tolerance of 1 accepted the whole output, and double clicks outside added lines).
+  {
+    Warp ow;
+    ow.setRect({0, 0}, {1, 1});
+    ow.resetMesh(3, 3);
+    ow.meshAt(1, 1).x += 0.01f;
+    CHECK(ow.unmap(ow.map(0.4f, 0.7f), uv) && near(uv, {0.4f, 0.7f}, 1e-3f));
+    CHECK(!ow.unmap({1.6f, 0.5f}, uv));
+    CHECK(!ow.unmap({0.5f, -0.3f}, uv));
+  }
 
   // Masks: bezier outline and scale.
   Mask m;
@@ -486,6 +567,12 @@ static void testV07() {
     CHECK(near(b[0].points[1], c.points[1]) && near(b[0].tanOut[1], c.tanOut[1]) && near(b[0].tanIn[2], c.tanIn[2]));
   }
   CHECK(masksFromSvg("<svg></svg>", 1, 1, &err).empty() && !err.empty());
+  // Shapes in <defs> / <clipPath> / <mask> are not masks (an artboard clip
+  // would show the whole layer); "nan" / "inf" coordinates are dropped.
+  CHECK(masksFromSvg(R"svg(<svg viewBox="0 0 100 100"><defs><clipPath id="c"><rect x="0" y="0" width="100" height="100"/></clipPath></defs>
+                     <g clip-path="url(#c)"><rect x="10" y="10" width="20" height="20"/></g>
+                     <mask id="m"><circle cx="50" cy="50" r="10"/></mask></svg>)svg", 100, 100).size() == 1);
+  CHECK(masksFromSvg(R"svg(<svg><polygon points="0,0 nan,0 10,10"/><polygon points="0,0 -inf,0 10,10"/></svg>)svg", 100, 100).empty());
 
   // Free blend: the soft edges computed from overlaps match the grid assistant.
   Project g = Project::makeDefault();
@@ -509,6 +596,21 @@ static void testV07() {
   CHECK(autoBlendOverlaps(f, 0) == 1);
   CHECK(std::fabs(f.outputs[0].softEdge.right - 0.1f) < 1e-4f && std::fabs(f.outputs[1].softEdge.left - 0.125f) < 1e-4f);
   CHECK(f.outputs[0].softEdge.left == 0 && f.outputs[1].softEdge.top == 0);
+  // Only the part of an edge that the neighbour overlaps is blended (above the
+  // lower projector the first one keeps its full light); the 2x2 grid blends
+  // whole edges.
+  {
+    float sp[4][2];
+    softEdgeSpans(f, f.outputs[0], sp);
+    CHECK(std::fabs(sp[1][0] - 100.0f / 600.0f) < 1e-4f && sp[1][1] == 1.0f);
+    CHECK(sp[0][0] == 0 && sp[0][1] == 1); // no neighbour on the left: whole edge
+    softEdgeSpans(f, f.outputs[1], sp);
+    CHECK(sp[0][0] == 0 && std::fabs(sp[0][1] - 500.0f / 600.0f) < 1e-4f);
+    for (auto &o : g.outputs) {
+      softEdgeSpans(g, o, sp);
+      for (auto &e : sp) CHECK(e[0] == 0 && e[1] == 1);
+    }
+  }
   // Outputs of another canvas are left alone.
   o2.canvasId = 99;
   CHECK(autoBlendOverlaps(f, 0) == 0 && f.outputs[1].softEdge.left > 0);
@@ -574,6 +676,17 @@ static void testV08() {
   bool ok = false;
   CHECK(isfEval("floor($WIDTH/2)", {{"WIDTH", 1001}}, &ok) == 500 && ok);
   CHECK(std::fabs(isfEval("max($WIDTH, $HEIGHT) * 0.5 + (2 - 1)", {{"WIDTH", 100}, {"HEIGHT", 300}}, &ok) - 151) < 1e-4f && ok);
+  // Deep nesting is refused, not a stack overflow.
+  isfEval(std::string(200000, '(') + "1", {}, &ok);
+  CHECK(!ok);
+  // A header value of the wrong type is an invalid file, not a crash.
+  {
+    IsfInfo bad;
+    std::string err;
+    CHECK(!parseIsf("/*{\"INPUTS\":[{\"NAME\":\"a\",\"TYPE\":\"float\",\"LABEL\":null}]}*/\nvoid main(){}", bad, &err));
+    CHECK(!err.empty());
+    CHECK(!parseIsf("/*{\"INPUTS\":[{\"NAME\":5,\"TYPE\":\"float\"}]}*/\nvoid main(){}", bad, &err));
+  }
   isfEval("$NOPE + 1", {}, &ok);
   CHECK(!ok);
   CHECK(!parseIsf("void main() {}", info, &err) && !err.empty());
@@ -709,6 +822,11 @@ static void testV09() {
   CHECK(parseTimecode("01:00:10:12", 25, sec) && std::fabs(sec - 3610.48) < 1e-6);
   CHECK(parseTimecode("00:01:02.5", 25, sec) && std::fabs(sec - 62.5) < 1e-6);
   CHECK(!parseTimecode("abc", 25, sec));
+  // 29.97 drop frame: labels ;00 and ;01 do not exist at most minutes, so the
+  // label is not h:m:s + f/fps (00:01:00;02 is real frame 1800).
+  CHECK(parseTimecode("00:01:00;02", 29.97, sec) && std::fabs(sec - 1800 / 29.97) < 1e-6);
+  CHECK(parseTimecode("00:10:00;00", 29.97, sec) && std::fabs(sec - 17982 / 29.97) < 1e-6);
+  CHECK(Timecode::fromSeconds(1800 / 29.97 + 0.5 / 29.97, 29.97).str() == "00:01:00;02");
   // MTC: 8 quarter frames give the time (2 frames late, compensated); full frame.
   Timecode src = Timecode::fromSeconds(3725.2, 25);
   MtcDecoder mtc;
@@ -752,6 +870,27 @@ static std::string conversions(const std::string &s) {
     i = j;
   }
   return out;
+}
+
+static void testInstaller() {
+#ifdef LUMEN_SOURCE_DIR
+  // The uninstaller removes the shipped effects by name (users keep their own
+  // .fs files in the same folder): every file of effects/ must be listed.
+  namespace fs = std::filesystem;
+  std::ifstream in(fs::path(LUMEN_SOURCE_DIR) / "installer" / "lumen.nsi");
+  std::string nsi((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+  CHECK(!nsi.empty());
+  int n = 0;
+  std::error_code ec;
+  for (auto &e : fs::directory_iterator(fs::path(LUMEN_SOURCE_DIR) / "effects", ec)) {
+    if (e.path().extension() != ".fs") continue;
+    ++n;
+    std::string line = "Delete \"$INSTDIR\\effects\\" + e.path().filename().string() + "\"";
+    if (nsi.find(line) == std::string::npos) std::printf("installer/lumen.nsi: falta %s\n", line.c_str());
+    CHECK(nsi.find(line) != std::string::npos);
+  }
+  CHECK(n > 20);
+#endif
 }
 
 static void testI18n() {
@@ -863,6 +1002,7 @@ static void testAudioRoute() {
 int main() {
   testAudioRoute();
   testParallel();
+  testInstaller();
   testI18n();
   testV09();
   testV08();

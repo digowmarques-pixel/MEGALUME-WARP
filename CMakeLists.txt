@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(Lumen VERSION 0.10.0 LANGUAGES C CXX)
+project(Lumen VERSION 0.10.1 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -85,8 +85,10 @@ if(WIN32)
 endif()
 
 # ---------------------------------------------------------------- Lumen
-add_executable(lumen
-  src/main.cpp
+# Everything but main() is compiled once into lumen_core; on Windows the same
+# objects also make lumen-console.exe (a console program: the log live, for
+# the diagnostics shortcut of the installer and TESTE-WINDOWS.md).
+add_library(lumen_core OBJECT
   src/app.cpp
   src/diagnose.cpp
   src/gl/gl.cpp
@@ -132,35 +134,52 @@ add_executable(lumen
   src/ui/outputs_window.cpp
   src/platform/platform.cpp)
 
-target_include_directories(lumen PRIVATE
+target_include_directories(lumen_core PUBLIC
   src
   third_party/khr
   third_party)
-target_link_libraries(lumen PRIVATE imgui glfw OpenGL::GL lumen_ffmpeg rtmidi)
+target_link_libraries(lumen_core PUBLIC imgui glfw OpenGL::GL lumen_ffmpeg rtmidi)
 if(WIN32)
-  target_link_libraries(lumen PRIVATE spout)
+  target_link_libraries(lumen_core PUBLIC spout)
 elseif(APPLE)
-  target_link_libraries(lumen PRIVATE "-framework CoreFoundation" "-framework CoreAudio" "-framework AudioToolbox")
+  target_link_libraries(lumen_core PUBLIC "-framework CoreFoundation" "-framework CoreAudio" "-framework AudioToolbox")
 else()
-  target_link_libraries(lumen PRIVATE ${CMAKE_DL_LIBS} m) # miniaudio loads backends at runtime
+  target_link_libraries(lumen_core PUBLIC ${CMAKE_DL_LIBS} m) # miniaudio loads backends at runtime
 endif()
-target_compile_definitions(lumen PRIVATE GLFW_INCLUDE_NONE LUMEN_VERSION="${PROJECT_VERSION}" LUMEN_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+target_compile_definitions(lumen_core PUBLIC GLFW_INCLUDE_NONE LUMEN_VERSION="${PROJECT_VERSION}" LUMEN_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 
 if(WIN32)
-  target_link_libraries(lumen PRIVATE ws2_32 comdlg32 shell32 ole32)
-  target_compile_definitions(lumen PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN _CRT_SECURE_NO_WARNINGS)
-  # GUI program (no console window); logs go to the terminal when launched from one.
-  set_target_properties(lumen PROPERTIES WIN32_EXECUTABLE TRUE)
-  target_sources(lumen PRIVATE src/lumen.rc)
-  set_source_files_properties(src/lumen.rc PROPERTIES INCLUDE_DIRECTORIES "${CMAKE_SOURCE_DIR}/assets")
+  target_link_libraries(lumen_core PUBLIC ws2_32 comdlg32 shell32 ole32)
+  target_compile_definitions(lumen_core PUBLIC NOMINMAX WIN32_LEAN_AND_MEAN _CRT_SECURE_NO_WARNINGS)
   if(MSVC)
-    target_compile_options(lumen PRIVATE /W3 /utf-8)
-    target_link_options(lumen PRIVATE /ENTRY:mainCRTStartup)
+    target_compile_options(lumen_core PUBLIC /W3 /utf-8)
   endif()
 else()
-  target_compile_options(lumen PRIVATE -Wall -Wextra -Wno-unused-parameter)
+  target_compile_options(lumen_core PUBLIC -Wall -Wextra -Wno-unused-parameter)
   find_package(Threads REQUIRED)
-  target_link_libraries(lumen PRIVATE Threads::Threads)
+  target_link_libraries(lumen_core PUBLIC Threads::Threads)
+endif()
+
+add_executable(lumen src/main.cpp)
+target_link_libraries(lumen PRIVATE lumen_core)
+if(WIN32)
+  # GUI program (no console window); logs go to the terminal when launched from one.
+  set_target_properties(lumen PROPERTIES WIN32_EXECUTABLE TRUE)
+  set_source_files_properties(src/lumen.rc PROPERTIES INCLUDE_DIRECTORIES "${CMAKE_SOURCE_DIR}/assets")
+  target_sources(lumen PRIVATE src/lumen.rc)
+  add_executable(lumen-console src/main.cpp src/lumen.rc)
+  target_link_libraries(lumen-console PRIVATE lumen_core)
+  if(MSVC)
+    target_link_options(lumen PRIVATE /ENTRY:mainCRTStartup)
+    # The Visual C++ runtime next to the program: it must start on a PC without
+    # the VC++ redistributable installed (the package copies every DLL here).
+    set(CMAKE_INSTALL_SYSTEM_RUNTIME_LIBS_SKIP TRUE)
+    include(InstallRequiredSystemLibraries)
+    if(CMAKE_INSTALL_SYSTEM_RUNTIME_LIBS)
+      add_custom_command(TARGET lumen POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different ${CMAKE_INSTALL_SYSTEM_RUNTIME_LIBS} $<TARGET_FILE_DIR:lumen>)
+    endif()
+  endif()
 endif()
 
 # Copy shipped example assets next to the executable.

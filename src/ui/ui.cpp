@@ -37,6 +37,22 @@ const ImU32 kAccentU32 = IM_COL32(255, 196, 0, 255);
 const ImU32 kPlayingU32 = IM_COL32(255, 214, 64, 255); // what is on air
 const ImVec4 kOnAccent{0.05f, 0.05f, 0.05f, 1.0f};    // text on yellow
 
+constexpr int kMaxDashColumns = 509; // dashboard table: under 512 columns (ImGui), 2 of them fixed
+
+// Width of a button (or, with check, a checkbox) with this label.
+float labelW(const char *label, bool check = false) {
+  const ImGuiStyle &st = ImGui::GetStyle();
+  float text = ImGui::CalcTextSize(label, nullptr, true).x;
+  return check ? ImGui::GetFrameHeight() + st.ItemInnerSpacing.x + text : text + st.FramePadding.x * 2;
+}
+
+// SameLine, or a new line when the next item (w wide) would pass the right edge:
+// toolbars stay usable in narrow windows (1366 px screens) instead of being cut.
+void wrapLine(float w, float spacing = -1) {
+  ImGui::SameLine(0, spacing);
+  if (ImGui::GetContentRegionAvail().x < w) ImGui::NewLine();
+}
+
 // Yellow button with black text (main actions, active tools).
 void pushPrimary() {
   ImGui::PushStyleColor(ImGuiCol_Button, kAccent);
@@ -494,8 +510,8 @@ void Ui::menuBar(App &app) {
   if (!ImGui::BeginMainMenuBar()) return;
   if (ImGui::BeginMenu(T("Arquivo"))) {
     ImGui::BeginDisabled(app.showLocked);
-    if (ImGui::MenuItem(T("Novo projeto"), T("Ctrl+N"))) app.newProject();
-    if (ImGui::MenuItem(T("Abrir..."), T("Ctrl+O"))) app.openDialog();
+    if (ImGui::MenuItem(T("Novo projeto"), T("Ctrl+N"))) app.unlessUnsaved([&app] { app.newProject(); });
+    if (ImGui::MenuItem(T("Abrir..."), T("Ctrl+O"))) app.unlessUnsaved([&app] { app.openDialog(); });
     ImGui::EndDisabled();
     if (ImGui::MenuItem(T("Salvar"), T("Ctrl+S"))) app.saveProject(false);
     if (ImGui::MenuItem(T("Salvar como..."), T("Ctrl+Shift+S"))) app.saveProject(true);
@@ -621,22 +637,24 @@ void Ui::toolbar(App &app) {
   ImGui::SetItemTooltip("%s", T("Para tudo com fade (Esc)"));
   ImGui::EndDisabled();
   ImGui::SameLine();
-  if (e.blackout) {
+  // Push and pop must follow the same value: the click changes e.blackout.
+  const bool blackout = e.blackout;
+  if (blackout) {
     ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.75f, 0.15f, 0.15f, 1));
     ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.9f, 0.2f, 0.2f, 1));
   }
-  if (ImGui::Button(T("Blackout"), {80, 30})) e.blackout = !e.blackout;
-  if (e.blackout) ImGui::PopStyleColor(2);
+  if (ImGui::Button(T("Blackout"), {80, 30})) e.blackout = !blackout;
+  if (blackout) ImGui::PopStyleColor(2);
   ImGui::SetItemTooltip("%s", T("Escurece todas as saídas (B)"));
   ImGui::SameLine();
   bool open = app.outputsOpen;
   if (open) pushPrimary();
   if (ImGui::Button(open ? T("Fechar saídas") : T("Abrir saídas"), {110, 30})) app.outputsOpen = !open;
   if (open) popPrimary();
+  ImGui::SetItemTooltip("%s", T("Abre/fecha as janelas dos projetores (Ctrl+P). O workspace mostra a prévia mesmo fechadas."));
   ImGui::SameLine();
   if (ImGui::Button(T("Saídas..."), {80, 30})) openOutputs();
   ImGui::SetItemTooltip("%s", T("Layout dos projetores, telas, soft edge e mapping de cada saída"));
-  ImGui::SetItemTooltip("%s", T("Abre/fecha as janelas dos projetores (Ctrl+P). O workspace mostra a prévia mesmo fechadas."));
   ImGui::SameLine();
   bool lk = app.showLocked;
   if (lk) pushPrimary();
@@ -876,10 +894,12 @@ void Ui::dashboard(App &app) {
     app.edited();
   }
   ImGui::SameLine();
+  ImGui::BeginDisabled(int(p.columns.size()) >= kMaxDashColumns);
   if (ImGui::Button(T("+ Coluna"))) {
     p.addColumn();
     app.edited();
   }
+  ImGui::EndDisabled();
   ImGui::EndDisabled();
   ImGui::SameLine();
   ImGui::TextDisabled("%s", T("Arraste mídias para as células. Clique numa célula para disparar."));
@@ -889,7 +909,9 @@ void Ui::dashboard(App &app) {
 
   const float zw[] = {86, 116, 160}, zh[] = {50, 74, 104};
   const float cellW = zw[std::clamp(dashZoom_, 0, 2)], cellH = zh[std::clamp(dashZoom_, 0, 2)], nameW = 150;
-  int ncols = int(p.columns.size());
+  // A table holds at most 511 columns (ImGui aborts past that): the name and stop
+  // columns plus the first 509 show columns. More can exist (OSC, file) and still run.
+  int ncols = std::min(int(p.columns.size()), kMaxDashColumns);
   ImGuiTableFlags flags = ImGuiTableFlags_ScrollX | ImGuiTableFlags_ScrollY |
                           ImGuiTableFlags_BordersInner | ImGuiTableFlags_RowBg;
   if (!ImGui::BeginTable("##dash", ncols + 2, flags)) return;
@@ -1083,16 +1105,20 @@ void Ui::dashboard(App &app) {
         bool on = colRef.timecodeCue >= 0;
         if (ImGui::Checkbox(T("Disparar no timecode"), &on)) { colRef.timecodeCue = on ? 0.0f : -1.0f; app.edited(); }
         if (on) {
-          int hmsf[4];
-          float t = colRef.timecodeCue;
-          hmsf[0] = int(t / 3600); hmsf[1] = int(std::fmod(t, 3600) / 60); hmsf[2] = int(std::fmod(t, 60));
-          hmsf[3] = int(std::lround((t - std::floor(t)) * 25.0f));
+          // Frames at the rate of the timecode being received (25 until a signal arrives).
+          double fps = e.timecodeFps() > 0 ? e.timecodeFps() : 25.0;
+          Timecode cue = Timecode::fromSeconds(colRef.timecodeCue + 0.5 / fps, fps);
+          int hmsf[4] = {cue.h, cue.m, cue.s, cue.f};
           ImGui::SetNextItemWidth(180);
           if (ImGui::InputInt4(T("hh mm ss qq"), hmsf)) {
-            colRef.timecodeCue = float(std::max(0, hmsf[0]) * 3600 + std::clamp(hmsf[1], 0, 59) * 60 + std::clamp(hmsf[2], 0, 59)) +
-                                 float(std::clamp(hmsf[3], 0, 29)) / 25.0f;
+            char text[48];
+            std::snprintf(text, sizeof(text), "%d:%d:%d:%d", hmsf[0], hmsf[1], hmsf[2], hmsf[3]);
+            double sec = 0;
+            if (parseTimecode(text, fps, sec)) colRef.timecodeCue = float(sec);
             app.edited();
           }
+          ImGui::SameLine();
+          ImGui::TextDisabled("%.2f fps", fps);
           helpMarker(T("A coluna dispara quando o timecode recebido (MTC ou LTC, em Interação) passa por este valor."));
         }
       }
@@ -1193,7 +1219,9 @@ void Ui::dashboard(App &app) {
       app.sel.inspector = Inspector::Layer;
       if (workspace.viewOutputId < 0) workspace.viewCanvas = l.canvasId;
     }
-    if (!locked && ImGui::BeginPopupContextItem()) {
+    // Explicit id: the row's label holds the name being typed, so an id taken from it
+    // would change at each key, close the menu and send the next keys to the shortcuts.
+    if (!locked && ImGui::BeginPopupContextItem("##layerctx")) {
       ImGui::SetNextItemWidth(160);
       if (inputText(T("Nome"), l.name)) app.edited();
       if (ImGui::MenuItem(T("Subir"), nullptr, false, li > 0)) { moveLayer = int(li); moveLayerDir = -1; }
@@ -1520,6 +1548,17 @@ void Ui::maskList(App &app, std::vector<Mask> &masks, int &sel, int &selPoint, V
   ImGui::PopID();
 }
 
+// Moves key i of a track to its place in time order; returns its new index.
+static int reorderKey(TimelineTrack &tr, int i) {
+  Keyframe k = tr.keys[size_t(i)];
+  tr.keys.erase(tr.keys.begin() + i);
+  auto at = std::upper_bound(tr.keys.begin(), tr.keys.end(), k.time,
+                             [](float t, const Keyframe &o) { return t < o.time; });
+  int ni = int(at - tr.keys.begin());
+  tr.keys.insert(at, k);
+  return ni;
+}
+
 static std::string timeLabel(float t) {
   char b[32];
   int m = int(t) / 60;
@@ -1571,7 +1610,7 @@ void Ui::timelineEditor(App &app) {
       if (ImGui::Selectable((t.name + "##" + std::to_string(t.id)).c_str(), tl && t.id == tl->id)) timelineSel_ = t.id;
     ImGui::EndCombo();
   }
-  ImGui::SameLine();
+  wrapLine(labelW(T("+ Timeline")));
   if (ImGui::Button(T("+ Timeline"))) {
     Timeline &t = p.addTimeline();
     timelineSel_ = t.id;
@@ -1584,28 +1623,28 @@ void Ui::timelineEditor(App &app) {
                        "Timeline) ou toque por OSC: /lumen/timeline/1/play."));
     return;
   }
-  ImGui::SameLine();
+  wrapLine(120);
   ImGui::SetNextItemWidth(120);
   if (inputText("##tlname", tl->name)) app.edited();
-  ImGui::SameLine();
+  wrapLine(80 + labelW(T("duração")));
   ImGui::SetNextItemWidth(80);
   if (ImGui::DragFloat(T("duração"), &tl->duration, 0.1f, 0.1f, 36000, "%.1f s")) { tl->duration = std::max(0.1f, tl->duration); app.edited(); }
-  ImGui::SameLine();
+  wrapLine(labelW(T("loop"), true));
   if (ImGui::Checkbox(T("loop"), &tl->loop)) app.edited();
   if (tl->loop) {
-    ImGui::SameLine();
+    wrapLine(70);
     ImGui::SetNextItemWidth(70);
     if (ImGui::DragFloat("##ls", &tl->loopStart, 0.05f, 0, tl->duration, T("de %.1f s"))) app.edited();
     ImGui::SetItemTooltip("%s", T("Início do loop: 0 até aqui toca uma vez (introdução), depois repete daqui até o fim."));
   } else {
-    ImGui::SameLine();
+    wrapLine(labelW(T("GO no fim"), true));
     if (ImGui::Checkbox(T("GO no fim"), &tl->goAtEnd)) app.edited();
   }
-  ImGui::SameLine();
+  wrapLine(labelW(T("timecode"), true));
   if (ImGui::Checkbox(T("timecode"), &tl->followTimecode)) app.edited();
   ImGui::SetItemTooltip("%s", T("Segue o timecode recebido (MTC/LTC) em vez do próprio relógio."));
   if (tl->followTimecode) {
-    ImGui::SameLine();
+    wrapLine(80);
     ImGui::SetNextItemWidth(80);
     if (ImGui::DragFloat("##tco", &tl->timecodeOffset, 0.04f, 0, 360000, T("início %.2f s"))) app.edited();
     ImGui::SetItemTooltip("%s", T("Timecode (em segundos) em que esta timeline está no tempo 0."));
@@ -1613,7 +1652,8 @@ void Ui::timelineEditor(App &app) {
   const TimelineRun *run = e.timelineRun(tl->id);
   float now = run ? float(run->time) : 0.0f;
   bool playing = run && run->playing;
-  ImGui::SameLine(0, 14);
+  // Play controls as one group: never split from each other by the wrap.
+  wrapLine(labelW(T("Pausar")) + labelW(T("Parar##tl")) + 150, 14);
   if (playing) {
     pushPrimary();
     if (ImGui::Button(T("Pausar"))) e.pauseTimeline(tl->id);
@@ -1632,9 +1672,11 @@ void Ui::timelineEditor(App &app) {
       Timeline copy = *tl;
       copy.id = p.newId();
       copy.name += T(" cópia");
-      p.timelines.push_back(copy);
+      p.timelines.push_back(copy); // may reallocate: `tl` is no longer valid
       timelineSel_ = copy.id;
       app.edited();
+      ImGui::EndPopup();
+      return;
     }
     if (ImGui::MenuItem(T("Gravar o valor atual de todas as faixas aqui"))) {
       for (auto &tr : tl->tracks) {
@@ -1859,10 +1901,7 @@ void Ui::timelineEditor(App &app) {
         Keyframe &kf = tr.keys[size_t(tlKey_)];
         kf.time = std::clamp(xt(io.MousePos.x), 0.0f, tl->duration);
         if (!io.KeyShift) kf.value = yv(io.MousePos.y); // Shift: only in time
-        float t = kf.time;
-        std::sort(tr.keys.begin(), tr.keys.end(), [](auto &a, auto &b) { return a.time < b.time; });
-        for (size_t k = 0; k < tr.keys.size(); ++k)
-          if (tr.keys[k].time == t) tlKey_ = int(k);
+        tlKey_ = reorderKey(tr, tlKey_);
         app.edited();
         changed = true;
       }
@@ -1871,18 +1910,19 @@ void Ui::timelineEditor(App &app) {
     }
     if (ImGui::BeginPopup("##keypop")) {
       if (tlKeyTrack_ == int(ti) && tlKey_ >= 0 && tlKey_ < int(tr.keys.size())) {
-        Keyframe &kf = tr.keys[size_t(tlKey_)];
+        Keyframe *kf = &tr.keys[size_t(tlKey_)];
         ImGui::SetNextItemWidth(120);
-        if (ImGui::DragFloat(T("Valor"), &kf.value, 0.01f)) { app.edited(); changed = true; }
+        if (ImGui::DragFloat(T("Valor"), &kf->value, 0.01f)) { app.edited(); changed = true; }
         ImGui::SetNextItemWidth(120);
-        if (ImGui::DragFloat(T("Tempo"), &kf.time, 0.01f, 0, tl->duration, "%.2f s")) {
-          std::sort(tr.keys.begin(), tr.keys.end(), [](auto &a, auto &b) { return a.time < b.time; });
+        if (ImGui::DragFloat(T("Tempo"), &kf->time, 0.01f, 0, tl->duration, "%.2f s")) {
+          tlKey_ = reorderKey(tr, tlKey_); // keeps editing the same key past its neighbours
+          kf = &tr.keys[size_t(tlKey_)];
           app.edited();
           changed = true;
         }
         ImGui::TextDisabled("%s", T("Curva até a próxima chave"));
         for (int ez = 0; ez < int(Ease::COUNT); ++ez)
-          if (ImGui::RadioButton(easeName(Ease(ez)), kf.ease == Ease(ez))) { kf.ease = Ease(ez); app.edited(); changed = true; }
+          if (ImGui::RadioButton(easeName(Ease(ez)), kf->ease == Ease(ez))) { kf->ease = Ease(ez); app.edited(); changed = true; }
         if (ImGui::Button(T("Remover chave"))) {
           tr.keys.erase(tr.keys.begin() + tlKey_);
           tlKey_ = -1;
@@ -1998,13 +2038,21 @@ void Ui::audioRouteUi(App &app, Layer &l) {
         auto it = std::find_if(l.audioMatrix.begin(), l.audioMatrix.end(),
                                [&](const AudioPatch &pa) { return pa.src == c && pa.dst == o; });
         bool on = it != l.audioMatrix.end();
-        ImGui::PushID(c * 64 + o);
+        ImGui::PushID(c);
+        ImGui::PushID(o);
         if (ImGui::Checkbox("##p", &on)) {
-          if (on) l.audioMatrix.push_back({c, o, 1});
-          else l.audioMatrix.erase(it);
-          if (l.audioMatrix.empty()) l.audioMatrix.push_back({0, 0, 0}); // keep "custom" (silent)
+          if (on) {
+            std::erase_if(l.audioMatrix, [](const AudioPatch &pa) { return pa.src < 0; }); // placeholder
+            l.audioMatrix.push_back({c, o, 1});
+          } else {
+            l.audioMatrix.erase(it);
+          }
+          // Keep "custom" with no connection (silent): a placeholder that
+          // routes nothing and never shows as a ticked cell.
+          if (l.audioMatrix.empty()) l.audioMatrix.push_back({-1, -1, 0});
           app.edited();
         }
+        ImGui::PopID();
         ImGui::PopID();
       }
     }
@@ -2176,7 +2224,7 @@ void Ui::inputMeshWindow(App &app) {
   std::string title;
   if (OutputConfig *o = p.output(inputMesh_.outputId)) {
     w = &o->warp;
-    tex = &app.engine.canvas().texture();
+    tex = &app.engine.canvasTexture(o->canvasId); // the output's own canvas
     flip = true; // the canvas texture is bottom-up
     float cw = float(p.canvasWidth(o->canvasId)), ch = float(p.canvasHeight(o->canvasId));
     u0 = o->srcX / cw; v0 = o->srcY / ch; u1 = (o->srcX + o->srcW) / cw; v1 = (o->srcY + o->srcH) / ch;
@@ -2410,6 +2458,7 @@ void Ui::layerInspector(App &app) {
         helpMarker(T("Surface = mapping compartilhado. Várias layers ligadas à mesma surface "
                    "seguem o mesmo mapping: quando o cenário ou o projetor muda de lugar, "
                    "ajuste uma vez e todas acompanham."));
+        bound = p.surface(s.surfaceId); // addSurface above may have moved the surfaces
         if (bound) {
           ImGui::SameLine();
           if (ImGui::SmallButton(T("Soltar"))) { s.surfaceId = -1; app.edited(); }
@@ -3262,7 +3311,9 @@ void Ui::interactionInspector(App &app) {
     ImGui::SetNextItemWidth(90);
     ch |= ImGui::InputInt(T("baud"), &si.baud, 0);
     if (ch) app.edited();
-    if (e.serialInput().running()) ImGui::TextColored(kAccent, T("Lendo %s"), e.serialInput().port().c_str());
+    if (e.serialInput().connected()) ImGui::TextColored(kAccent, T("Lendo %s"), e.serialInput().port().c_str());
+    else if (e.serialInput().running())
+      ImGui::TextColored({1, 0.7f, 0.3f, 1}, T("%s desconectada: tentando de novo a cada segundo"), e.serialInput().port().c_str());
     else if (!e.serialError().empty()) ImGui::TextColored({1, 0.4f, 0.4f, 1}, "%s", e.serialError().c_str());
     helpMarker(T("Cada linha que o Arduino envia vira uma entrada: \"A0 512\" chega como /serial/A0 512, "
                "\"botao 1\" como /serial/botao 1, \"12 34\" como /serial 12 34. Use num mapeamento "
@@ -3789,10 +3840,11 @@ void Ui::projectInspector(App &app) {
     if (ImGui::SmallButton("x")) removeCanvas = c.id;
     ImGui::PopID();
   }
-  if (removeCanvas >= 0) ImGui::OpenPopup("Remover canvas?");
+  if (removeCanvas >= 0) ImGui::OpenPopup("###rmcanvas");
   static int pendingRemove = -1;
   if (removeCanvas >= 0) pendingRemove = removeCanvas;
-  if (ImGui::BeginPopupModal("Remover canvas?", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+  std::string rmTitle = std::string(T("Remover canvas?")) + "###rmcanvas";
+  if (ImGui::BeginPopupModal(rmTitle.c_str(), nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
     ImGui::Text("%s", T("As layers deste canvas serão apagadas. As saídas voltam para o canvas principal."));
     if (ImGui::Button(T("Remover"))) {
       p.removeCanvas(pendingRemove);
@@ -3834,7 +3886,7 @@ void Ui::projectInspector(App &app) {
     ImGui::EndCombo();
   }
   {
-    const int options[] = {0, 2, 4, 6, 8, 10, 12, 16, 24, 32};
+    const int options[] = {0, 2, 4, 6, 8, 10, 12, 16, 24, 32, 48, 64};
     char current[64];
     if (p.audioChannels == 0) std::snprintf(current, sizeof(current), "%s", T("Todos do dispositivo"));
     else std::snprintf(current, sizeof(current), "%d", p.audioChannels);
@@ -3855,8 +3907,16 @@ void Ui::projectInspector(App &app) {
   helpMarker(T("O Lumen usa a placa sozinho, sem o mixer do Windows: menos latência e sem reamostragem. "
                "Outros programas ficam sem som nessa placa. Se o dispositivo recusar, volta ao modo compartilhado."));
 #endif
+  // Applied when the slider is let go: every step would reopen the sound card.
+  static int bufferEdit = -1;
+  int buffer = bufferEdit >= 0 ? bufferEdit : p.audioBufferMs;
   ImGui::SetNextItemWidth(120);
-  if (ImGui::SliderInt(T("Buffer (ms)"), &p.audioBufferMs, 2, 50)) app.edited();
+  if (ImGui::SliderInt(T("Buffer (ms)"), &buffer, 2, 50)) bufferEdit = buffer;
+  if (ImGui::IsItemDeactivatedAfterEdit()) {
+    p.audioBufferMs = buffer;
+    bufferEdit = -1;
+    app.edited();
+  }
   helpMarker(T("Menor = menos atraso entre imagem e som, mas pode estalar em computadores carregados. 10 ms é seguro."));
   ImGui::TextDisabled(T("Em uso: %s · %d canais · %d ms%s"), e.audio.deviceName().c_str(), e.audio.channels(),
                       e.audio.latencyMs(), e.audio.exclusive() ? T(" · exclusivo") : "");
