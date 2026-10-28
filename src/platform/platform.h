@@ -26,6 +26,9 @@ std::string executableDir();
 
 // Windows: reuse the parent terminal for stdout/stderr when there is one.
 void attachConsole();
+// Shows a message box (Windows) and logs it. Used for errors before/without the UI.
+void fatalError(const std::string &message);
+std::string logPath(); // where stdout/stderr go when there is no console
 
 // Command-line arguments as UTF-8 (Windows passes them in the ANSI code page).
 std::vector<std::string> utf8Args(int argc, char **argv);

@@ -33,7 +33,13 @@ for s in $SOURCES; do
   fi
 done
 for p in "${pids[@]}"; do wait "$p"; done
+LINK_LIBS=""
 $CXX -o "$OUT/Lumen/lumen.exe" $OBJS -mwindows -static-libgcc -static-libstdc++ -Wl,-Bstatic -lwinpthread -Wl,-Bdynamic \
+  -L"$GLFW/lib-mingw-w64" -lglfw3 -L"$FF/lib" -lavformat -lavdevice -lavcodec -lswscale -lswresample -lavutil $EXTRA_LIBS \
+  -lopengl32 -lgdi32 -lws2_32 -lcomdlg32 -lshell32 -lole32 -loleaut32 -lwinmm -luuid \
+  -ld3d11 -ldxgi -ld3d9 -lversion -lcomctl32 -lshlwapi -lpsapi
+# Same program as a console application: shows the log live (diagnostics).
+$CXX -o "$OUT/Lumen/lumen-console.exe" $OBJS -mconsole -static-libgcc -static-libstdc++ -Wl,-Bstatic -lwinpthread -Wl,-Bdynamic \
   -L"$GLFW/lib-mingw-w64" -lglfw3 -L"$FF/lib" -lavformat -lavdevice -lavcodec -lswscale -lswresample -lavutil $EXTRA_LIBS \
   -lopengl32 -lgdi32 -lws2_32 -lcomdlg32 -lshell32 -lole32 -loleaut32 -lwinmm -luuid \
   -ld3d11 -ldxgi -ld3d9 -lversion -lcomctl32 -lshlwapi -lpsapi

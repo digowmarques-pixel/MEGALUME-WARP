@@ -227,9 +227,10 @@ bool App::writePpm(const std::string &path, int w, int h, const std::vector<unsi
 }
 
 int App::run(const Options &opts) {
+  std::printf("Lumen %s iniciando\n", LUMEN_VERSION);
   glfwSetErrorCallback(onGlfwError);
   if (!glfwInit()) {
-    std::fprintf(stderr, "Não foi possível iniciar o GLFW\n");
+    platform::fatalError("Não foi possível iniciar a janela (GLFW).");
     return 1;
   }
   glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
@@ -239,14 +240,19 @@ int App::run(const Options &opts) {
   glfwWindowHint(GLFW_MAXIMIZED, opts.frames > 0 ? GLFW_FALSE : GLFW_TRUE);
   window = glfwCreateWindow(opts.width, opts.height, "Lumen", nullptr, nullptr);
   if (!window) {
-    std::fprintf(stderr, "Não foi possível criar a janela OpenGL 3.3. Atualize o driver de vídeo.\n");
+    const char *glfwDesc = nullptr;
+    glfwGetError(&glfwDesc);
+    platform::fatalError(std::string("Esta placa de vídeo não ofereceu OpenGL 3.3.\n\n") +
+                         (glfwDesc ? std::string("Detalhe: ") + glfwDesc + "\n\n" : std::string()) +
+                         "Atualize o driver da placa de vídeo (NVIDIA, AMD ou Intel). Se estiver usando "
+                         "Área de Trabalho Remota ou máquina virtual, rode direto no computador.");
     glfwTerminate();
     return 1;
   }
   glfwMakeContextCurrent(window);
   glfwSwapInterval(1);
   if (!gl::load()) {
-    std::fprintf(stderr, "Funções OpenGL ausentes\n");
+    platform::fatalError("O driver de vídeo não tem todas as funções OpenGL 3.3 necessárias.");
     return 1;
   }
   std::printf("[gl] %s | %s\n", reinterpret_cast<const char *>(glGetString(GL_RENDERER)),
@@ -260,8 +266,9 @@ int App::run(const Options &opts) {
   ImGui_ImplGlfw_InitForOpenGL(window, true);
   ImGui_ImplOpenGL3_Init("#version 330");
 
+  std::printf("[init] interface pronta\n");
   if (!engine.init() || !outputs.init(window)) {
-    std::fprintf(stderr, "Falha ao inicializar o renderizador\n");
+    platform::fatalError("Falha ao compilar os shaders do renderizador (driver de vídeo).");
     return 1;
   }
 

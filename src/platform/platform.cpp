@@ -4,6 +4,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
+#include <exception>
 #include <sstream>
 
 #ifdef _WIN32
@@ -137,12 +138,79 @@ std::vector<std::string> utf8Args(int, char **) {
   return out;
 }
 
+static std::wstring g_logPath;
+
+static std::wstring logPathW() {
+  if (!g_logPath.empty()) return g_logPath;
+  // Next to the exe when writable, otherwise in %TEMP%.
+  wchar_t buf[MAX_PATH];
+  DWORD n = GetModuleFileNameW(nullptr, buf, MAX_PATH);
+  std::wstring dir = std::filesystem::path(std::wstring(buf, n)).parent_path().wstring();
+  std::wstring path = dir + L"\\lumen.log";
+  HANDLE h = CreateFileW(path.c_str(), GENERIC_WRITE, FILE_SHARE_READ, nullptr, CREATE_ALWAYS,
+                         FILE_ATTRIBUTE_NORMAL, nullptr);
+  if (h == INVALID_HANDLE_VALUE) {
+    wchar_t tmp[MAX_PATH];
+    GetTempPathW(MAX_PATH, tmp);
+    path = std::wstring(tmp) + L"lumen.log";
+  } else {
+    CloseHandle(h);
+  }
+  g_logPath = path;
+  return path;
+}
+
+std::string logPath() { return narrow(logPathW()); }
+
+void fatalError(const std::string &message) {
+  std::fprintf(stderr, "[fatal] %s\n", message.c_str());
+  std::fflush(stderr);
+  std::wstring text = widen(message + "\n\nDetalhes em: " + logPath());
+  MessageBoxW(nullptr, text.c_str(), L"Lumen", MB_OK | MB_ICONERROR);
+}
+
+static LONG WINAPI onCrash(EXCEPTION_POINTERS *info) {
+  const EXCEPTION_RECORD *r = info->ExceptionRecord;
+  // Which module (exe or DLL) contains the faulting address.
+  HMODULE mod = nullptr;
+  wchar_t modName[MAX_PATH] = L"?";
+  if (GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                         reinterpret_cast<LPCWSTR>(r->ExceptionAddress), &mod))
+    GetModuleFileNameW(mod, modName, MAX_PATH);
+  char msg[1024];
+  std::snprintf(msg, sizeof(msg), "O Lumen travou (exceção 0x%08lX em %p, módulo %s + 0x%llx).",
+                static_cast<unsigned long>(r->ExceptionCode), r->ExceptionAddress,
+                narrow(std::filesystem::path(modName).filename().wstring()).c_str(),
+                static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(r->ExceptionAddress) -
+                                                reinterpret_cast<uintptr_t>(mod)));
+  fatalError(msg);
+  return EXCEPTION_EXECUTE_HANDLER;
+}
+
 void attachConsole() {
-  // Lumen is a GUI-subsystem program; when started from a terminal, print logs there.
+  // Lumen is a GUI-subsystem program: when started from a terminal, print logs
+  // there; otherwise write them to lumen.log so failures can be diagnosed.
   if (AttachConsole(ATTACH_PARENT_PROCESS)) {
     std::freopen("CONOUT$", "w", stdout);
     std::freopen("CONOUT$", "w", stderr);
+  } else {
+    std::wstring path = logPathW();
+    _wfreopen(path.c_str(), L"w", stdout);
+    _wfreopen(path.c_str(), L"a", stderr);
   }
+  std::setvbuf(stdout, nullptr, _IONBF, 0);
+  std::setvbuf(stderr, nullptr, _IONBF, 0);
+  SetUnhandledExceptionFilter(onCrash);
+  std::set_terminate([] {
+    std::string what = "erro interno";
+    if (auto e = std::current_exception()) {
+      try { std::rethrow_exception(e); }
+      catch (const std::exception &ex) { what = ex.what(); }
+      catch (...) {}
+    }
+    fatalError("O Lumen encontrou um erro e precisa fechar: " + what);
+    std::abort();
+  });
 }
 
 std::string executableDir() {
@@ -191,6 +259,12 @@ std::string saveFileDialog(const std::string &title, const std::string &,
 }
 
 void attachConsole() {}
+
+std::string logPath() { return ""; }
+
+void fatalError(const std::string &message) {
+  std::fprintf(stderr, "[fatal] %s\n", message.c_str());
+}
 
 std::vector<std::string> utf8Args(int argc, char **argv) {
   return std::vector<std::string>(argv, argv + argc);
