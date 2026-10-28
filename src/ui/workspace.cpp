@@ -354,7 +354,7 @@ void Workspace::drawCanvasOverlay(App &app, ImDrawList *dl, ImVec2 origin, float
       std::vector<ImVec2> sp;
       for (auto &v : pts) sp.push_back(toScreen(v));
       bool active = int(si) == app.sel.slice;
-      dl->AddPolyline(sp.data(), int(sp.size()), active ? IM_COL32(250, 158, 46, 255) : IM_COL32(250, 158, 46, 110),
+      dl->AddPolyline(sp.data(), int(sp.size()), active ? IM_COL32(255, 196, 0, 255) : IM_COL32(255, 196, 0, 110),
                       ImDrawFlags_Closed, active ? 2.0f : 1.0f);
     }
     // Masks of the selected layer.
@@ -396,7 +396,7 @@ void Workspace::drawCanvasOverlay(App &app, ImDrawList *dl, ImVec2 origin, float
       break;
     }
     case Tool::Perspective: {
-      for (int c = 0; c < 4; ++c) handle(dl, toScreen(tw.corners[size_t(c)]), IM_COL32(250, 158, 46, 255), app.sel.corner == c);
+      for (int c = 0; c < 4; ++c) handle(dl, toScreen(tw.corners[size_t(c)]), IM_COL32(255, 196, 0, 255), app.sel.corner == c);
       if (clicked) {
         int best = -1;
         float bestD = kPick;
@@ -434,14 +434,14 @@ void Workspace::drawCanvasOverlay(App &app, ImDrawList *dl, ImVec2 origin, float
       for (int r = 0; r < w.meshRows; ++r)
         for (int c = 0; c + 1 < w.meshCols; ++c)
           dl->AddLine(toScreen(transformedWarp(*sel, slice).meshPointDest(c, r)),
-                      toScreen(transformedWarp(*sel, slice).meshPointDest(c + 1, r)), IM_COL32(250, 158, 46, 90));
+                      toScreen(transformedWarp(*sel, slice).meshPointDest(c + 1, r)), IM_COL32(255, 196, 0, 90));
       for (int c = 0; c < w.meshCols; ++c)
         for (int r = 0; r + 1 < w.meshRows; ++r)
           dl->AddLine(toScreen(transformedWarp(*sel, slice).meshPointDest(c, r)),
-                      toScreen(transformedWarp(*sel, slice).meshPointDest(c, r + 1)), IM_COL32(250, 158, 46, 90));
+                      toScreen(transformedWarp(*sel, slice).meshPointDest(c, r + 1)), IM_COL32(255, 196, 0, 90));
       for (int r = 0; r < w.meshRows; ++r)
         for (int c = 0; c < w.meshCols; ++c)
-          handle(dl, toScreen(tw.meshPointDest(c, r)), IM_COL32(250, 158, 46, 255),
+          handle(dl, toScreen(tw.meshPointDest(c, r)), IM_COL32(255, 196, 0, 255),
                  app.sel.meshPoint == r * w.meshCols + c, true);
       if (clicked) {
         int best = -1;

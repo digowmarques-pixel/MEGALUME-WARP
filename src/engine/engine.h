@@ -8,6 +8,7 @@
 #include "control/osc.h"
 #include "core/project.h"
 #include "engine/compositor.h"
+#include "engine/effects.h"
 #include "engine/leds.h"
 #include "io/spout.h"
 #include "media/audio.h"
@@ -16,6 +17,7 @@
 #include <deque>
 #include <map>
 #include <memory>
+#include <set>
 
 namespace lumen {
 
@@ -121,6 +123,12 @@ public:
   // LED pixel mapping (Art-Net / sACN).
   LedEngine leds;
 
+  // Effects (ISF) and the blob tracker.
+  IsfCatalog isfCatalog;
+  const std::vector<Blob> *blobs(int layerId) const;
+  const BlobTracker *blobTracker(int layerId) const;
+  void learnBlobBackground(int layerId) { learnBackground_.insert(layerId); }
+
   // Spout output of the canvas (Windows).
   std::string spoutStatus() const { return spoutStatus_; }
 
@@ -155,6 +163,12 @@ private:
   DmxInputConfig dmxInConfig_;
   std::string dmxInError_;
   int lastScheduleMinute_ = -1;
+  EffectTools effectTools_;
+  std::map<int, EffectChain> chains_;      // 2 * layer id + (0 current, 1 previous)
+  std::map<int, BlobReport> blobReports_;  // by layer
+  std::map<int, std::vector<int>> blobSlots_; // by layer: blob id in each slot (0 = free)
+  std::set<int> learnBackground_;
+  void emitBlobs(const Layer &l, const BlobReport &r);
   double time_ = 0;
   uint64_t frame_ = 0;
   OscServer osc_;

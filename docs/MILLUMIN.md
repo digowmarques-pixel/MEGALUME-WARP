@@ -20,8 +20,8 @@ Legenda: ✅ o Lumen tem · 🟡 o Lumen tem parte · ⬜ ainda não tem.
 | Transição por layer (crossfade, fade in/out) | ⬜ |
 | Timeline com keyframes, curvas, segmentos, intro, assíncrona, flags | ⬜ (próxima prioridade) |
 | Media Editor: corte (crop), in/out, efeitos por mídia | 🟡 (recorte UV por fatia) |
-| Efeitos em pilha: RGBA, HSLA, níveis, LUT, limiar, espelho, borda, chroma key, soft crop, blur, ISF | 🟡 (brilho, contraste, saturação, matiz, inverter, tinta) |
-| Mattes: alpha, alpha invertido, luma, luma invertido | ⬜ |
+| Efeitos em pilha: RGBA, HSLA, níveis, LUT, limiar, espelho, borda, chroma key, soft crop, blur, ISF | ✅ v0.8 (ISF; LUT ⬜) |
+| Mattes: alpha, alpha invertido, luma, luma invertido | ✅ v0.8 |
 | Máscaras: mostrar/esconder em pilha, invertida, opacidade, feather, escala, bezier, SVG | ✅ v0.7 |
 | Mídias: texto dinâmico, navegador, captura de tela, slideshow, PDF, color card com 10 cores | 🟡 (geradores, câmera, rede, Spout) |
 | Áudio: volume por mídia, roteamento por layer e matriz de canais | 🟡 (volume, mudo, placa de som) |
@@ -61,7 +61,7 @@ Legenda: ✅ o Lumen tem · 🟡 o Lumen tem parte · ⬜ ainda não tem.
 |---|---|
 | Interações: entrada → transformação → ação, com "learn" | ✅ |
 | Entradas: teclado, MIDI, OSC, DMX, Art-Net, sACN | ✅ v0.6 |
-| Entradas: timecode, gamepad, Kinect, Leap Motion, áudio, blob tracker, scheduler | 🟡 (agenda v0.6) |
+| Entradas: timecode, gamepad, Kinect, Leap Motion, áudio, blob tracker, scheduler | 🟡 (agenda v0.6, blob tracker v0.8) |
 | Transformações: nenhuma, chave, alternar, linear, acumular; calibrar; estabilizar | ✅ v0.6 |
 | Grupos de interações limitados a colunas | ✅ v0.6 (por mapeamento) |
 | Data-tracks: MIDI, OSC, DMX, string, MSC, PJLink, ATEM por coluna | 🟡 (ações OSC por coluna) |

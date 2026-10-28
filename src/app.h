@@ -24,6 +24,8 @@ struct Options {
   bool noOutputs = false;       // never open output windows
   bool openOutputs = false;     // open output windows at start (installations)
   bool outputControls = false;  // calibration overlay on the first output
+  bool checkEffects = false;    // compile every built-in ISF shader and exit
+  std::string checkEffectsDir;  // another folder of .fs files
   int width = 1600, height = 900;
   std::string blend;             // "3x1:0.15:1920x1080" applies the blend assistant at start
   int pattern = -1;              // test pattern for every output (TestPattern value)

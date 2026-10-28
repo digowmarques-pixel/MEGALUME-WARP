@@ -28,7 +28,7 @@ public:
   void render(const Project &p, int canvasId, const std::vector<LayerDraw> &draws, DynamicMesh &mesh,
               float masterOpacity);
   Framebuffer &canvas() { return canvas_; }
-  void releaseLayer(int layerId) { maskFbs_.erase(layerId); }
+  void releaseLayer(int layerId) { maskFbs_.erase(layerId); matteFbs_.erase(layerId); }
 
 private:
   void renderMask(const Layer &l, int w, int h, DynamicMesh &mesh);
@@ -37,6 +37,7 @@ private:
   Framebuffer canvas_;
   MaskRenderer masks_;
   std::map<int, std::unique_ptr<Framebuffer>> maskFbs_;
+  std::map<int, std::unique_ptr<Framebuffer>> matteFbs_; // matte layers, rendered alone
 };
 
 } // namespace lumen

@@ -4,8 +4,11 @@
 #include "media/hap.h"
 #include "core/dmx.h"
 #include "core/project.h"
+#include "core/blob.h"
+#include "core/isf.h"
 #include "core/svg.h"
 #include "core/warp.h"
+#include "platform/platform.h"
 
 #include <algorithm>
 #include <cmath>
@@ -527,7 +530,120 @@ static void testV07() {
   CHECK(std::none_of(mc2.layers.begin(), mc2.layers.end(), [&](auto &l) { return l.canvasId == ledId; }));
 }
 
+static void testV08() {
+  // ISF header parsing and translation.
+  const char *src = R"isf(/*{
+    "DESCRIPTION": "test", "CATEGORIES": ["Cor"],
+    "INPUTS": [
+      {"NAME": "inputImage", "TYPE": "image"},
+      {"NAME": "amount", "TYPE": "float", "DEFAULT": 0.5, "MIN": 0, "MAX": 2},
+      {"NAME": "tint", "TYPE": "color", "DEFAULT": [1, 0, 0, 1]},
+      {"NAME": "mode", "TYPE": "long", "VALUES": [0, 1, 2], "LABELS": ["a", "b", "c"], "DEFAULT": 1},
+      {"NAME": "pos", "TYPE": "point2D"},
+      {"NAME": "on", "TYPE": "bool", "DEFAULT": true}
+    ],
+    "PASSES": [{"TARGET": "half", "WIDTH": "floor($WIDTH/2)", "HEIGHT": "$HEIGHT / 2", "PERSISTENT": true}, {}],
+    "IMPORTED": {"noise": {"PATH": "noise.png"}}
+  }*/
+  #version 120
+  void main() { gl_FragColor = IMG_THIS_PIXEL(inputImage) * amount; }
+  )isf";
+  IsfInfo info;
+  std::string err;
+  CHECK(parseIsf(src, info, &err));
+  CHECK(info.filter && !info.transition && info.inputs.size() == 6 && info.passes.size() == 2);
+  CHECK(info.passes[0].persistent && info.passes[0].target == "half" && info.imported.size() == 1);
+  CHECK(info.categories.size() == 1 && info.categories[0] == "Cor");
+  std::string glsl = isfFragmentSource(info);
+  CHECK(glsl.find("#version 330") == 0 && glsl.find("#version 120") == std::string::npos);
+  CHECK(glsl.find("uniform float amount;") != std::string::npos && glsl.find("uniform sampler2D half;") != std::string::npos);
+  CHECK(glsl.find("uniform sampler2D noise;") != std::string::npos && glsl.find("_inputImage_imgSize") != std::string::npos);
+  IsfValues v;
+  isfDefaults(info, v);
+  CHECK(v["amount"].size() == 1 && v["amount"][0] == 0.5f && v["tint"].size() == 4 && v["mode"][0] == 1.0f);
+  CHECK(v["pos"].size() == 2 && v["on"][0] == 1.0f && v.count("inputImage") == 0);
+  bool ok = false;
+  CHECK(isfEval("floor($WIDTH/2)", {{"WIDTH", 1001}}, &ok) == 500 && ok);
+  CHECK(std::fabs(isfEval("max($WIDTH, $HEIGHT) * 0.5 + (2 - 1)", {{"WIDTH", 100}, {"HEIGHT", 300}}, &ok) - 151) < 1e-4f && ok);
+  isfEval("$NOPE + 1", {}, &ok);
+  CHECK(!ok);
+  CHECK(!parseIsf("void main() {}", info, &err) && !err.empty());
+
+  // Blob tracker: two bright squares on black.
+  int W = 100, H = 50;
+  std::vector<uint8_t> img(size_t(W * H), 0);
+  auto square = [&](int x0, int y0, int s, uint8_t v) {
+    for (int y = y0; y < y0 + s; ++y)
+      for (int x = x0; x < x0 + s; ++x) img[size_t(y * W + x)] = v;
+  };
+  square(10, 10, 10, 255);
+  square(70, 20, 14, 255);
+  BlobTracker t;
+  BlobParams bp;
+  bp.smoothing = 0;
+  auto b = t.process(img.data(), W, H, bp);
+  CHECK(b.size() == 2);
+  if (b.size() == 2) {
+    const Blob &a = b[0].x < b[1].x ? b[0] : b[1], &c = b[0].x < b[1].x ? b[1] : b[0];
+    CHECK(std::fabs(a.x - 0.15f) < 0.01f && std::fabs(a.y - 0.3f) < 0.02f && std::fabs(a.w - 0.1f) < 0.01f);
+    CHECK(std::fabs(c.x - 0.77f) < 0.01f && c.area > a.area);
+    int idA = a.id;
+    // Move the left square a little: it keeps its id.
+    std::fill(img.begin(), img.end(), 0);
+    square(13, 11, 10, 255);
+    square(70, 20, 14, 255);
+    auto b2 = t.process(img.data(), W, H, bp);
+    CHECK(b2.size() == 2 && std::any_of(b2.begin(), b2.end(), [&](const Blob &x) { return x.id == idA && x.x > 0.17f; }));
+  }
+  // Too small blobs are ignored; close blobs merge.
+  std::fill(img.begin(), img.end(), 0);
+  square(40, 20, 2, 255); // 4 px = 0.0008 of the image
+  CHECK(t.process(img.data(), W, H, bp).empty());
+  std::fill(img.begin(), img.end(), 0);
+  square(10, 10, 8, 255);
+  square(20, 10, 8, 255); // 2 px apart
+  bp.mergeDistance = 0.05f;
+  CHECK(t.process(img.data(), W, H, bp).size() == 1);
+  bp.mergeDistance = 0;
+  CHECK(t.process(img.data(), W, H, bp).size() == 2);
+  // Background subtraction: a mid-grey person on a mid-grey wall with a bright lamp.
+  BlobTracker bg;
+  std::vector<uint8_t> wall(size_t(W * H), 120);
+  for (int x = 0; x < 20; ++x) wall[size_t(5 * W + x)] = 250; // a lamp in the empty scene
+  bg.setBackground(wall.data(), W, H);
+  std::vector<uint8_t> scene = wall;
+  for (int y = 20; y < 40; ++y)
+    for (int x = 50; x < 60; ++x) scene[size_t(y * W + x)] = 40; // darker person
+  BlobParams bq;
+  bq.threshold = 0.2f;
+  auto pb = bg.process(scene.data(), W, H, bq);
+  CHECK(pb.size() == 1 && pb.size() == 1 && std::fabs(pb[0].x - 0.55f) < 0.01f);
+
+  // Effects and mattes survive a save / load; built-ins use a portable path.
+  Project p = Project::makeDefault();
+  Effect fx;
+  fx.path = builtinEffectsDir() + "/Desfoque.fs";
+  fx.name = "Desfoque";
+  fx.params["radius"] = {12};
+  p.layers[0].effects.push_back(fx);
+  Effect bt;
+  bt.path = kBlobTrackerId;
+  p.layers[0].effects.push_back(bt);
+  p.layers[0].blend = BlendMode::LumaMatteInverted;
+  MediaItem &sh = p.addShader(builtinEffectsDir() + "/Ruido.fs");
+  sh.shaderParams["scale"] = {7};
+  std::string json = serializeProject(p, "/tmp/somewhere");
+  CHECK(json.find("@lumen/Desfoque.fs") != std::string::npos && json.find("@lumen/Ruido.fs") != std::string::npos);
+  Project q;
+  CHECK(deserializeProject(json, "/tmp/elsewhere", q));
+  CHECK(q.layers[0].effects.size() == 2 && q.layers[0].effects[0].params["radius"][0] == 12);
+  CHECK(platform::toPath(q.layers[0].effects[0].path) == platform::toPath(builtinEffectsDir()) / "Desfoque.fs");
+  CHECK(q.layers[0].effects[1].isBlobTracker() && q.layers[0].blend == BlendMode::LumaMatteInverted);
+  CHECK(q.library.back().type == MediaType::Shader && q.library.back().shaderParams["scale"][0] == 7);
+}
+
 int main() {
+  testV08();
   testV07();
   testV06();
   testBlendLayout();

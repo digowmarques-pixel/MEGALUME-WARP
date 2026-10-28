@@ -4,6 +4,7 @@
 
 #include "core/blend.h"
 #include "core/dmx.h"
+#include "core/isf.h"
 #include "core/warp.h"
 
 #include <map>
@@ -17,7 +18,7 @@ struct Color {
 };
 
 // Values are stored in project files: only append.
-enum class MediaType { Video, Image, Generator, Live, Spout, Canvas };
+enum class MediaType { Video, Image, Generator, Live, Spout, Canvas, Shader };
 enum class GeneratorKind { TestCard, Solid, Gradient, Grid, Plasma, Stripes, COUNT };
 const char *generatorName(GeneratorKind k);
 
@@ -39,6 +40,21 @@ struct MediaItem {
   // Spout receiver: `path` is the sender name ("" = active sender).
   // Canvas (video routing): shows another canvas of the project.
   int canvasRef = 0;
+  // Shader (ISF generator): `path` is the .fs file, rendered at width x height.
+  IsfValues shaderParams;
+};
+
+// Built-in effects and generators (.fs files shipped next to lumen.exe).
+std::string builtinEffectsDir();
+constexpr const char *kBlobTrackerId = "lumen:blob";
+
+// One effect of a layer's stack: an ISF filter (or the blob tracker).
+struct Effect {
+  std::string path; // ISF file, or kBlobTrackerId
+  std::string name;
+  bool enabled = true;
+  IsfValues params;
+  bool isBlobTracker() const { return path == kBlobTrackerId; }
 };
 
 // Canvas 0 is the main canvas (Project::canvasW / canvasH / background); more
@@ -51,7 +67,9 @@ struct CanvasConfig {
   Color background{0, 0, 0, 1};
 };
 
-enum class BlendMode { Normal, Add, Multiply, Screen };
+// Mattes: the layer is not drawn; it masks the layer just below it.
+enum class BlendMode { Normal, Add, Multiply, Screen, AlphaMatte, AlphaMatteInverted, LumaMatte, LumaMatteInverted, COUNT };
+inline bool isMatte(BlendMode b) { return b >= BlendMode::AlphaMatte && b < BlendMode::COUNT; }
 const char *blendName(BlendMode b);
 
 // A region of the media (crop in UV) mapped onto a surface with its own warp.
@@ -68,7 +86,7 @@ struct Slice {
 struct Surface {
   int id = 0;
   std::string name = "Surface";
-  Color color{0.98f, 0.62f, 0.18f, 1};
+  Color color{1.0f, 0.77f, 0.0f, 1};
   Warp warp; // canvas pixels
 };
 
@@ -122,6 +140,7 @@ struct Layer {
   LayerTransform transform;
   std::vector<Slice> slices;
   std::vector<Mask> masks;
+  std::vector<Effect> effects; // applied in order to the media, before mapping
 };
 
 // What a media does when it reaches its end. Values are stored: only append.
@@ -392,6 +411,7 @@ struct Project {
   // Layers of the canvas are removed; outputs, LEDs and media move to canvas 0.
   void removeCanvas(int id);
   MediaItem &addCanvasMedia(int canvasId);
+  MediaItem &addShader(const std::string &path);
   Surface *surface(int id);
   Surface &addSurface(const Warp &w);
   // Copies every surface's mapping into the slices bound to it (and unbinds

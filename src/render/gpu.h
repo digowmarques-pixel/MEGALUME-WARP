@@ -25,6 +25,7 @@ public:
   void set(const char *n, float a, float b, float c) const { glUniform3f(loc(n), a, b, c); }
   void set(const char *n, float a, float b, float c, float d) const { glUniform4f(loc(n), a, b, c, d); }
   bool valid() const { return prog_ != 0; }
+  void swap(Shader &o) { GLuint t = prog_; prog_ = o.prog_; o.prog_ = t; }
 
 private:
   GLuint prog_ = 0;

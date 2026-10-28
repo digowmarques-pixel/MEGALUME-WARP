@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(Lumen VERSION 0.7.0 LANGUAGES C CXX)
+project(Lumen VERSION 0.8.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -91,6 +91,7 @@ add_executable(lumen
   src/gl/gl.cpp
   src/render/gpu.cpp
   src/render/mask.cpp
+  src/render/isf_renderer.cpp
   src/media/decoder.cpp
   src/media/hap.cpp
   src/media/upload.cpp
@@ -103,9 +104,12 @@ add_executable(lumen
   src/core/blend.cpp
   src/core/project.cpp
   src/core/svg.cpp
+  src/core/isf.cpp
+  src/core/blob.cpp
   src/engine/engine.cpp
   src/engine/leds.cpp
   src/engine/compositor.cpp
+  src/engine/effects.cpp
   src/engine/outputs.cpp
   src/control/osc.cpp
   src/control/dmxin.cpp
@@ -127,7 +131,7 @@ elseif(APPLE)
 else()
   target_link_libraries(lumen PRIVATE ${CMAKE_DL_LIBS} m) # miniaudio loads backends at runtime
 endif()
-target_compile_definitions(lumen PRIVATE GLFW_INCLUDE_NONE LUMEN_VERSION="${PROJECT_VERSION}")
+target_compile_definitions(lumen PRIVATE GLFW_INCLUDE_NONE LUMEN_VERSION="${PROJECT_VERSION}" LUMEN_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 
 if(WIN32)
   target_link_libraries(lumen PRIVATE ws2_32 comdlg32 shell32)
@@ -161,9 +165,12 @@ if(LUMEN_BUILD_TESTS)
     src/core/blend.cpp
     src/core/project.cpp
     src/core/svg.cpp
+    src/core/isf.cpp
+    src/core/blob.cpp
     src/control/osc.cpp
     src/platform/platform.cpp)
   target_include_directories(lumen_tests PRIVATE src third_party)
+  target_compile_definitions(lumen_tests PRIVATE LUMEN_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
   target_link_libraries(lumen_tests PRIVATE rtmidi)
   if(WIN32)
     target_link_libraries(lumen_tests PRIVATE ws2_32 comdlg32 shell32)

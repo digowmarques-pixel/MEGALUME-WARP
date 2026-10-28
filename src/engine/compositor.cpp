@@ -20,6 +20,8 @@ uniform float uSaturation;
 uniform float uHue;      // radians
 uniform int uInvert;
 uniform vec4 uTint;
+uniform sampler2D uMatte; // layer above used as a matte
+uniform int uMatteMode;   // 0 none, 1 alpha, 2 alpha inverted, 3 luma, 4 luma inverted
 
 vec3 hueRotate(vec3 c, float a) {
   const vec3 k = vec3(0.57735);
@@ -45,6 +47,12 @@ void main() {
 
   float a = c.a * uOpacity * aa;
   if (uUseMask != 0) a *= texture(uMask, gl_FragCoord.xy / uCanvas).r;
+  if (uMatteMode != 0) {
+    vec4 m = texture(uMatte, gl_FragCoord.xy / uCanvas);
+    float v = uMatteMode <= 2 ? m.a : dot(m.rgb, vec3(0.2126, 0.7152, 0.0722));
+    if (uMatteMode == 2 || uMatteMode == 4) v = 1.0 - v;
+    a *= v;
+  }
   fragColor = vec4(rgb * a, a); // premultiplied
 }
 )";
@@ -91,30 +99,16 @@ void Compositor::render(const Project &p, int canvasId, const std::vector<LayerD
     else maskFbs_.erase(d.layer->id);
   }
 
-  canvas_.resize(W, H);
-  canvas_.bind();
-  const Color bg = p.canvasBackground(canvasId);
-  glClearColor(bg.r * bg.a, bg.g * bg.a, bg.b * bg.a, bg.a);
-  glClear(GL_COLOR_BUFFER_BIT);
-  glEnable(GL_BLEND);
-  glBlendEquation(GL_FUNC_ADD);
-
   const Shader &s = layerShader_;
-  s.use();
-  s.set("uTarget", float(W), float(H));
-  s.set("uCanvas", float(W), float(H));
-  s.set("uTex", 0);
-  s.set("uMask", 1);
-
   std::vector<float> verts;
-  for (auto &d : draws) {
+  auto drawLayer = [&](const LayerDraw &d, bool forceNormal) {
     const Layer &l = *d.layer;
-    if (!d.texture || d.texture->empty()) continue;
-    switch (l.blend) {
-    case BlendMode::Normal: glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA); break;
+    if (!d.texture || d.texture->empty()) return;
+    switch (forceNormal ? BlendMode::Normal : l.blend) {
     case BlendMode::Add: glBlendFunc(GL_ONE, GL_ONE); break;
     case BlendMode::Multiply: glBlendFunc(GL_DST_COLOR, GL_ONE_MINUS_SRC_ALPHA); break;
     case BlendMode::Screen: glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_COLOR); break;
+    default: glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA); break;
     }
     d.texture->bind(0);
     auto mask = maskFbs_.find(l.id);
@@ -127,7 +121,6 @@ void Compositor::render(const Project &p, int canvasId, const std::vector<LayerD
     s.set("uHue", l.fx.hue * 3.14159265f / 180.0f);
     s.set("uInvert", l.fx.invert ? 1 : 0);
     s.set("uTint", l.fx.tint.r, l.fx.tint.g, l.fx.tint.b, l.fx.tint.a);
-
     for (auto &slice : l.slices) {
       if (!slice.enabled) continue;
       Warp w = transformedWarp(l, slice);
@@ -137,6 +130,61 @@ void Compositor::render(const Project &p, int canvasId, const std::vector<LayerD
       w.tessellate(w.hasMesh() ? 48 : 24, slice.u0, slice.v0, slice.u1, slice.v1, verts);
       mesh.draw(verts);
     }
+  };
+  auto setup = [&]() {
+    glEnable(GL_BLEND);
+    glBlendEquation(GL_FUNC_ADD);
+    s.use();
+    s.set("uTarget", float(W), float(H));
+    s.set("uCanvas", float(W), float(H));
+    s.set("uTex", 0);
+    s.set("uMask", 1);
+    s.set("uMatte", 2);
+    s.set("uMatteMode", 0);
+  };
+
+  // Matte layers are drawn alone first (an empty matte hides everything).
+  std::map<int, Framebuffer *> mattes;
+  for (auto &l : p.layers)
+    if (l.canvasId == canvasId && l.visible && isMatte(l.blend)) {
+      auto &fb = matteFbs_[l.id];
+      if (!fb) fb = std::make_unique<Framebuffer>();
+      fb->resize(W, H);
+      fb->bind();
+      glClearColor(0, 0, 0, 0);
+      glClear(GL_COLOR_BUFFER_BIT);
+      setup();
+      for (auto &d : draws)
+        if (d.layer->id == l.id) drawLayer(d, true);
+      mattes[l.id] = fb.get();
+    }
+  // The matte of a layer is the layer just above it on the same canvas.
+  auto matteFor = [&](const Layer &l, int &mode) -> Framebuffer * {
+    const Layer *above = nullptr;
+    for (auto &x : p.layers) {
+      if (&x == &l) break;
+      if (x.canvasId == canvasId) above = &x;
+    }
+    if (!above || !isMatte(above->blend)) return nullptr;
+    auto it = mattes.find(above->id);
+    if (it == mattes.end()) return nullptr;
+    mode = int(above->blend) - int(BlendMode::AlphaMatte) + 1;
+    return it->second;
+  };
+
+  canvas_.resize(W, H);
+  canvas_.bind();
+  const Color bg = p.canvasBackground(canvasId);
+  glClearColor(bg.r * bg.a, bg.g * bg.a, bg.b * bg.a, bg.a);
+  glClear(GL_COLOR_BUFFER_BIT);
+  setup();
+  for (auto &d : draws) {
+    if (isMatte(d.layer->blend)) continue;
+    int mode = 0;
+    Framebuffer *matte = matteFor(*d.layer, mode);
+    if (matte) matte->texture().bind(2);
+    s.set("uMatteMode", matte ? mode : 0);
+    drawLayer(d, false);
   }
   glActiveTexture(GL_TEXTURE0);
   glDisable(GL_BLEND);

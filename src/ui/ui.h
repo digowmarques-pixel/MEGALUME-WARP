@@ -72,6 +72,8 @@ private:
   void interactionInspector(App &app);
   void softEdgeControls(App &app, OutputConfig *o);
   void blackAndColorControls(App &app, OutputConfig *o);
+  void effectsUi(App &app, Layer &l);
+  void blobUi(App &app, Layer &l);
   void openInputMesh(int layerId, int slice, int outputId);
   void inputMeshWindow(App &app);
   struct InputMeshEdit { bool open = false; int layerId = -1, slice = 0, outputId = -1, point = -1; } inputMesh_;
@@ -90,6 +92,7 @@ private:
   Workspace outputsWs_;   // workspace embedded in the mapping page
   int calibrating_ = -1; // mapping whose input range is being learnt
   float calMin_ = 0, calMax_ = 0;
+  ImFont *bigFont_ = nullptr;
   int dashZoom_ = 1;      // 0 small, 1 medium, 2 large cells
   bool showDemo_ = false;
   bool showHelp_ = false;

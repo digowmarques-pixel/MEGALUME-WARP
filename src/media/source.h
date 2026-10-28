@@ -7,6 +7,7 @@
 #include "media/decoder.h"
 #include "media/upload.h"
 #include "render/gpu.h"
+#include "render/isf_renderer.h"
 
 #include <functional>
 #include <map>
@@ -85,6 +86,7 @@ private:
     bool probed = false, failed = false;
     std::shared_ptr<LiveInput> live;
     const Texture *liveTex = nullptr;
+    std::unique_ptr<IsfRenderer> isf; // shader thumbnails
   };
   Entry &entry(const MediaItem &m);
   std::map<int, Entry> entries_;
@@ -121,6 +123,7 @@ private:
   const Texture *videoTex_ = nullptr;
   bool hasFrame_ = false;
   std::unique_ptr<Framebuffer> genFb_;
+  std::unique_ptr<IsfRenderer> isf_;
   std::shared_ptr<LiveInput> live_;
   // Audio: the voice's played-sample counter is the master clock.
   AudioEngine *audio_ = nullptr;

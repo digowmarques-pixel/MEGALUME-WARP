@@ -11,7 +11,8 @@
 namespace lumen {
 
 bool Engine::init() {
-  bool ok = generators.init() && compositor_.init() && leds.init();
+  bool ok = generators.init() && compositor_.init() && leds.init() && effectTools_.init();
+  effectTools_.generators = &generators;
   if (!ok) std::fprintf(stderr, "[engine] shader initialisation failed\n");
   return ok;
 }
@@ -22,6 +23,7 @@ void Engine::shutdown() {
   dmxIn_.stop();
   states_.clear(); // playbacks remove their audio voices
   extraCompositors_.clear();
+  chains_.clear();
   cache.clear();
   spoutOut_.release();
   audio.stop();
@@ -34,6 +36,60 @@ MediaContext Engine::context() {
   MediaContext ctx{cache, generators, mesh, &audio, s, frame_, {}};
   ctx.canvasTexture = [this](int id) -> const Texture * { return &canvasTexture(id); };
   return ctx;
+}
+
+const std::vector<Blob> *Engine::blobs(int layerId) const {
+  auto it = blobReports_.find(layerId);
+  return it == blobReports_.end() ? nullptr : &it->second.blobs;
+}
+
+const BlobTracker *Engine::blobTracker(int layerId) const {
+  auto it = chains_.find(layerId * 2);
+  return it == chains_.end() ? nullptr : it->second.tracker();
+}
+
+// Blobs become inputs for the mappings (next frame):
+//   /blob/<layer>/count n
+//   /blob/<layer>/<slot> x y w h        (slot 1.. keeps following the same blob)
+//   /blob/<layer>/<slot>/x, /y, /size, /active
+//   /blob/<layer>/centroid x y           (average of all blobs)
+void Engine::emitBlobs(const Layer &l, const BlobReport &r) {
+  std::string base = "/blob/" + l.name;
+  auto &slots = blobSlots_[l.id];
+  // Free the slots of lost blobs, then give new blobs the first free slot.
+  for (size_t s = 0; s < slots.size(); ++s)
+    if (slots[s] && std::none_of(r.blobs.begin(), r.blobs.end(), [&](const Blob &b) { return b.id == slots[s]; })) {
+      injected_.push_back({base + "/" + std::to_string(s + 1) + "/active", {int32_t(0)}, "blob"});
+      slots[s] = 0;
+    }
+  for (auto &b : r.blobs)
+    if (std::find(slots.begin(), slots.end(), b.id) == slots.end()) {
+      auto freeSlot = std::find(slots.begin(), slots.end(), 0);
+      if (freeSlot != slots.end()) *freeSlot = b.id;
+      else slots.push_back(b.id);
+    }
+  std::vector<OscMessage> out;
+  out.push_back({base + "/count", {int32_t(r.blobs.size())}, "blob"});
+  float cx = 0, cy = 0;
+  for (size_t s = 0; s < slots.size(); ++s) {
+    if (!slots[s]) continue;
+    auto b = std::find_if(r.blobs.begin(), r.blobs.end(), [&](const Blob &x) { return x.id == slots[s]; });
+    if (b == r.blobs.end()) continue;
+    std::string a = base + "/" + std::to_string(s + 1);
+    out.push_back({a, {b->x, b->y, b->w, b->h}, "blob"});
+    out.push_back({a + "/x", {b->x}, "blob"});
+    out.push_back({a + "/y", {b->y}, "blob"});
+    out.push_back({a + "/size", {std::sqrt(b->area)}, "blob"});
+    out.push_back({a + "/active", {int32_t(1)}, "blob"});
+    cx += b->x;
+    cy += b->y;
+  }
+  if (!r.blobs.empty())
+    out.push_back({base + "/centroid", {cx / float(r.blobs.size()), cy / float(r.blobs.size())}, "blob"});
+  for (auto &m : out) {
+    if (r.sendOsc) sendOsc(m);
+    injected_.push_back(std::move(m));
+  }
 }
 
 const Texture &Engine::canvasTexture(int id) {
@@ -339,6 +395,7 @@ void Engine::update(double dt) {
     const OscMessage &m = inbox_[i];
     bool known = i < oscCount ? handleOsc(m) : true;
     applyMappings(m);
+    if (m.sender == "blob") continue; // every frame: see the Interaction panel instead
     oscLog.push_back((known ? "" : "? ") + m.toString() + "   [" + m.sender + "]");
   }
   while (oscLog.size() > 200) oscLog.pop_front();
@@ -376,6 +433,21 @@ void Engine::update(double dt) {
     };
     tick(st.current, st.currentTex, incomingOpacity(st));
     tick(st.previous, st.previousTex, outgoingOpacity(st));
+    if (layer && !layer->effects.empty()) {
+      int id = it->first;
+      BlobReport report;
+      bool learn = learnBackground_.erase(id) > 0;
+      if (st.currentTex)
+        st.currentTex = chains_[id * 2].apply(layer->effects, st.currentTex, time_, effectTools_, mesh, &report, learn);
+      if (st.previousTex)
+        st.previousTex = chains_[id * 2 + 1].apply(layer->effects, st.previousTex, time_, effectTools_, mesh, nullptr, false);
+      bool tracking = std::any_of(layer->effects.begin(), layer->effects.end(),
+                                  [](const Effect &e) { return e.enabled && e.isBlobTracker(); });
+      if (tracking && st.currentTex) {
+        blobReports_[id] = report;
+        emitBlobs(*layer, report);
+      }
+    }
     if (st.current && !st.fadingOut && !st.endHandled && st.endMode != EndMode::Loop &&
         st.endMode != EndMode::Freeze && st.current->finished()) {
       st.endHandled = true;
@@ -384,6 +456,15 @@ void Engine::update(double dt) {
     if (!st.current && !st.previous) it = states_.erase(it);
     else ++it;
   }
+  // Effect chains and blob data of layers without effects / playback.
+  for (auto it = chains_.begin(); it != chains_.end();) {
+    const Layer *l = project.layer(it->first / 2);
+    bool keep = l && !l->effects.empty() && states_.count(it->first / 2);
+    it = keep ? std::next(it) : chains_.erase(it);
+  }
+  for (auto it = blobReports_.begin(); it != blobReports_.end();)
+    it = chains_.count(it->first * 2) ? std::next(it) : blobReports_.erase(it);
+
   // Acted upon after the loop: these start transitions (they change states_).
   bool next = false;
   for (int id : ended) {

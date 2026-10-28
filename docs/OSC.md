@@ -103,6 +103,13 @@ principal e mapeie `launchedColumn` → `/millumin/action/launchColumn` no Chata
 echo "/millumin/action/launchColumn 2" | nc -u -w1 127.0.0.1 8000
 ```
 
+## Efeitos e blobs
+
+- `/layer:Nome/effect1/<parâmetro> <valor>` (ou `/lumen/layer/1/effect1/radius 12`): parâmetro
+  do 1º efeito da layer, pelo nome do ISF. `/effect1/enabled 0` desliga o efeito.
+- O rastreamento de blobs gera `/blob/<layer>/count`, `/blob/<layer>/1 x y l a`,
+  `/blob/<layer>/1/x` etc. Veja [EFEITOS.md](EFEITOS.md).
+
 ## Teclado e DMX como entrada
 
 - **Teclado**: cada tecla vira `/key/<tecla>` (`/key/a`, `/key/1`, `/key/f1`, `/key/left`,

@@ -146,6 +146,23 @@ bool Engine::setLayerProperty(Layer &l, const std::vector<std::string> &propIn, 
     }
     return false;
   }
+  // /effect1/<param> [values]: parameters of the layer's effects (1 = first).
+  if (p0.rfind("effect", 0) == 0 && prop.size() >= 2) {
+    int n = 0;
+    if (!parseInt(p0.substr(6), n) || n < 1 || n > int(l.effects.size())) return false;
+    Effect &e = l.effects[size_t(n - 1)];
+    if (prop[1] == "enabled") { e.enabled = !hasArg || a0 > 0.5f; return true; }
+    const IsfInfo *info = isfCatalog.info(e.path);
+    if (!info || !hasArg) return false;
+    for (auto &in : info->inputs) {
+      if (lower(in.name) != prop[1] || in.size() == 0) continue;
+      auto &v = e.params[in.name];
+      if (int(v.size()) != in.size()) { IsfValues d; isfDefaults(*info, d); v = d[in.name]; }
+      for (size_t k = 0; k < v.size() && k < m.args.size(); ++k) v[k] = rel ? v[k] + float(rel) * m.number(k) : m.number(k);
+      return true;
+    }
+    return false;
+  }
   if (p0 == "visible") { l.visible = !hasArg || a0 > 0.5f; return true; }
   if (p0 == "mute") { l.mute = !hasArg || a0 > 0.5f; return true; }
   if (p0 == "tint" && m.args.size() >= 3) { l.fx.tint = {a0, a1, m.number(2), 1}; return true; }
@@ -276,7 +293,9 @@ bool Engine::handleOsc(const OscMessage &m) {
 }
 
 void Engine::applyMappings(const OscMessage &m) {
-  if (learnMapping >= 0 && learnMapping < int(project.mappings.size())) {
+  // Blob data arrives every frame: "learn" would always catch it (blobs have
+  // their own shortcut buttons in the effect).
+  if (learnMapping >= 0 && learnMapping < int(project.mappings.size()) && m.sender != "blob") {
     InputMapping &im = project.mappings[size_t(learnMapping)];
     im.address = m.address;
     // Guess a sensible input range from the first value.

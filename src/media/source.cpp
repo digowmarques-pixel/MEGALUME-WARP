@@ -256,6 +256,18 @@ const Texture *MediaCache::thumbnail(const MediaItem &m, Generators &gen, Dynami
   }
   if (m.type == MediaType::Live || m.type == MediaType::Spout) return e.liveTex;
   if (m.type == MediaType::Canvas) return nullptr; // shown by name
+  if (m.type == MediaType::Shader) {
+    if (!e.isf) e.isf = std::make_unique<IsfRenderer>();
+    if (!e.isf->sync(m.path)) return nullptr;
+    IsfValues v = m.shaderParams;
+    isfDefaults(e.isf->info(), v);
+    int th = std::max(16, int(192.0f * float(m.height) / float(std::max(1, m.width))));
+    const Texture *t = e.isf->render(192, th, 1.0, {}, v, mesh);
+    if (!t) return nullptr;
+    if (!e.thumbFb) e.thumbFb = std::make_unique<Framebuffer>();
+    gen.copyFlipped(*t, *e.thumbFb, mesh);
+    return &e.thumbFb->texture();
+  }
   if (e.thumb) return e.thumb.get();
   if (e.failed) return nullptr;
   VideoFrame f;
@@ -347,6 +359,19 @@ const Texture *Playback::update(double dt, const MediaItem &m, MediaContext &ctx
     if (!genFb_) genFb_ = std::make_unique<Framebuffer>();
     ctx.generators.render(m, clock_, *genFb_, ctx.mesh);
     return &genFb_->texture();
+  case MediaType::Shader: {
+    if (started_) clock_ += dt * double(speed);
+    started_ = true;
+    if (!isf_) isf_ = std::make_unique<IsfRenderer>();
+    if (!isf_->sync(m.path)) return nullptr;
+    IsfValues v = m.shaderParams;
+    isfDefaults(isf_->info(), v);
+    const Texture *t = isf_->render(std::clamp(m.width, 16, 8192), std::clamp(m.height, 16, 8192), clock_, {}, v, ctx.mesh);
+    if (!t) return nullptr;
+    if (!genFb_) genFb_ = std::make_unique<Framebuffer>();
+    ctx.generators.copyFlipped(*t, *genFb_, ctx.mesh); // ISF is GL-native: back to row 0 = top
+    return &genFb_->texture();
+  }
   case MediaType::Canvas: {
     if (started_) clock_ += dt * double(speed);
     started_ = true;

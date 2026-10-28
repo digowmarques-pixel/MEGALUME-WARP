@@ -15,7 +15,7 @@ using json = nlohmann::basic_json<std::map, std::vector, std::string, bool, std:
 
 static const char *kGeneratorNames[] = {"Test card", "Solid color", "Gradient",
                                          "Grid",      "Plasma",      "Stripes"};
-static const char *kBlendNames[] = {"Normal", "Add", "Multiply", "Screen"};
+static const char *kBlendNames[] = {"Normal", "Add", "Multiply", "Screen", "Alpha matte", "Alpha matte inverted", "Luma matte", "Luma matte inverted"};
 static const char *kTargetNames[] = {"Opacity",    "Position X", "Position Y",   "Scale",
                                      "Rotation",   "Brightness", "Contrast",     "Saturation",
                                      "Hue",        "Speed",      "Launch column", "Go (next)",
@@ -90,7 +90,7 @@ Surface &Project::addSurface(const Warp &w) {
   Surface s;
   s.id = newId();
   s.name = "Surface " + std::to_string(surfaces.size() + 1);
-  static const Color palette[] = {{0.98f, 0.62f, 0.18f, 1}, {0.3f, 0.75f, 1, 1}, {0.5f, 0.9f, 0.4f, 1},
+  static const Color palette[] = {{1.0f, 0.77f, 0.0f, 1}, {0.3f, 0.75f, 1, 1}, {0.5f, 0.9f, 0.4f, 1},
                                   {0.95f, 0.4f, 0.7f, 1},  {0.9f, 0.9f, 0.3f, 1}, {0.6f, 0.5f, 1, 1}};
   s.color = palette[surfaces.size() % 6];
   s.warp = w;
@@ -291,6 +291,31 @@ void Project::removeCanvas(int id) {
                  canvases.end());
 }
 
+std::string builtinEffectsDir() {
+  static std::string dir = [] {
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    fs::path p = platform::toPath(platform::executableDir()) / "effects";
+    if (fs::is_directory(p, ec)) return platform::toUtf8(p);
+#ifdef LUMEN_SOURCE_DIR
+    p = fs::path(LUMEN_SOURCE_DIR) / "effects"; // development build
+    if (fs::is_directory(p, ec)) return platform::toUtf8(p);
+#endif
+    return platform::toUtf8(platform::toPath(platform::executableDir()) / "effects");
+  }();
+  return dir;
+}
+
+MediaItem &Project::addShader(const std::string &path) {
+  MediaItem m;
+  m.id = newId();
+  m.type = MediaType::Shader;
+  m.path = path;
+  m.name = platform::toUtf8(platform::toPath(path).stem());
+  library.push_back(m);
+  return library.back();
+}
+
 MediaItem &Project::addCanvasMedia(int canvasId) {
   MediaItem m;
   m.id = newId();
@@ -466,11 +491,48 @@ static std::string makeRelative(const std::string &path, const std::string &base
   return r;
 }
 
+// Built-in shaders are stored as "@lumen/<file>" so projects move between machines.
+static std::string shaderToJson(const std::string &path, const std::string &baseDir);
+static std::string shaderFromJson(const std::string &stored, const std::string &baseDir);
+
 static std::string makeAbsolute(const std::string &path, const std::string &baseDir) {
   if (path.empty()) return path;
   auto p = platform::toPath(path);
   if (p.is_absolute() || baseDir.empty()) return path;
   return platform::toUtf8((platform::toPath(baseDir) / p).lexically_normal());
+}
+
+static std::string shaderToJson(const std::string &path, const std::string &baseDir) {
+  if (path == kBlobTrackerId) return path;
+  std::string dir = builtinEffectsDir();
+  auto p = platform::toPath(path), d = platform::toPath(dir);
+  if (!dir.empty() && p.parent_path() == d) return "@lumen/" + platform::toUtf8(p.filename());
+  return makeRelative(path, baseDir);
+}
+
+static std::string shaderFromJson(const std::string &stored, const std::string &baseDir) {
+  if (stored == kBlobTrackerId) return stored;
+  if (stored.rfind("@lumen/", 0) == 0)
+    return platform::toUtf8(platform::toPath(builtinEffectsDir()) / platform::toPath(stored.substr(7)));
+  return makeAbsolute(stored, baseDir);
+}
+
+static json valuesToJson(const IsfValues &v) {
+  json j = json::object();
+  for (auto &[k, x] : v) j[k] = x;
+  return j;
+}
+
+static IsfValues valuesFromJson(const json &j) {
+  IsfValues v;
+  if (!j.is_object()) return v;
+  for (auto &[k, x] : j.items()) {
+    std::vector<float> f;
+    if (x.is_array()) for (auto &e : x) { if (e.is_number()) f.push_back(e.get<float>()); }
+    else if (x.is_number()) f.push_back(x.get<float>());
+    v[k] = f;
+  }
+  return v;
 }
 
 // ------------------------------------------------------------------ json
@@ -678,6 +740,10 @@ std::string serializeProject(const Project &p, const std::string &baseDir) {
       jm["path"] = m.path;
     } else if (m.type == MediaType::Canvas) {
       jm["canvas"] = m.canvasRef;
+    } else if (m.type == MediaType::Shader) {
+      jm["path"] = shaderToJson(m.path, baseDir);
+      jm["params"] = valuesToJson(m.shaderParams);
+      jm["size"] = {m.width, m.height};
     } else {
       jm["path"] = makeRelative(m.path, baseDir);
     }
@@ -697,6 +763,9 @@ std::string serializeProject(const Project &p, const std::string &baseDir) {
       jl["slices"].push_back({{"name", s.name}, {"enabled", s.enabled}, {"surface", s.surfaceId},
                               {"crop", {s.u0, s.v0, s.u1, s.v1}}, {"warp", toJson(s.warp)}});
     jl["masks"] = masksToJson(l.masks);
+    for (auto &fx : l.effects)
+      jl["effects"].push_back({{"path", shaderToJson(fx.path, baseDir)}, {"name", fx.name},
+                               {"enabled", fx.enabled}, {"params", valuesToJson(fx.params)}});
     j["layers"].push_back(jl);
   }
 
@@ -873,7 +942,7 @@ bool deserializeProject(const std::string &text, const std::string &baseDir, Pro
       MediaItem m;
       m.id = jm.value("id", 0);
       m.name = jm.value("name", "");
-      m.type = enumFrom(jm, "type", MediaType::Video, 6);
+      m.type = enumFrom(jm, "type", MediaType::Video, 7);
       if (m.type == MediaType::Generator) {
         m.generator = enumFrom(jm, "generator", GeneratorKind::TestCard, int(GeneratorKind::COUNT));
         if (jm.contains("color1")) fromJson(jm["color1"], m.color1);
@@ -889,6 +958,10 @@ bool deserializeProject(const std::string &text, const std::string &baseDir, Pro
         m.path = jm.value("path", "");
       } else if (m.type == MediaType::Canvas) {
         m.canvasRef = jm.value("canvas", 0);
+      } else if (m.type == MediaType::Shader) {
+        m.path = shaderFromJson(jm.value("path", ""), baseDir);
+        m.shaderParams = valuesFromJson(jm.value("params", json::object()));
+        if (jm.contains("size")) { m.width = jm["size"][0]; m.height = jm["size"][1]; }
       } else {
         m.path = makeAbsolute(jm.value("path", ""), baseDir);
       }
@@ -901,7 +974,7 @@ bool deserializeProject(const std::string &text, const std::string &baseDir, Pro
       l.name = jl.value("name", "Layer");
       l.visible = jl.value("visible", true);
       l.opacity = jl.value("opacity", 1.0f);
-      l.blend = enumFrom(jl, "blend", BlendMode::Normal, 4);
+      l.blend = enumFrom(jl, "blend", BlendMode::Normal, int(BlendMode::COUNT));
       l.volume = jl.value("volume", 1.0f);
       l.mute = jl.value("mute", false);
       l.canvasId = jl.value("canvas", 0);
@@ -938,6 +1011,14 @@ bool deserializeProject(const std::string &text, const std::string &baseDir, Pro
         l.slices.push_back(s);
       }
       l.masks = masksFromJson(jl.value("masks", json::array()));
+      for (auto &x : jl.value("effects", json::array())) {
+        Effect fx;
+        fx.path = shaderFromJson(x.value("path", ""), baseDir);
+        fx.name = x.value("name", "");
+        fx.enabled = x.value("enabled", true);
+        fx.params = valuesFromJson(x.value("params", json::object()));
+        l.effects.push_back(fx);
+      }
       p.layers.push_back(l);
     }
 

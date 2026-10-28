@@ -141,7 +141,7 @@ void Ui::outputsWindow(App &app) {
         ImVec2 z{a.x + cardW, a.y + cardH};
         bool selected = outputsSel_ == o.id;
         dl->AddRectFilled(a, z, selected ? IM_COL32(58, 52, 40, 255) : IM_COL32(44, 44, 48, 255), 6);
-        dl->AddRect(a, z, selected ? IM_COL32(250, 158, 46, 255) : IM_COL32(70, 70, 76, 255), 6, 0, selected ? 2.0f : 1.0f);
+        dl->AddRect(a, z, selected ? IM_COL32(255, 196, 0, 255) : IM_COL32(70, 70, 76, 255), 6, 0, selected ? 2.0f : 1.0f);
         char num[24];
         std::snprintf(num, sizeof(num), "%zu", idx + 1);
         dl->AddText(nullptr, 42, {a.x + cardW * 0.5f - 14, a.y + 14}, IM_COL32(150, 150, 155, 255), num);
@@ -224,7 +224,7 @@ void Ui::outputsWindow(App &app) {
     for (int t = 0; t < 4; ++t) {
       if (t) ImGui::SameLine(0, 2);
       bool on = mappingTab_ == t;
-      if (on) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.98f, 0.62f, 0.18f, 0.85f));
+      if (on) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(1.0f, 0.77f, 0.0f, 0.85f));
       if (ImGui::Button(tabs[t], {110, 0})) mappingTab_ = t;
       if (on) ImGui::PopStyleColor();
     }
@@ -255,8 +255,8 @@ void Ui::outputsWindow(App &app) {
       }
       ImVec2 ra{o0.x + sel->srcX * k, o0.y + sel->srcY * k};
       ImVec2 rb{o0.x + (sel->srcX + sel->srcW) * k, o0.y + (sel->srcY + sel->srcH) * k};
-      dl->AddRectFilled(ra, rb, IM_COL32(250, 158, 46, 40));
-      dl->AddRect(ra, rb, IM_COL32(250, 158, 46, 255), 0, 0, 2);
+      dl->AddRectFilled(ra, rb, IM_COL32(255, 196, 0, 40));
+      dl->AddRect(ra, rb, IM_COL32(255, 196, 0, 255), 0, 0, 2);
       ImGui::InvisibleButton("##slice", {o1.x - o0.x, o1.y - o0.y});
       static int dragCorner = -2; // -2 none, -1 move, 0 tl, 1 br
       ImGuiIO &io = ImGui::GetIO();
@@ -275,7 +275,7 @@ void Ui::outputsWindow(App &app) {
         sel->srcH = std::max(8.0f, sel->srcH);
         app.edited();
       }
-      for (ImVec2 q : {ra, rb}) dl->AddRectFilled({q.x - 5, q.y - 5}, {q.x + 5, q.y + 5}, IM_COL32(250, 158, 46, 255));
+      for (ImVec2 q : {ra, rb}) dl->AddRectFilled({q.x - 5, q.y - 5}, {q.x + 5, q.y + 5}, IM_COL32(255, 196, 0, 255));
       float src[4] = {sel->srcX, sel->srcY, sel->srcW, sel->srcH};
       ImGui::SetNextItemWidth(360);
       if (ImGui::DragFloat4("x  y  largura  altura", src, 1.0f)) {
@@ -350,7 +350,7 @@ void Ui::outputsWindow(App &app) {
   ImGui::SetItemTooltip("Abre as saídas nos projetores (Ctrl+P)");
   ImGui::SameLine();
   bool card = !p.outputs.empty() && std::all_of(p.outputs.begin(), p.outputs.end(), [](auto &o) { return o.pattern == TestPattern::Card; });
-  if (card) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.98f, 0.62f, 0.18f, 0.8f));
+  if (card) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(1.0f, 0.77f, 0.0f, 0.8f));
   if (ImGui::Button("Test Card", {120, 30})) {
     for (auto &o : p.outputs) o.pattern = card ? TestPattern::None : TestPattern::Card;
     app.edited();
@@ -358,7 +358,7 @@ void Ui::outputsWindow(App &app) {
   if (card) ImGui::PopStyleColor();
   ImGui::SameLine();
   bool grid = !p.outputs.empty() && std::all_of(p.outputs.begin(), p.outputs.end(), [](auto &o) { return o.pattern == TestPattern::BlendGrid; });
-  if (grid) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.98f, 0.62f, 0.18f, 0.8f));
+  if (grid) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(1.0f, 0.77f, 0.0f, 0.8f));
   if (ImGui::Button("Grade", {90, 30})) {
     for (auto &o : p.outputs) o.pattern = grid ? TestPattern::None : TestPattern::BlendGrid;
     app.edited();

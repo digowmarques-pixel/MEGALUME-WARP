@@ -13,6 +13,7 @@ rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" "$APP/Contents/libs"
 cp "$BUILD/lumen" "$APP/Contents/MacOS/lumen"
 cp -R "$ROOT/examples" "$APP/Contents/Resources/examples"
+cp -R "$ROOT/effects" "$APP/Contents/MacOS/effects" # next to the executable, like on Windows
 VERSION="$(grep -oE 'project\(Lumen VERSION [0-9.]+' "$ROOT/CMakeLists.txt" | grep -oE '[0-9.]+$')"
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>

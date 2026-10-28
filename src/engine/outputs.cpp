@@ -307,7 +307,7 @@ void OutputManager::drawControls(const OutputConfig &o, const OutputControls &c,
     for (int cc = 0; cc + 1 < cols; ++cc) line(warp.meshPointDest(cc, r), warp.meshPointDest(cc + 1, r), 2);
   for (int cc = 0; cc < cols; ++cc)
     for (int r = 0; r + 1 < rows; ++r) line(warp.meshPointDest(cc, r), warp.meshPointDest(cc, r + 1), 2);
-  flush(0.98f, 0.62f, 0.18f, 0.8f);
+  flush(1.0f, 0.77f, 0.0f, 0.8f);
   for (int i = 0; i < cols * rows; ++i)
     if (warp.hasMesh()) box(warp.meshPointDest(i % cols, i / cols), 5, 2);
   for (auto &cn : warp.corners) box(cn, 14, 3);
@@ -315,7 +315,7 @@ void OutputManager::drawControls(const OutputConfig &o, const OutputControls &c,
   // Selected handle.
   if (c.corner >= 0 && c.corner < 4) box(warp.corners[size_t(c.corner)], 20, 5);
   else if (c.meshPoint >= 0 && c.meshPoint < cols * rows) box(warp.meshPointDest(c.meshPoint % cols, c.meshPoint / cols), 10, 4);
-  flush(0.98f, 0.62f, 0.18f, 1);
+  flush(1.0f, 0.77f, 0.0f, 1);
   glDisable(GL_BLEND);
 }
 

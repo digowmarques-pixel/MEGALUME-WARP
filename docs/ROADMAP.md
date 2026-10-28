@@ -62,6 +62,13 @@ Ordem pensada para **videomapping** e **instalações interativas**.
   (video routing), **blend automático** para projetores fora de grade, **Spout por saída**
   com ou sem janela, LED mapping por canvas
 
+## ✅ v0.8
+- **Efeitos ISF** em pilha por layer (20 shaders incluídos, 324 de 327 da coleção oficial
+  funcionando, recarga ao vivo), **geradores ISF** na biblioteca, parâmetros por OSC
+- **Matte** alpha / luma (e invertidos): uma layer recorta a de baixo
+- **Rastreamento de blobs** na câmera, com fundo gravado, prévia e atalhos de mapeamento
+- **Design novo**: preto e amarelo, painéis arredondados
+
 ## ⚠️ Pendente de teste em Windows real
 Tudo foi compilado para Windows, mas **ainda não rodou numa máquina Windows**:
 Spout, WASAPI, DirectShow, D3D11VA e WinMM precisam de um teste de verdade.
@@ -71,10 +78,8 @@ Spout, WASAPI, DirectShow, D3D11VA e WinMM precisam de um teste de verdade.
 1. **Teste no Windows** com projetor, placa de vídeo dedicada, câmera, Spout e controlador MIDI
 2. **Timeline** com keyframes, curvas, segmentos (loop / intro) e flags que disparam ações;
    timeline como mídia dentro de uma célula
-3. **Efeitos em pilha** por layer, incluindo **shaders ISF** (efeitos, geradores e transições),
-   LUT, níveis, chroma key, espelho, blur, soft crop
-4. **Blob tracking** na câmera (posição das pessoas → parâmetros) e modos de **matte**
-   (alpha / luma) para usar uma layer como máscara da de baixo
+3. Transições de coluna em shader ISF e stinger (vídeo com alpha); LUT (.cube)
+4. Detecção de pessoas por IA (esqueleto) e câmeras de profundidade (Kinect, Orbbec)
 5. **NDI** (receber e enviar), **texto dinâmico** (OSC `/layer/media/text`, arquivo .txt)
 6. NDI nativo (sem passar pelo Spout); triângulo e cantos soldados nas surfaces
 7. Mapping 3D / anamorfose (veja o item 10)

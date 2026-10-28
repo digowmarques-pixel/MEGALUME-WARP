@@ -305,6 +305,41 @@ int App::run(const Options &opts) {
     return 1;
   }
 
+  if (opts.checkEffects) {
+    int bad = 0, n = 0;
+    std::vector<IsfCatalog::Entry> list = engine.isfCatalog.builtins();
+    if (!opts.checkEffectsDir.empty()) {
+      list.clear();
+      std::error_code ec;
+      for (auto &f : std::filesystem::recursive_directory_iterator(platform::toPath(opts.checkEffectsDir), ec))
+        if (f.path().extension() == ".fs")
+          list.push_back({platform::toUtf8(f.path()), platform::toUtf8(f.path().filename()), {}, {}});
+    }
+    for (auto &e : list) {
+      IsfRenderer r;
+      std::string err;
+      ++n;
+      if (!r.load(e.path, &err)) {
+        ++bad;
+        std::printf("[isf] FALHOU %s: %s\n", e.name.c_str(), err.c_str());
+        continue;
+      }
+      // Run every pass once (catches errors that only show at draw time).
+      Texture src;
+      std::vector<unsigned char> px(64 * 36 * 4, 128);
+      src.upload(px.data(), 64, 36);
+      IsfValues v;
+      isfDefaults(r.info(), v);
+      const Texture *t = r.render(64, 36, 1.0, {{"inputImage", &src}}, v, engine.mesh);
+      std::printf("[isf] ok %s (%s, %zu passes)%s\n", e.name.c_str(), r.info().filter ? "efeito" : "gerador",
+                  r.info().passes.size(), t ? "" : " SEM IMAGEM");
+      if (!t) ++bad;
+    }
+    std::printf("[isf] %d shaders, %d com erro (pasta %s)\n", n, bad,
+                opts.checkEffectsDir.empty() ? builtinEffectsDir().c_str() : opts.checkEffectsDir.c_str());
+    std::fflush(stdout);
+    return bad == 0 && n > 0 ? 0 : 2;
+  }
   if (!opts.projectPath.empty()) {
     if (!openProject(opts.projectPath)) newProject();
   } else {
@@ -434,7 +469,7 @@ int App::run(const Options &opts) {
     int fbw, fbh;
     glfwGetFramebufferSize(window, &fbw, &fbh);
     glViewport(0, 0, fbw, fbh);
-    glClearColor(0.08f, 0.08f, 0.09f, 1);
+    glClearColor(0.03f, 0.03f, 0.035f, 1); // gaps between the panels
     glClear(GL_COLOR_BUFFER_BIT);
     ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
 
@@ -444,6 +479,12 @@ int App::run(const Options &opts) {
       // Summary for automated tests.
       std::printf("[test] audio device: %s\n", engine.audio.deviceName().c_str());
       std::printf("[test] column=%d\n", engine.activeColumn() + 1);
+      for (auto &l : engine.project.layers)
+        if (const auto *bl = engine.blobs(l.id)) {
+          std::printf("[test] blobs %s: %zu", l.name.c_str(), bl->size());
+          for (auto &b : *bl) std::printf("  #%d (%.2f, %.2f) %.3f", b.id, b.x, b.y, b.area);
+          std::printf("\n");
+        }
       for (auto &l : engine.project.layers)
         std::printf("[test] layer %s: opacity=%.3f scale=%.3f x=%.1f contrast=%.3f playing=%d\n", l.name.c_str(), l.opacity,
                     l.transform.scale, l.transform.position.x, l.fx.contrast,

@@ -27,9 +27,20 @@ namespace {
 ImTextureID texId(const Texture &t) { return ImTextureID(intptr_t(t.id())); }
 
 // Colours of the Lumen theme.
-const ImVec4 kAccent{0.98f, 0.62f, 0.18f, 1.0f};
-const ImU32 kAccentU32 = IM_COL32(250, 158, 46, 255);
-const ImU32 kPlayingU32 = IM_COL32(80, 200, 120, 255);
+// Lumen palette: black and yellow.
+const ImVec4 kAccent{1.0f, 0.77f, 0.0f, 1.0f};        // #FFC400
+const ImU32 kAccentU32 = IM_COL32(255, 196, 0, 255);
+const ImU32 kPlayingU32 = IM_COL32(255, 214, 64, 255); // what is on air
+const ImVec4 kOnAccent{0.05f, 0.05f, 0.05f, 1.0f};    // text on yellow
+
+// Yellow button with black text (main actions, active tools).
+void pushPrimary() {
+  ImGui::PushStyleColor(ImGuiCol_Button, kAccent);
+  ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(1.0f, 0.84f, 0.25f, 1));
+  ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.9f, 0.68f, 0.0f, 1));
+  ImGui::PushStyleColor(ImGuiCol_Text, kOnAccent);
+}
+void popPrimary() { ImGui::PopStyleColor(4); }
 
 bool colorEdit(const char *label, Color &c, bool alpha = false) {
   float v[4] = {c.r, c.g, c.b, c.a};
@@ -88,6 +99,53 @@ bool canvasCombo(const char *label, const Project &p, int &id) {
   return changed;
 }
 
+// Controls for the inputs of an ISF shader. Returns true when a value changed.
+bool isfParamsUi(const IsfInfo &info, IsfValues &values) {
+  isfDefaults(info, values);
+  bool changed = false;
+  for (auto &in : info.inputs) {
+    if (in.size() == 0) continue;
+    auto &v = values[in.name];
+    const char *label = in.label.c_str();
+    ImGui::PushID(in.name.c_str());
+    float lo = in.min.empty() ? 0.0f : in.min[0], hi = in.max.empty() ? 1.0f : in.max[0];
+    if (in.type == "float") {
+      changed |= ImGui::SliderFloat(label, &v[0], lo, hi);
+    } else if (in.type == "bool") {
+      bool b = v[0] > 0.5f;
+      if (ImGui::Checkbox(label, &b)) { v[0] = b ? 1.0f : 0.0f; changed = true; }
+    } else if (in.type == "event") {
+      if (ImGui::Button(label)) { v[0] = 1; changed = true; }
+      else if (v[0] != 0) { v[0] = 0; } // one frame pulse
+    } else if (in.type == "long") {
+      if (!in.values.empty()) {
+        int cur = 0;
+        for (size_t k = 0; k < in.values.size(); ++k)
+          if (in.values[k] == int(std::lround(v[0]))) cur = int(k);
+        std::string preview = cur < int(in.labels.size()) ? in.labels[size_t(cur)] : std::to_string(in.values[size_t(cur)]);
+        if (ImGui::BeginCombo(label, preview.c_str())) {
+          for (size_t k = 0; k < in.values.size(); ++k) {
+            std::string item = k < in.labels.size() ? in.labels[k] : std::to_string(in.values[k]);
+            if (ImGui::Selectable(item.c_str(), int(k) == cur)) { v[0] = float(in.values[k]); changed = true; }
+          }
+          ImGui::EndCombo();
+        }
+      } else {
+        int iv = int(std::lround(v[0]));
+        if (ImGui::SliderInt(label, &iv, int(lo), int(std::max(hi, lo + 1)))) { v[0] = float(iv); changed = true; }
+      }
+    } else if (in.type == "color") {
+      changed |= ImGui::ColorEdit4(label, v.data(), ImGuiColorEditFlags_AlphaBar);
+    } else if (in.type == "point2D") {
+      float l2 = in.min.size() >= 2 ? std::min(in.min[0], in.min[1]) : 0.0f;
+      float h2 = in.max.size() >= 2 ? std::max(in.max[0], in.max[1]) : 1.0f;
+      changed |= ImGui::SliderFloat2(label, v.data(), l2, h2);
+    }
+    ImGui::PopID();
+  }
+  return changed;
+}
+
 const char *mediaTypeLabel(MediaType t) {
   switch (t) {
   case MediaType::Video: return "Vídeo";
@@ -96,6 +154,7 @@ const char *mediaTypeLabel(MediaType t) {
   case MediaType::Live: return "Ao vivo";
   case MediaType::Spout: return "Spout";
   case MediaType::Canvas: return "Canvas";
+  case MediaType::Shader: return "Shader ISF";
   }
   return "";
 }
@@ -134,39 +193,108 @@ void Ui::setup() {
   }
   if (!loaded) io.Fonts->AddFontDefault();
 
+  // A larger weight of the same font for titles and the brand.
+  bigFont_ = nullptr;
+  for (const char *f : fonts) {
+    std::error_code ec;
+    if (loaded && std::filesystem::exists(f, ec)) {
+      const char *bold = f;
+      if (std::filesystem::exists("C:/Windows/Fonts/segoeuib.ttf", ec) && std::string(f).find("segoeui") != std::string::npos)
+        bold = "C:/Windows/Fonts/segoeuib.ttf";
+      else if (std::filesystem::exists("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", ec) &&
+               std::string(f).find("DejaVu") != std::string::npos)
+        bold = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf";
+      bigFont_ = io.Fonts->AddFontFromFileTTF(bold, 21.0f);
+      break;
+    }
+  }
+
   ImGui::StyleColorsDark();
   ImGuiStyle &s = ImGui::GetStyle();
-  s.WindowRounding = 0;
-  s.FrameRounding = 3;
-  s.GrabRounding = 3;
-  s.TabRounding = 3;
-  s.WindowBorderSize = 1;
-  s.FramePadding = {6, 4};
-  s.ItemSpacing = {6, 5};
+  // Rounded, airy and calm: panels are cards on a black background.
+  s.WindowRounding = 10;
+  s.ChildRounding = 8;
+  s.FrameRounding = 6;
+  s.PopupRounding = 8;
+  s.GrabRounding = 6;
+  s.TabRounding = 6;
+  s.ScrollbarRounding = 8;
+  s.WindowBorderSize = 0;
+  s.ChildBorderSize = 1;
+  s.PopupBorderSize = 1;
+  s.FrameBorderSize = 0;
+  s.TabBarOverlineSize = 2;
+  s.WindowPadding = {10, 8};
+  s.FramePadding = {8, 4};
+  s.ItemSpacing = {7, 6};
+  s.ItemInnerSpacing = {6, 4};
+  s.ScrollbarSize = 11;
+  s.GrabMinSize = 5; // a thin yellow marker: the value stays readable
+  s.SeparatorTextBorderSize = 1;
+  s.SeparatorTextPadding = {12, 4};
+  s.WindowTitleAlign = {0.0f, 0.5f};
+  s.SelectableTextAlign = {0.0f, 0.5f};
+
+  const ImVec4 black{0.035f, 0.035f, 0.04f, 1}, panel{0.085f, 0.085f, 0.09f, 1}, inset{0.06f, 0.06f, 0.065f, 1};
+  const ImVec4 frame{0.14f, 0.14f, 0.15f, 1}, frameHi{0.19f, 0.19f, 0.205f, 1}, line{0.2f, 0.2f, 0.21f, 1};
+  const ImVec4 y = kAccent;
+  auto ya = [&](float a) { return ImVec4(y.x, y.y, y.z, a); };
   ImVec4 *c = s.Colors;
-  c[ImGuiCol_WindowBg] = {0.11f, 0.11f, 0.12f, 1};
-  c[ImGuiCol_ChildBg] = {0.09f, 0.09f, 0.10f, 1};
-  c[ImGuiCol_TitleBg] = c[ImGuiCol_TitleBgActive] = {0.14f, 0.14f, 0.15f, 1};
-  c[ImGuiCol_Header] = {0.98f, 0.62f, 0.18f, 0.35f};
-  c[ImGuiCol_HeaderHovered] = {0.98f, 0.62f, 0.18f, 0.55f};
-  c[ImGuiCol_HeaderActive] = {0.98f, 0.62f, 0.18f, 0.8f};
-  c[ImGuiCol_Button] = {0.22f, 0.22f, 0.24f, 1};
-  c[ImGuiCol_ButtonHovered] = {0.32f, 0.32f, 0.35f, 1};
-  c[ImGuiCol_ButtonActive] = {0.98f, 0.62f, 0.18f, 0.9f};
-  c[ImGuiCol_FrameBg] = {0.17f, 0.17f, 0.19f, 1};
-  c[ImGuiCol_FrameBgHovered] = {0.23f, 0.23f, 0.26f, 1};
-  c[ImGuiCol_SliderGrab] = c[ImGuiCol_CheckMark] = kAccent;
-  c[ImGuiCol_SliderGrabActive] = {1.0f, 0.75f, 0.35f, 1};
-  c[ImGuiCol_Tab] = {0.16f, 0.16f, 0.18f, 1};
-  c[ImGuiCol_TabHovered] = {0.98f, 0.62f, 0.18f, 0.6f};
-  c[ImGuiCol_TabSelected] = {0.98f, 0.62f, 0.18f, 0.45f};
+  c[ImGuiCol_Text] = {0.93f, 0.93f, 0.92f, 1};
+  c[ImGuiCol_TextDisabled] = {0.52f, 0.52f, 0.5f, 1};
+  c[ImGuiCol_WindowBg] = panel;
+  c[ImGuiCol_ChildBg] = inset;
+  c[ImGuiCol_PopupBg] = {0.1f, 0.1f, 0.105f, 0.98f};
+  c[ImGuiCol_Border] = line;
+  c[ImGuiCol_BorderShadow] = {0, 0, 0, 0};
+  c[ImGuiCol_MenuBarBg] = black;
+  c[ImGuiCol_TitleBg] = c[ImGuiCol_TitleBgActive] = c[ImGuiCol_TitleBgCollapsed] = panel;
+  c[ImGuiCol_FrameBg] = frame;
+  c[ImGuiCol_FrameBgHovered] = frameHi;
+  c[ImGuiCol_FrameBgActive] = {0.23f, 0.22f, 0.18f, 1};
+  c[ImGuiCol_Button] = frame;
+  c[ImGuiCol_ButtonHovered] = frameHi;
+  c[ImGuiCol_ButtonActive] = ya(0.85f);
+  c[ImGuiCol_Header] = {0.16f, 0.16f, 0.17f, 1};
+  c[ImGuiCol_HeaderHovered] = {0.21f, 0.21f, 0.22f, 1};
+  c[ImGuiCol_HeaderActive] = ya(0.35f);
+  c[ImGuiCol_CheckMark] = y;
+  c[ImGuiCol_SliderGrab] = y;
+  c[ImGuiCol_SliderGrabActive] = {1.0f, 0.86f, 0.35f, 1};
+  c[ImGuiCol_Separator] = line;
+  c[ImGuiCol_SeparatorHovered] = ya(0.6f);
+  c[ImGuiCol_SeparatorActive] = y;
+  c[ImGuiCol_ResizeGrip] = ya(0.15f);
+  c[ImGuiCol_ResizeGripHovered] = ya(0.5f);
+  c[ImGuiCol_ResizeGripActive] = y;
+  c[ImGuiCol_Tab] = inset;
+  c[ImGuiCol_TabHovered] = frameHi;
+  c[ImGuiCol_TabSelected] = frame;
+  c[ImGuiCol_TabSelectedOverline] = y;
+  c[ImGuiCol_TabDimmed] = inset;
+  c[ImGuiCol_TabDimmedSelected] = frame;
+  c[ImGuiCol_ScrollbarBg] = {0, 0, 0, 0};
+  c[ImGuiCol_ScrollbarGrab] = {0.22f, 0.22f, 0.23f, 1};
+  c[ImGuiCol_ScrollbarGrabHovered] = {0.3f, 0.3f, 0.31f, 1};
+  c[ImGuiCol_ScrollbarGrabActive] = ya(0.7f);
+  c[ImGuiCol_TableHeaderBg] = inset;
+  c[ImGuiCol_TableBorderStrong] = line;
+  c[ImGuiCol_TableBorderLight] = {0.15f, 0.15f, 0.16f, 1};
+  c[ImGuiCol_TableRowBg] = {0, 0, 0, 0};
+  c[ImGuiCol_TableRowBgAlt] = {1, 1, 1, 0.015f};
+  c[ImGuiCol_TextSelectedBg] = ya(0.35f);
+  c[ImGuiCol_DragDropTarget] = y;
+  c[ImGuiCol_NavHighlight] = y;
+  c[ImGuiCol_PlotHistogram] = y;
+  c[ImGuiCol_PlotLines] = y;
+  c[ImGuiCol_ModalWindowDimBg] = {0, 0, 0, 0.6f};
 }
 
 void Ui::draw(App &app) {
   ImGuiViewport *vp = ImGui::GetMainViewport();
   menuBar(app);
 
-  const float toolbarH = 46, statusH = 26;
+  const float toolbarH = 54, statusH = 28, g = 6; // g: gap between the panel cards
   const float libraryW = std::clamp(vp->WorkSize.x * 0.17f, 220.0f, 320.0f);
   const float inspectorW = std::clamp(vp->WorkSize.x * 0.24f, 320.0f, 440.0f);
   const float x0 = vp->WorkPos.x, y0 = vp->WorkPos.y;
@@ -178,44 +306,46 @@ void Ui::draw(App &app) {
   ImGuiWindowFlags fixed = ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize |
                            ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoBringToFrontOnFocus;
 
-  ImGui::SetNextWindowPos({x0, y0});
-  ImGui::SetNextWindowSize({W, toolbarH});
+  ImGui::SetNextWindowPos({x0 + g, y0 + g});
+  ImGui::SetNextWindowSize({W - 2 * g, toolbarH - g});
   ImGui::Begin("##toolbar", nullptr, fixed | ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoScrollbar);
   toolbar(app);
   ImGui::End();
 
-  ImGui::SetNextWindowPos({x0, bodyY});
-  ImGui::SetNextWindowSize({libraryW, bodyH});
+  ImGui::SetNextWindowPos({x0 + g, bodyY + g});
+  ImGui::SetNextWindowSize({libraryW - g, bodyH - g});
   ImGui::Begin("Biblioteca", nullptr, fixed);
   library(app);
   ImGui::End();
 
-  ImGui::SetNextWindowPos({x0 + libraryW, bodyY});
-  ImGui::SetNextWindowSize({centerW, bodyH - dashH});
+  ImGui::SetNextWindowPos({x0 + libraryW + g, bodyY + g});
+  ImGui::SetNextWindowSize({centerW - g, bodyH - dashH - g});
   ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {4, 4});
   ImGui::Begin("Workspace", nullptr, fixed | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
   workspace.draw(app, ImGui::GetContentRegionAvail());
   ImGui::End();
   ImGui::PopStyleVar();
 
-  ImGui::SetNextWindowPos({x0 + libraryW, bodyY + bodyH - dashH});
-  ImGui::SetNextWindowSize({centerW, dashH});
+  ImGui::SetNextWindowPos({x0 + libraryW + g, bodyY + bodyH - dashH + g});
+  ImGui::SetNextWindowSize({centerW - g, dashH - g});
   ImGui::Begin("Dashboard", nullptr, fixed);
   dashboard(app);
   ImGui::End();
 
-  ImGui::SetNextWindowPos({x0 + W - inspectorW, bodyY});
-  ImGui::SetNextWindowSize({inspectorW, bodyH});
+  ImGui::SetNextWindowPos({x0 + W - inspectorW + g, bodyY + g});
+  ImGui::SetNextWindowSize({inspectorW - 2 * g, bodyH - g});
   ImGui::Begin("Propriedades", nullptr, fixed);
   inspector(app);
   ImGui::End();
 
-  ImGui::SetNextWindowPos({x0, y0 + H - statusH});
-  ImGui::SetNextWindowSize({W, statusH});
+  ImGui::SetNextWindowPos({x0 + g, y0 + H - statusH + 2});
+  ImGui::SetNextWindowSize({W - 2 * g, statusH - 2});
   ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {8, 4});
+  ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0, 0, 0, 0)); // on the black background
   ImGui::Begin("##status", nullptr, fixed | ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoScrollbar);
   statusBar(app);
   ImGui::End();
+  ImGui::PopStyleColor();
   ImGui::PopStyleVar();
 
   outputsWindow(app);
@@ -306,11 +436,25 @@ void Ui::menuBar(App &app) {
 void Ui::toolbar(App &app) {
   Engine &e = app.engine;
   ImGui::SetCursorPosY(ImGui::GetCursorPosY() + 2);
+  // Brand: a yellow dot and the name.
+  {
+    ImVec2 p = ImGui::GetCursorScreenPos();
+    ImDrawList *dl = ImGui::GetWindowDrawList();
+    dl->AddCircleFilled({p.x + 9, p.y + 15}, 7, kAccentU32);
+    dl->AddCircle({p.x + 9, p.y + 15}, 11, IM_COL32(255, 196, 0, 90), 0, 1.5f);
+    ImGui::Dummy({24, 30});
+    ImGui::SameLine();
+    if (bigFont_) ImGui::PushFont(bigFont_);
+    ImGui::SetCursorPosY(ImGui::GetCursorPosY() + (bigFont_ ? 2 : 6));
+    ImGui::TextUnformatted("LUMEN");
+    if (bigFont_) ImGui::PopFont();
+    ImGui::SameLine(0, 18);
+    ImGui::SetCursorPosY(2 + ImGui::GetStyle().WindowPadding.y);
+  }
 
-  ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.15f, 0.55f, 0.3f, 1));
-  ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.2f, 0.7f, 0.4f, 1));
-  if (ImGui::Button("  GO  ", {80, 30})) e.go();
-  ImGui::PopStyleColor(2);
+  pushPrimary();
+  if (ImGui::Button("GO", {84, 30})) e.go();
+  popPrimary();
   ImGui::SetItemTooltip("Dispara a próxima coluna (Espaço)");
   ImGui::SameLine();
   if (ImGui::Button("<", {30, 30})) e.back();
@@ -328,36 +472,37 @@ void Ui::toolbar(App &app) {
   ImGui::SetItemTooltip("Escurece todas as saídas (B)");
   ImGui::SameLine();
   bool open = app.outputsOpen;
-  if (open) {
-    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.2f, 0.45f, 0.8f, 1));
-    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.3f, 0.55f, 0.9f, 1));
-  }
+  if (open) pushPrimary();
   if (ImGui::Button(open ? "Fechar saídas" : "Abrir saídas", {110, 30})) app.outputsOpen = !open;
-  if (open) ImGui::PopStyleColor(2);
+  if (open) popPrimary();
   ImGui::SameLine();
   if (ImGui::Button("Saídas...", {80, 30})) openOutputs();
   ImGui::SetItemTooltip("Layout dos projetores, telas, soft edge e mapping de cada saída");
   ImGui::SetItemTooltip("Abre/fecha as janelas dos projetores (Ctrl+P). O workspace mostra a prévia mesmo fechadas.");
 
-  ImGui::SameLine(0, 20);
-  ImGui::SetNextItemWidth(120);
+  ImGui::SameLine(0, 16);
+  ImGui::SetNextItemWidth(100);
   ImGui::SetCursorPosY(ImGui::GetCursorPosY() + 5);
   ImGui::SliderFloat("Master", &e.masterOpacity, 0, 1, "%.2f");
 
-  ImGui::SameLine(0, 20);
-  ImGui::SetNextItemWidth(110);
+  ImGui::SameLine(0, 14);
+  ImGui::SetNextItemWidth(80);
   if (ImGui::DragFloat("Fade padrão", &e.project.defaultTransition, 0.05f, 0, 30, "%.2f s"))
     app.edited();
 
-  ImGui::SameLine(0, 24);
-  const char *tools[] = {"Selecionar (V)", "Perspectiva (M)", "Malha (G)", "Máscara (K)", "LED (L)"};
+  ImGui::SameLine(0, 16);
+  const char *tools[] = {"Selecionar", "Perspectiva", "Malha", "Máscara", "LED"};
+  const char *keys[] = {"V", "M", "G", "K", "L"};
+  ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, {3, 6});
   for (int i = 0; i < 5; ++i) {
     bool active = int(workspace.tool) == i;
-    if (active) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.98f, 0.62f, 0.18f, 0.7f));
+    if (active) pushPrimary();
     if (ImGui::Button(tools[i], {0, 30})) workspace.tool = Tool(i);
-    if (active) ImGui::PopStyleColor();
+    if (active) popPrimary();
+    ImGui::SetItemTooltip("Tecla %s", keys[i]);
     ImGui::SameLine();
   }
+  ImGui::PopStyleVar();
 
   ImGui::SameLine(0, 20);
   ImGui::SetCursorPosY(ImGui::GetCursorPosY() + 6);
@@ -381,6 +526,26 @@ void Ui::library(App &app) {
         app.sel.inspector = Inspector::Media;
         app.edited();
       }
+    ImGui::SeparatorText("Shaders ISF");
+    for (auto &e : app.engine.isfCatalog.builtins()) {
+      if (e.info.filter || e.info.transition) continue;
+      if (ImGui::MenuItem(e.name.c_str())) {
+        MediaItem &m = p.addShader(e.path);
+        app.sel.mediaId = m.id;
+        app.sel.inspector = Inspector::Media;
+        app.edited();
+      }
+      if (!e.info.description.empty()) ImGui::SetItemTooltip("%s", e.info.description.c_str());
+    }
+    if (ImGui::MenuItem("Abrir arquivo .fs...")) {
+      auto files = platform::openFileDialog("Shader ISF", "ISF|*.fs|Todos|*.*", false);
+      if (!files.empty()) {
+        MediaItem &m = p.addShader(files[0]);
+        app.sel.mediaId = m.id;
+        app.sel.inspector = Inspector::Media;
+        app.edited();
+      }
+    }
     ImGui::EndPopup();
   }
   ImGui::SameLine();
@@ -462,10 +627,10 @@ void Ui::library(App &app) {
     const Texture *thumb = app.engine.cache.thumbnail(m, app.engine.generators, app.engine.mesh);
     ImDrawList *dl = ImGui::GetWindowDrawList();
     ImVec2 tl{start.x + 2, start.y + 2}, br{start.x + 78, start.y + 46};
-    dl->AddRectFilled(tl, br, IM_COL32(15, 15, 15, 255));
+    dl->AddRectFilled(tl, br, IM_COL32(15, 15, 15, 255), 5);
     if (m.type == MediaType::Canvas) // live picture of the canvas (bottom-up texture)
-      dl->AddImage(texId(app.engine.canvasTexture(m.canvasRef)), tl, br, {0, 1}, {1, 0});
-    else if (thumb && !thumb->empty()) dl->AddImage(texId(*thumb), tl, br);
+      dl->AddImageRounded(texId(app.engine.canvasTexture(m.canvasRef)), tl, br, {0, 1}, {1, 0}, IM_COL32_WHITE, 5);
+    else if (thumb && !thumb->empty()) dl->AddImageRounded(texId(*thumb), tl, br, {0, 0}, {1, 1}, IM_COL32_WHITE, 5);
     else if (m.type == MediaType::Live || m.type == MediaType::Spout)
       dl->AddText({tl.x + 6, tl.y + 14}, IM_COL32(150, 150, 150, 255), "parado");
     else dl->AddText({tl.x + 6, tl.y + 14}, IM_COL32(200, 80, 80, 255), "erro");
@@ -529,11 +694,11 @@ void Ui::dashboard(App &app) {
     ImGui::PushID(p.columns[size_t(c)].id);
     Column &colRef = p.columns[size_t(c)];
     bool active = e.activeColumn() == c;
-    if (active) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.98f, 0.62f, 0.18f, 0.85f));
+    if (active) pushPrimary();
     char label[96];
     std::snprintf(label, sizeof(label), "%02d  \xe2\x96\xb6  %s", c + 1, colRef.name.c_str()); // ▶
     if (ImGui::Button(label, {cellW - 4, 0})) e.launchColumn(c);
-    if (active) ImGui::PopStyleColor();
+    if (active) popPrimary();
     if (colRef.color[0] > 0 || colRef.color[1] > 0 || colRef.color[2] > 0) {
       ImVec2 a = ImGui::GetItemRectMin(), b = ImGui::GetItemRectMax();
       ImGui::GetWindowDrawList()->AddRectFilled({a.x, b.y - 3}, {b.x, b.y},
@@ -789,12 +954,12 @@ void Ui::dashboard(App &app) {
       ImDrawList *dl = ImGui::GetWindowDrawList();
       ImVec2 br{pos.x + size.x, pos.y + size.y};
       bool playing = st && st->current && st->columnId == col.id && m && st->current->mediaId() == m->id;
-      dl->AddRectFilled(pos, br, hovered ? IM_COL32(48, 48, 52, 255) : IM_COL32(30, 30, 33, 255), 4);
+      dl->AddRectFilled(pos, br, hovered ? IM_COL32(44, 44, 47, 255) : IM_COL32(28, 28, 30, 255), 7);
       if (m) {
         const Texture *thumb = e.cache.thumbnail(*m, e.generators, e.mesh);
         if (thumb && !thumb->empty()) {
           ImVec2 ttl{pos.x + 3, pos.y + 3}, tbr{br.x - 3, br.y - 20};
-          dl->AddImage(texId(*thumb), ttl, tbr);
+          dl->AddImageRounded(texId(*thumb), ttl, tbr, {0, 0}, {1, 1}, IM_COL32_WHITE, 5);
         }
         dl->PushClipRect(pos, br, true);
         dl->AddText({pos.x + 5, br.y - 18}, IM_COL32(220, 220, 220, 255), m->name.c_str());
@@ -810,14 +975,14 @@ void Ui::dashboard(App &app) {
       if (std::any_of(col.states.begin(), col.states.end(), [&](auto &x) { return x.layerId == l.id; }))
         dl->AddText({pos.x + 4, pos.y + 2}, kAccentU32, "\xe2\x97\x86");
       if (playing) {
-        dl->AddRect(pos, br, kPlayingU32, 4, 0, 2.5f);
+        dl->AddRect(pos, br, kPlayingU32, 7, 0, 2.5f);
         double dur = st->current->duration();
         if (dur > 0) {
           float t = float(std::fmod(st->current->time(), dur) / dur);
           dl->AddRectFilled({pos.x + 3, br.y - 3}, {pos.x + 3 + (size.x - 6) * t, br.y - 1}, kPlayingU32);
         }
       } else if (app.sel.cellColumn == c && app.sel.cellLayer == l.id) {
-        dl->AddRect(pos, br, kAccentU32, 4, 0, 1.5f);
+        dl->AddRect(pos, br, IM_COL32(235, 235, 235, 200), 7, 0, 1.5f);
       }
       ImGui::PopID();
     }
@@ -891,7 +1056,7 @@ void Ui::maskList(App &app, std::vector<Mask> &masks, int &sel, int &selPoint, V
     if (ImGui::Checkbox("##en", &m.enabled)) app.edited();
     ImGui::SameLine();
     bool valid = m.points.size() >= 3;
-    if (!valid) ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.98f, 0.62f, 0.18f, 1)); // like Millumin: orange = no shape yet
+    if (!valid) ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.77f, 0.0f, 1)); // like Millumin: orange = no shape yet
     char label[160];
     std::snprintf(label, sizeof(label), "%s  %s%s", m.name.c_str(), m.subtract ? "(esconde)" : "(mostra)",
                   m.inverted ? " inv." : "");
@@ -1036,6 +1201,151 @@ void Ui::maskList(App &app, std::vector<Mask> &masks, int &sel, int &selPoint, V
   ImGui::PopID();
 }
 
+void Ui::effectsUi(App &app, Layer &l) {
+  Engine &e = app.engine;
+  int remove = -1, move = -1, dir = 0;
+  for (size_t i = 0; i < l.effects.size(); ++i) {
+    Effect &fx = l.effects[i];
+    ImGui::PushID(int(i) + 7700);
+    if (ImGui::Checkbox("##en", &fx.enabled)) app.edited();
+    ImGui::SameLine();
+    std::string title = (fx.name.empty() ? std::string("efeito") : fx.name) + "###fx";
+    bool open = ImGui::TreeNodeEx(title.c_str(), ImGuiTreeNodeFlags_DefaultOpen);
+    if (ImGui::BeginPopupContextItem()) {
+      if (ImGui::MenuItem("Subir", nullptr, false, i > 0)) { move = int(i); dir = -1; }
+      if (ImGui::MenuItem("Descer", nullptr, false, i + 1 < l.effects.size())) { move = int(i); dir = 1; }
+      if (ImGui::MenuItem("Valores padrão")) { fx.params.clear(); app.edited(); }
+      if (ImGui::MenuItem("Remover")) remove = int(i);
+      ImGui::EndPopup();
+    }
+    ImGui::SameLine(ImGui::GetContentRegionAvail().x - 4);
+    if (ImGui::SmallButton("x")) remove = int(i);
+    if (open) {
+      const IsfInfo *info = e.isfCatalog.info(fx.path);
+      if (!info) {
+        ImGui::TextColored({1, 0.4f, 0.4f, 1}, "%s", e.isfCatalog.error(fx.path).c_str());
+      } else {
+        if (isfParamsUi(*info, fx.params)) app.edited();
+        if (fx.isBlobTracker()) blobUi(app, l);
+      }
+      ImGui::TreePop();
+    }
+    ImGui::PopID();
+  }
+  if (remove >= 0) { l.effects.erase(l.effects.begin() + remove); app.edited(); }
+  if (move >= 0) { std::swap(l.effects[size_t(move)], l.effects[size_t(move + dir)]); app.edited(); }
+
+  if (ImGui::Button("+ Efeito")) ImGui::OpenPopup("##addfx");
+  if (ImGui::BeginPopup("##addfx")) {
+    auto add = [&](const std::string &path, const std::string &name) {
+      Effect fx;
+      fx.path = path;
+      fx.name = name;
+      if (const IsfInfo *info = e.isfCatalog.info(path)) isfDefaults(*info, fx.params);
+      l.effects.push_back(fx);
+      app.edited();
+    };
+    // Built-ins by category.
+    std::map<std::string, std::vector<const IsfCatalog::Entry *>> byCat;
+    for (auto &x : e.isfCatalog.builtins())
+      if (x.info.filter) byCat[x.info.categories.empty() ? "Outros" : x.info.categories.front()].push_back(&x);
+    for (auto &[cat, list] : byCat) {
+      if (!ImGui::BeginMenu(cat.c_str())) continue;
+      for (auto *x : list) {
+        if (ImGui::MenuItem(x->name.c_str())) add(x->path, x->name);
+        if (!x->info.description.empty()) ImGui::SetItemTooltip("%s", x->info.description.c_str());
+      }
+      ImGui::EndMenu();
+    }
+    ImGui::Separator();
+    if (ImGui::MenuItem("Rastreamento de blobs (câmera)")) add(kBlobTrackerId, "Blob tracker");
+    if (ImGui::MenuItem("Abrir arquivo ISF (.fs)...")) {
+      auto files = platform::openFileDialog("Efeito ISF", "ISF|*.fs|Todos|*.*", false);
+      if (!files.empty()) add(files[0], platform::toUtf8(platform::toPath(files[0]).stem()));
+    }
+    if (ImGui::MenuItem("Recarregar a pasta de efeitos")) e.isfCatalog.rescan();
+    ImGui::EndPopup();
+  }
+  helpMarker("Efeitos são shaders ISF (o mesmo formato do Millumin, VDMX, Resolume e MadMapper), "
+             "aplicados em ordem sobre a mídia da layer. Baixe mais em editor.isf.video ou coloque "
+             "arquivos .fs na pasta effects ao lado do lumen.exe. Via OSC: /layer:Nome/effect1/<parâmetro>.");
+}
+
+void Ui::blobUi(App &app, Layer &l) {
+  Engine &e = app.engine;
+  if (ImGui::Button("Gravar fundo")) e.learnBlobBackground(l.id);
+  ImGui::SameLine();
+  const BlobTracker *t = e.blobTracker(l.id);
+  ImGui::TextDisabled(t && t->hasBackground() ? "(comparando com o fundo)" : "(limiar fixo)");
+  helpMarker("Gravar fundo: com a cena vazia, clique. Depois, tudo o que mudar (pessoas, objetos) "
+             "vira blob, mesmo com iluminação irregular. A câmera precisa estar parada.");
+  const std::vector<Blob> *blobs = e.blobs(l.id);
+  // Preview: black & white image with the blobs.
+  float w = ImGui::GetContentRegionAvail().x, h = w * 9.0f / 16.0f;
+  if (t && t->width() > 0) h = w * float(t->height()) / float(t->width());
+  ImVec2 o = ImGui::GetCursorScreenPos();
+  ImDrawList *dl = ImGui::GetWindowDrawList();
+  dl->AddRectFilled(o, {o.x + w, o.y + h}, IM_COL32(20, 20, 22, 255));
+  if (t && t->width() > 0) {
+    // A coarse rendering of the mask (one rectangle per cell of 4x4 pixels).
+    int tw = t->width(), th = t->height(), step = std::max(1, tw / 80);
+    const auto &mask = t->mask();
+    for (int y = 0; y < th; y += step)
+      for (int x = 0; x < tw; x += step)
+        if (mask[size_t(y * tw + x)])
+          dl->AddRectFilled({o.x + float(x) / tw * w, o.y + float(y) / th * h},
+                            {o.x + float(x + step) / tw * w, o.y + float(y + step) / th * h}, IM_COL32(200, 200, 200, 255));
+  }
+  if (blobs)
+    for (auto &b : *blobs) {
+      ImVec2 a{o.x + (b.x - b.w / 2) * w, o.y + (b.y - b.h / 2) * h}, c{o.x + (b.x + b.w / 2) * w, o.y + (b.y + b.h / 2) * h};
+      dl->AddRect(a, c, IM_COL32(255, 196, 0, 255), 0, 0, 2);
+      char id[16];
+      std::snprintf(id, sizeof(id), "%d", b.id);
+      dl->AddText({a.x + 2, a.y + 1}, IM_COL32(255, 196, 0, 255), id);
+    }
+  ImGui::Dummy({w, h});
+  if (!t) ImGui::TextDisabled("Dispare uma câmera nesta layer para ver os blobs.");
+  ImGui::TextDisabled("%d blob(s) · endereços /blob/%s/1 x y l a, /blob/%s/1/x ...", blobs ? int(blobs->size()) : 0,
+                      l.name.c_str(), l.name.c_str());
+  // Shortcuts: follow blob 1 with a layer.
+  static int target = -1;
+  Project &p = e.project;
+  Layer *tl = p.layer(target);
+  ImGui::SetNextItemWidth(160);
+  if (ImGui::BeginCombo("##follow", tl ? tl->name.c_str() : "(layer)")) {
+    for (auto &x : p.layers)
+      if (ImGui::Selectable(x.name.c_str(), x.id == target)) target = x.id;
+    ImGui::EndCombo();
+  }
+  ImGui::SameLine();
+  if (ImGui::Button("segue o blob 1") && tl) {
+    // Position offsets in canvas pixels: blob 0..1 -> -W/2..W/2 around the layer.
+    float cw = float(p.canvasWidth(tl->canvasId)), ch = float(p.canvasHeight(tl->canvasId));
+    InputMapping mx, my;
+    mx.address = "/blob/" + l.name + "/1/x"; mx.target = MappingTarget::PositionX; mx.layerId = tl->id;
+    mx.outMin = -cw / 2; mx.outMax = cw / 2; mx.smoothing = 0.5f;
+    my = mx;
+    my.address = "/blob/" + l.name + "/1/y"; my.target = MappingTarget::PositionY;
+    my.outMin = -ch / 2; my.outMax = ch / 2;
+    p.mappings.push_back(mx);
+    p.mappings.push_back(my);
+    app.status("Mapeamentos criados em Interação: o blob 1 move a layer " + tl->name);
+    app.edited();
+  }
+  if (ImGui::Button("Presença liga a layer") && tl) {
+    InputMapping m;
+    m.address = "/blob/" + l.name + "/count";
+    m.inMin = 0; m.inMax = 1;
+    m.target = MappingTarget::Opacity; m.layerId = tl->id;
+    m.transformer = Transformer::Switch;
+    m.smoothing = 0.9f;
+    p.mappings.push_back(m);
+    app.status("Mapeamento criado: a layer " + tl->name + " aparece quando alguém é detectado");
+    app.edited();
+  }
+}
+
 void Ui::openInputMesh(int layerId, int slice, int outputId) {
   inputMesh_ = {true, layerId, slice, outputId};
 }
@@ -1096,8 +1406,8 @@ void Ui::inputMeshWindow(App &app) {
   auto toScreen = [&](Vec2 uv) { return ImVec2{o.x + uv.x * bw, o.y + uv.y * bh}; };
   for (int r = 0; r < w->meshRows; ++r)
     for (int c = 0; c < w->meshCols; ++c) {
-      if (c + 1 < w->meshCols) dl->AddLine(toScreen(w->uvAt(c, r)), toScreen(w->uvAt(c + 1, r)), IM_COL32(250, 158, 46, 150));
-      if (r + 1 < w->meshRows) dl->AddLine(toScreen(w->uvAt(c, r)), toScreen(w->uvAt(c, r + 1)), IM_COL32(250, 158, 46, 150));
+      if (c + 1 < w->meshCols) dl->AddLine(toScreen(w->uvAt(c, r)), toScreen(w->uvAt(c + 1, r)), IM_COL32(255, 196, 0, 150));
+      if (r + 1 < w->meshRows) dl->AddLine(toScreen(w->uvAt(c, r)), toScreen(w->uvAt(c, r + 1)), IM_COL32(255, 196, 0, 150));
     }
   ImGuiIO &io = ImGui::GetIO();
   Vec2 mouse{std::clamp((io.MousePos.x - o.x) / bw, 0.0f, 1.0f), std::clamp((io.MousePos.y - o.y) / bh, 0.0f, 1.0f)};
@@ -1130,7 +1440,7 @@ void Ui::inputMeshWindow(App &app) {
     ImVec2 sp = toScreen(w->uvMesh[size_t(i)]);
     bool selPt = i == inputMesh_.point;
     dl->AddCircleFilled(sp, selPt ? 6.0f : 4.5f, selPt ? IM_COL32(255, 255, 255, 255) : IM_COL32(20, 20, 20, 230));
-    dl->AddCircle(sp, selPt ? 6.0f : 4.5f, IM_COL32(250, 158, 46, 255), 0, 2);
+    dl->AddCircle(sp, selPt ? 6.0f : 4.5f, IM_COL32(255, 196, 0, 255), 0, 2);
   }
   if (w->uvIsIdentity()) w->uvMesh.clear();
   ImGui::End();
@@ -1174,7 +1484,9 @@ void Ui::layerInspector(App &app) {
     if (!hw.empty()) ImGui::TextDisabled("Decodificação por hardware: %s", hw.c_str());
   }
   int blend = int(l->blend);
-  if (ImGui::Combo("Blend", &blend, "Normal\0Adição\0Multiplicar\0Tela (screen)\0")) {
+  if (ImGui::Combo("Blend", &blend, "Normal\0Adição\0Multiplicar\0Tela (screen)\0"
+                                    "Matte alpha (máscara da layer de baixo)\0Matte alpha invertido\0"
+                                    "Matte luma (claro mostra)\0Matte luma invertido\0")) {
     l->blend = BlendMode(blend);
     app.edited();
   }
@@ -1207,6 +1519,10 @@ void Ui::layerInspector(App &app) {
       app.edited();
     }
   }
+  if (isMatte(l->blend))
+    ImGui::TextColored({1.0f, 0.77f, 0.0f, 1}, "Matte: esta layer não aparece; ela recorta a layer logo abaixo.");
+
+  if (ImGui::CollapsingHeader("Efeitos (shaders ISF)", ImGuiTreeNodeFlags_DefaultOpen)) effectsUi(app, *l);
 
   if (ImGui::CollapsingHeader("Fatias (slices) / mapping", ImGuiTreeNodeFlags_DefaultOpen)) {
     ImGui::TextWrapped("Cada fatia recorta uma parte da mídia e a projeta numa superfície. "
@@ -1456,6 +1772,22 @@ void Ui::mediaInspector(App &app) {
       app.edited();
     }
     ImGui::TextDisabled("A entrada abre quando alguma layer a dispara e fecha quando ninguém a usa.");
+  } else if (m->type == MediaType::Shader) {
+    ImGui::TextWrapped("Arquivo: %s", m->path.c_str());
+    int sz[2] = {m->width, m->height};
+    if (ImGui::InputInt2("Tamanho (px)", sz)) {
+      m->width = std::clamp(sz[0], 16, 8192);
+      m->height = std::clamp(sz[1], 16, 8192);
+      app.edited();
+    }
+    if (const IsfInfo *info = app.engine.isfCatalog.info(m->path)) {
+      if (!info->description.empty()) ImGui::TextDisabled("%s", info->description.c_str());
+      if (isfParamsUi(*info, m->shaderParams)) app.edited();
+      if (ImGui::SmallButton("Valores padrão")) { m->shaderParams.clear(); app.edited(); }
+    } else {
+      ImGui::TextColored({1, 0.4f, 0.4f, 1}, "%s", app.engine.isfCatalog.error(m->path).c_str());
+    }
+    ImGui::TextDisabled("Edite o arquivo .fs em qualquer editor: o Lumen recarrega sozinho.");
   } else if (m->type == MediaType::Canvas) {
     int cid = m->canvasRef;
     if (canvasCombo("Canvas mostrado", p, cid)) {
