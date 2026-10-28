@@ -11,6 +11,7 @@
 #include "media/upload.h"
 #include "platform/platform.h"
 #include "render/isf_renderer.h"
+#include "render/stream.h"
 
 #include <GLFW/glfw3.h>
 
@@ -36,6 +37,46 @@ struct Report {
     for (auto &i : items) line("- " + i);
   }
 };
+
+// Time the render thread spends handing one frame to the GPU, direct vs PBO.
+// The wall time includes glFinish, i.e. when the GPU really has the frame.
+struct UploadTiming {
+  double directMs = 0, asyncMs = 0, directWallMs = 0, asyncWallMs = 0;
+};
+
+UploadTiming timeUploads(int w, int h, DynamicMesh &mesh) {
+  VideoFrame f;
+  f.layout = FrameLayout::NV12;
+  f.width = w;
+  f.height = h;
+  f.plane[0].assign(size_t(w) * size_t(h), 100);
+  f.plane[1].assign(size_t(w) * size_t(h) / 2, 128);
+  f.stride[0] = w;
+  f.stride[1] = w;
+  UploadTiming t;
+  bool was = StreamUploader::enabled();
+  for (int pass = 0; pass < 2; ++pass) {
+    StreamUploader::setEnabled(pass == 1);
+    FrameUploader up;
+    up.upload(f, mesh); // allocation outside the timing
+    glFinish();
+    const int n = 20;
+    double callMs = 0;
+    auto w0 = std::chrono::steady_clock::now();
+    for (int i = 0; i < n; ++i) {
+      f.plane[0][size_t(i)] = uint8_t(i); // a "new" frame each time
+      auto c0 = std::chrono::steady_clock::now();
+      up.upload(f, mesh);
+      callMs += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - c0).count();
+    }
+    glFinish();
+    double wall = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - w0).count() / n;
+    (pass ? t.asyncMs : t.directMs) = callMs / n;
+    (pass ? t.asyncWallMs : t.directWallMs) = wall;
+  }
+  StreamUploader::setEnabled(was);
+  return t;
+}
 
 std::string glString(GLenum e) {
   const char *s = reinterpret_cast<const char *>(glGetString(e));
@@ -74,6 +115,37 @@ std::string App::diagnosticReport() {
   if (FrameUploader::supportsS3tc()) r.ok("HAP comprimido direto na GPU (S3TC)");
   else r.warn("A GPU não aceita S3TC: vídeos HAP serão decodificados na CPU");
   r.ok("Shaders do renderizador compilados");
+  {
+    UploadTiming t = timeUploads(3840, 2160, engine.mesh);
+    char buf[200];
+    std::snprintf(buf, sizeof(buf), "Envio de quadro 4K para a GPU: direto %.1f ms, assíncrono (PBO) %.1f ms (completo: %.1f / %.1f ms)",
+                  t.directMs, t.asyncMs, t.directWallMs, t.asyncWallMs);
+    if (t.asyncMs < 8) r.ok(buf);
+    else r.warn(std::string(buf) + " — lento para vários vídeos 4K: prefira HAP");
+  }
+  {
+    // Asynchronous read back (NDI) must give the same pixels as glReadPixels:
+    // a white strip on the top rows of a black 64×32 image.
+    std::vector<unsigned char> img(64 * 32 * 4, 0);
+    for (size_t i = 0; i < img.size(); ++i)
+      if (i < 64 * 4 * 8 || i % 4 == 3) img[i] = 255;
+    Texture src;
+    src.upload(img.data(), 64, 32);
+    Framebuffer fb;
+    engine.generators.copyFlipped(src, fb, engine.mesh); // GL bottom-up
+    std::vector<unsigned char> direct, async;
+    fb.readPixels(direct);
+    AsyncReadback rb;
+    rb.request(fb);
+    glFinish();
+    int w = 0, h = 0;
+    bool same = rb.collect(async, w, h) && w == 64 && h == 32 && async.size() == direct.size();
+    for (int y = 0; same && y < h; ++y) // async is top-down, direct bottom-up
+      same = std::equal(&async[size_t(y) * 256], &async[size_t(y) * 256] + 256, &direct[size_t(h - 1 - y) * 256]);
+    same = same && async[0] == 255 && async[async.size() - 4] == 0;
+    if (same) r.ok("Leitura assíncrona da GPU (envio NDI sem travar o render)");
+    else r.fail("Leitura assíncrona da GPU deu pixels diferentes");
+  }
 
   // Every built-in effect, generator and transition, compiled and drawn once.
   int bad = 0, n = 0;
@@ -116,7 +188,8 @@ std::string App::diagnosticReport() {
   r.section("Áudio");
   auto outs = AudioEngine::devices();
   if (engine.audio.deviceName().empty()) r.warn("Nenhuma saída de áudio aberta: vídeos tocam sem som");
-  else r.ok("Saída em uso: " + engine.audio.deviceName());
+  else r.ok("Saída em uso: " + engine.audio.deviceName() + " (" + std::to_string(engine.audio.channels()) + " canais, " +
+            std::to_string(engine.audio.latencyMs()) + " ms" + (engine.audio.exclusive() ? ", exclusivo" : "") + ")");
   r.list(outs, "  (nenhuma saída)");
   r.line("Entradas (LTC):");
   r.list(LtcCapture::devices(), "  (nenhuma entrada)");

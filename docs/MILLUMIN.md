@@ -24,7 +24,7 @@ Legenda: ✅ o Lumen tem · 🟡 o Lumen tem parte · ⬜ ainda não tem.
 | Mattes: alpha, alpha invertido, luma, luma invertido | ✅ v0.8 |
 | Máscaras: mostrar/esconder em pilha, invertida, opacidade, feather, escala, bezier, SVG | ✅ v0.7 |
 | Mídias: texto dinâmico, navegador, captura de tela, slideshow, PDF, color card com 10 cores | 🟡 (texto dinâmico v0.9, geradores, câmera, rede, Spout, NDI) |
-| Áudio: volume por mídia, roteamento por layer e matriz de canais | 🟡 (volume, mudo, placa de som) |
+| Áudio: volume por mídia, roteamento por layer e matriz de canais | ✅ v0.10 (multicanal, par ou matriz por layer, 5.1/7.1) |
 
 ## Saídas e mapping
 
@@ -68,7 +68,7 @@ Legenda: ✅ o Lumen tem · 🟡 o Lumen tem parte · ⬜ ainda não tem.
 | API OSC completa, feedback, consulta `/?` | ✅ v0.6 (a consulta `/?` ⬜) |
 | Scripts JavaScript | ⬜ |
 | Timecode LTC/MTC/NTC (entrada e geração) | ✅ v0.9 (LTC e MTC; NTC ⬜) |
-| Máquina reserva (ColumnSync) | ✅ pelo feedback OSC |
+| Máquina reserva (ColumnSync) | ✅ v0.10 (segue a principal, corrige o tempo dos vídeos e assume sozinha) |
 | Arduino (auto-programação) | 🟡 (serial como entrada v0.9; sem auto-programação) |
 
 ## Atalhos do Millumin e equivalentes

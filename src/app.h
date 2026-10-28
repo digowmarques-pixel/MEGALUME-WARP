@@ -29,6 +29,11 @@ struct Options {
   std::string checkEffectsDir;  // another folder of .fs files
   bool diagnose = false;        // print the system self-test report and exit
   bool showMode = false;        // start with editing locked
+  bool syncUpload = false;      // never use the asynchronous (PBO) upload
+  std::string role;             // "main" / "backup": overrides the machine setting
+  std::string syncPeer;
+  int syncPort = 0;
+  double quitAfter = 0;         // tests in real time: exit after this many seconds
   int width = 1600, height = 900;
   std::string blend;             // "3x1:0.15:1920x1080" applies the blend assistant at start
   int pattern = -1;              // test pattern for every output (TestPattern value)
@@ -120,6 +125,8 @@ public:
   bool recoveryPending() const { return !recoveryFile_.empty(); }
   const std::string &recoveryInfo() const { return recoveryInfo_; }
   void recover(bool yes);
+  // Redundancy role of this computer, saved in the machine settings.
+  void applySync(SyncRole role, const std::string &peer, int port, bool save);
   // System self-test (GPU, shaders, monitors, audio, MIDI, serial, Spout, NDI).
   std::string diagnosticReport();
 

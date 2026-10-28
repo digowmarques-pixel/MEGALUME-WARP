@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(Lumen VERSION 0.9.0 LANGUAGES C CXX)
+project(Lumen VERSION 0.10.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -91,12 +91,15 @@ add_executable(lumen
   src/diagnose.cpp
   src/gl/gl.cpp
   src/render/gpu.cpp
+  src/render/stream.cpp
+  src/core/parallel.cpp
   src/render/mask.cpp
   src/render/isf_renderer.cpp
   src/media/decoder.cpp
   src/media/hap.cpp
   src/media/upload.cpp
   src/media/audio.cpp
+  src/core/audio_route.cpp
   src/media/source.cpp
   src/media/text.cpp
   src/io/spout.cpp
@@ -110,6 +113,7 @@ add_executable(lumen
   src/core/isf.cpp
   src/core/blob.cpp
   src/engine/engine.cpp
+  src/engine/sync.cpp
   src/engine/leds.cpp
   src/engine/compositor.cpp
   src/engine/effects.cpp
@@ -123,6 +127,7 @@ add_executable(lumen
   src/control/mapping.cpp
   src/ui/ui.cpp
   src/ui/i18n.cpp
+  src/core/machine_settings.cpp
   src/ui/workspace.cpp
   src/ui/outputs_window.cpp
   src/platform/platform.cpp)
@@ -179,10 +184,13 @@ if(LUMEN_BUILD_TESTS)
     src/core/blob.cpp
     src/core/md5.cpp
     src/core/timecode.cpp
+    src/core/parallel.cpp
+    src/core/audio_route.cpp
     src/control/devices.cpp
     src/io/serial.cpp
     src/control/osc.cpp
     src/ui/i18n.cpp
+    src/core/machine_settings.cpp
     src/platform/platform.cpp)
   target_include_directories(lumen_tests PRIVATE src third_party)
   target_compile_definitions(lumen_tests PRIVATE LUMEN_SOURCE_DIR="${CMAKE_SOURCE_DIR}")

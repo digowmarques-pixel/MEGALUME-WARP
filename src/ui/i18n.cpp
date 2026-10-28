@@ -1,8 +1,6 @@
 #include "ui/i18n.h"
 
-#include "platform/platform.h"
-
-#include <nlohmann/json.hpp>
+#include "core/machine_settings.h"
 
 #include <cstdlib>
 #include <cstring>
@@ -40,8 +38,6 @@ std::string translateOne(const std::string &s) {
   return id == std::string::npos ? it->second : it->second + s.substr(id);
 }
 
-std::string settingsFile() { return platform::toUtf8(platform::toPath(platform::settingsDir()) / "settings.json"); }
-
 Language systemLanguage() {
 #ifdef _WIN32
   wchar_t name[LOCALE_NAME_MAX_LENGTH] = {};
@@ -65,24 +61,11 @@ Language language() { return g_lang; }
 void setLanguage(Language l) { g_lang = l; }
 
 void loadLanguage() {
-  g_lang = systemLanguage();
-  std::string text;
-  if (!platform::readFile(settingsFile(), text)) return;
-  auto j = nlohmann::json::parse(text, nullptr, false);
-  if (j.is_object() && j.contains("language") && j["language"].is_string())
-    g_lang = j["language"].get<std::string>() == "en" ? Language::English : Language::Portuguese;
+  std::string l = machineSetting("language");
+  g_lang = l.empty() ? systemLanguage() : l == "en" ? Language::English : Language::Portuguese;
 }
 
-void saveLanguage() {
-  nlohmann::json j = nlohmann::json::object();
-  std::string text;
-  if (platform::readFile(settingsFile(), text)) {
-    auto old = nlohmann::json::parse(text, nullptr, false);
-    if (old.is_object()) j = old;
-  }
-  j["language"] = g_lang == Language::English ? "en" : "pt";
-  platform::writeFile(settingsFile(), j.dump(2));
-}
+void saveLanguage() { setMachineSetting("language", g_lang == Language::English ? "en" : "pt"); }
 
 const char *T(const char *pt) {
   if (g_lang == Language::Portuguese || !pt) return pt;

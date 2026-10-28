@@ -2,6 +2,7 @@
 // Runtime state (decoders, textures, playback clocks) lives in the engine.
 #pragma once
 
+#include "core/audio_route.h"
 #include "core/blend.h"
 #include "core/dmx.h"
 #include "core/isf.h"
@@ -145,6 +146,8 @@ struct Layer {
   float opacity = 1;
   float volume = 1; // audio of the media playing in this layer
   bool mute = false;
+  int audioOutput = 0;                // first output channel (0 = outputs 1-2)
+  std::vector<AudioPatch> audioMatrix; // custom routing; empty = automatic
   BlendMode blend = BlendMode::Normal;
   LayerFx fx;
   LayerTransform transform;
@@ -398,7 +401,7 @@ struct TimecodeConfig {
   bool genMtc = true;
   std::string genMtcPort;
   bool genLtc = false;
-  int genLtcChannel = 0; // 0 left, 1 right, 2 both
+  int genLtcChannel = 0; // 0 left, 1 right, 2 both, n >= 3: output channel n
 };
 
 // A projector controlled over the network (PJLink: power, shutter, input).
@@ -443,8 +446,12 @@ struct Project {
   std::vector<OscTarget> oscTargets;
   bool midiEnabled = true;
   std::string audioDevice; // "" = system default
+  int audioChannels = 0;    // output channels to open; 0 = all of the device
+  bool audioExclusive = false; // WASAPI exclusive mode (lowest latency)
+  int audioBufferMs = 10;
   float masterVolume = 1;
   bool hardwareDecode = true;
+  bool asyncUpload = true; // frames go to the GPU through PBOs (render/stream.h)
   bool spoutSend = false;       // publish the canvas as a Spout sender (Windows)
   std::string spoutName = "Lumen";
   float dmxMaster = 1; // intensity of every LED mapping (blackout of the lights)
@@ -473,6 +480,13 @@ struct Project {
   TimecodeConfig timecode;
   // Serial input (Arduino...): each line becomes /serial/<first word> <numbers>.
   struct SerialInput { bool enabled = false; std::string port; int baud = 115200; } serialIn;
+  // Redundancy: the role and the peer address belong to each computer (machine
+  // settings); these belong to the show.
+  struct Redundancy {
+    float timeout = 1.0f;         // seconds without the main before the backup takes over
+    float tolerance = 0.07f;      // seconds of drift before the backup jumps to the main's time
+    std::string takeoverCommands; // device commands run by the backup when it takes over
+  } redundancy;
   bool ndiSend = false;           // publish the main canvas over NDI
   std::string ndiName = "Lumen";
   Timeline *timeline(int id);

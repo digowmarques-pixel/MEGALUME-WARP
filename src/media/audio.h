@@ -1,9 +1,12 @@
 // Audio output (miniaudio: WASAPI on Windows, PulseAudio/ALSA on Linux) and
-// FFmpeg audio decoding. Every playing video with sound owns an AudioVoice;
-// the device callback mixes all voices. The audio clock drives the video
-// clock of the same playback so picture and sound stay in sync.
+// FFmpeg audio decoding. Every playing video with sound owns an AudioVoice
+// that keeps the file's own channels (up to 7.1); the device callback mixes
+// all voices into the device's channels through each voice's routing matrix.
+// The audio clock drives the video clock of the same playback so picture and
+// sound stay in sync.
 #pragma once
 
+#include "core/audio_route.h"
 #include "core/timecode.h"
 
 #include <chrono>
@@ -20,17 +23,25 @@
 namespace lumen {
 
 constexpr int kAudioRate = 48000;
-constexpr int kAudioChannels = 2;
 
 class AudioVoice {
 public:
   explicit AudioVoice(size_t capacityFrames = kAudioRate);
-  // Producer side (decoder thread). Returns frames accepted.
+  // Channels of the audio written to this voice (decoder thread, before
+  // writing). Drops buffered audio when it changes.
+  void setChannels(int channels);
+  int channels() const { return channels_.load(); }
+  // Producer side (decoder thread): `channels()` interleaved samples per frame.
+  // Returns frames accepted.
   size_t write(const float *interleaved, size_t frames);
   size_t space();
-  void reset();               // drop buffered audio and the played counter
-  // Consumer side (audio callback): mixes into `out` with gain ramp.
-  void mixInto(float *out, size_t frames);
+  // Drops buffered audio; the played clock restarts at `atSeconds`.
+  void reset(double atSeconds = 0);
+  // Routing (engine thread, every frame; cheap when nothing changed).
+  void setRoute(int firstOutput, const std::vector<AudioPatch> &custom);
+  // Consumer side (audio callback): mixes into `out` (`outChannels`
+  // interleaved) with a gain ramp.
+  void mixInto(float *out, size_t frames, int outChannels);
 
   std::atomic<float> gain{1.0f};
   std::atomic<bool> active{true}; // false: consumes nothing, outputs nothing
@@ -42,10 +53,20 @@ private:
   std::mutex mutex_;
   std::vector<float> ring_;
   size_t capacity_, readPos_ = 0, count_ = 0;
+  std::atomic<int> channels_{2};
+  int firstOutput_ = 0;
+  std::vector<AudioPatch> custom_, patches_; // patches_: custom_ resolved for:
+  int routeOut_ = -1, routeSrc_ = -1;        // what patches_ was resolved for
   float currentGain_ = 0;
   std::atomic<uint64_t> played_{0};
   std::atomic<float> peak_{0};
   std::atomic<bool> starving_{false};
+};
+
+struct AudioDeviceOptions {
+  int channels = 0;       // 0 = all the channels of the device
+  bool exclusive = false; // WASAPI exclusive mode: lowest latency, Lumen only
+  int bufferMs = 10;      // period size
 };
 
 class AudioEngine {
@@ -53,7 +74,10 @@ public:
   AudioEngine();
   ~AudioEngine();
   // deviceName "" = system default. Falls back to a silent clock-only device.
-  bool start(const std::string &deviceName);
+  bool start(const std::string &deviceName, const AudioDeviceOptions &options = {});
+  int channels() const { return channels_; }      // output channels in use
+  int latencyMs() const { return latencyMs_; }    // period of the device
+  bool exclusive() const { return exclusive_; }   // exclusive mode actually granted
   void stop();
   bool running() const { return running_; }
   bool silent() const { return silent_; } // no real device: null backend
@@ -64,7 +88,7 @@ public:
   std::shared_ptr<AudioVoice> createVoice();
   void removeVoice(const std::shared_ptr<AudioVoice> &v);
   std::atomic<float> master{1.0f};
-  float peak(int ch) const { return peak_[ch].load(); }
+  float peak(int ch) const { return ch >= 0 && ch < kMaxOutputChannels ? peak_[ch].load() : 0.0f; }
 
   void callback(float *out, size_t frames); // called by the device thread
 
@@ -73,8 +97,9 @@ private:
   std::unique_ptr<Impl> impl_;
   std::mutex voicesMutex_;
   std::vector<std::shared_ptr<AudioVoice>> voices_;
-  std::atomic<float> peak_[2];
-  bool running_ = false, silent_ = false;
+  std::atomic<float> peak_[kMaxOutputChannels];
+  int channels_ = 2, latencyMs_ = 0;
+  bool running_ = false, silent_ = false, exclusive_ = false;
   std::string deviceName_, error_;
 };
 
@@ -86,7 +111,9 @@ public:
   bool open(const std::string &path, std::shared_ptr<AudioVoice> voice, bool loop,
             double loopLength, std::string *error = nullptr);
   void close();
-  void restart();
+  void restart() { seek(0); }
+  // Continues from `time` on the monotonic clock (loops included).
+  void seek(double time);
   void setLoop(bool loop) { loop_ = loop; }
   bool finished() const { return finished_; }
 
@@ -96,6 +123,7 @@ private:
   std::shared_ptr<AudioVoice> voice_;
   std::thread thread_;
   std::atomic<bool> running_{false}, restart_{false}, loop_{true}, finished_{false};
+  std::atomic<double> seekTo_{0};
   double loopLength_ = 0;
 };
 

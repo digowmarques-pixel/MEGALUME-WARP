@@ -748,8 +748,11 @@ std::string serializeProject(const Project &p, const std::string &baseDir) {
     j["osc"]["targets"].push_back({{"enabled", t.enabled}, {"host", t.host}, {"port", t.port},
                                    {"feedback", t.feedback}});
   j["midi"] = {{"enabled", p.midiEnabled}};
-  j["audio"] = {{"device", p.audioDevice}, {"master", p.masterVolume}};
-  j["video"] = {{"hardwareDecode", p.hardwareDecode}};
+  j["redundancy"] = {{"timeout", p.redundancy.timeout}, {"tolerance", p.redundancy.tolerance},
+                     {"takeover", p.redundancy.takeoverCommands}};
+  j["audio"] = {{"device", p.audioDevice}, {"master", p.masterVolume}, {"channels", p.audioChannels},
+                {"exclusive", p.audioExclusive}, {"bufferMs", p.audioBufferMs}};
+  j["video"] = {{"hardwareDecode", p.hardwareDecode}, {"asyncUpload", p.asyncUpload}};
   j["spout"] = {{"send", p.spoutSend}, {"name", p.spoutName}};
   {
     const BlendLayoutParams &b = p.outputLayout;
@@ -855,6 +858,11 @@ std::string serializeProject(const Project &p, const std::string &baseDir) {
     json jl = {{"id", l.id}, {"name", l.name}, {"visible", l.visible}, {"opacity", l.opacity},
                {"blend", int(l.blend)}, {"volume", l.volume}, {"mute", l.mute}};
     if (l.canvasId != 0) jl["canvas"] = l.canvasId;
+    if (l.audioOutput != 0) jl["audioOutput"] = l.audioOutput;
+    if (!l.audioMatrix.empty()) {
+      jl["audioMatrix"] = json::array();
+      for (auto &a : l.audioMatrix) jl["audioMatrix"].push_back(json::array({a.src, a.dst, a.gain}));
+    }
     jl["fx"] = {{"brightness", l.fx.brightness}, {"contrast", l.fx.contrast},
                 {"saturation", l.fx.saturation}, {"hue", l.fx.hue},
                 {"invert", l.fx.invert}, {"tint", toJson(l.fx.tint)}};
@@ -949,11 +957,23 @@ bool deserializeProject(const std::string &text, const std::string &baseDir, Pro
       }
     }
     if (j.contains("midi")) p.midiEnabled = j["midi"].value("enabled", true);
+    if (j.contains("redundancy")) {
+      const auto &r = j["redundancy"];
+      p.redundancy.timeout = std::clamp(r.value("timeout", 1.0f), 0.2f, 30.0f);
+      p.redundancy.tolerance = std::clamp(r.value("tolerance", 0.07f), 0.01f, 2.0f);
+      p.redundancy.takeoverCommands = r.value("takeover", "");
+    }
     if (j.contains("audio")) {
       p.audioDevice = j["audio"].value("device", "");
       p.masterVolume = j["audio"].value("master", 1.0f);
+      p.audioChannels = std::clamp(j["audio"].value("channels", 0), 0, kMaxOutputChannels);
+      p.audioExclusive = j["audio"].value("exclusive", false);
+      p.audioBufferMs = std::clamp(j["audio"].value("bufferMs", 10), 2, 100);
     }
-    if (j.contains("video")) p.hardwareDecode = j["video"].value("hardwareDecode", true);
+    if (j.contains("video")) {
+      p.hardwareDecode = j["video"].value("hardwareDecode", true);
+      p.asyncUpload = j["video"].value("asyncUpload", true);
+    }
     if (j.contains("outputLayout")) {
       auto &b = j["outputLayout"];
       p.outputLayout.cols = std::clamp(b.value("cols", 1), 1, 16);
@@ -1150,6 +1170,12 @@ bool deserializeProject(const std::string &text, const std::string &baseDir, Pro
       l.blend = enumFrom(jl, "blend", BlendMode::Normal, int(BlendMode::COUNT));
       l.volume = jl.value("volume", 1.0f);
       l.mute = jl.value("mute", false);
+      l.audioOutput = std::max(0, jl.value("audioOutput", 0));
+      l.audioMatrix.clear();
+      if (jl.contains("audioMatrix"))
+        for (auto &x : jl["audioMatrix"])
+          if (x.is_array() && x.size() >= 2)
+            l.audioMatrix.push_back({x[0].get<int>(), x[1].get<int>(), x.size() > 2 ? x[2].get<float>() : 1.0f});
       l.canvasId = jl.value("canvas", 0);
       if (jl.contains("fx")) {
         auto &f = jl["fx"];

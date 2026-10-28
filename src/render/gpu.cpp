@@ -123,9 +123,13 @@ void Texture::uploadPlane(const void *data, int w, int h, int stride, GLenum int
 }
 
 void Texture::uploadCompressed(const void *data, int w, int h, size_t bytes, GLenum internal) {
+  if (id_ && w == w_ && h == h_ && fmt_ == internal) { // same storage: update in place
+    glBindTexture(GL_TEXTURE_2D, id_);
+    glCompressedTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w, h, internal, GLsizei(bytes), data);
+    return;
+  }
   if (!id_) glGenTextures(1, &id_);
   glBindTexture(GL_TEXTURE_2D, id_);
-  // Compressed textures are re-specified each frame; drivers handle this well.
   glCompressedTexImage2D(GL_TEXTURE_2D, 0, internal, w, h, 0, GLsizei(bytes), data);
   if (w != w_ || h != h_ || fmt_ != internal) {
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);

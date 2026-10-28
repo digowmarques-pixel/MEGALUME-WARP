@@ -4,6 +4,7 @@
 
 #include "media/decoder.h"
 #include "render/gpu.h"
+#include "render/stream.h"
 
 namespace lumen {
 
@@ -15,7 +16,11 @@ public:
   static bool supportsS3tc();
 
 private:
+  // Sends the planes through the PBO ring, or directly for small frames / when
+  // the asynchronous path is off or fails.
+  void send(StreamPlane *planes, int count);
   Texture planes_[3];
+  StreamUploader stream_;
   Framebuffer out_;
 };
 

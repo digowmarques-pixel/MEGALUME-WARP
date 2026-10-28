@@ -94,6 +94,9 @@ public:
 
   // Restart from the beginning (thread-safe).
   void restart();
+  // Jump to `time` on the monotonic clock (loops included); the next frames
+  // fetched start exactly there (thread-safe).
+  void seek(double time);
   void setLoop(bool loop) { loop_ = loop; }
 
   // Returns true and fills `out` with the newest frame whose pts <= time.
@@ -121,6 +124,7 @@ private:
   std::vector<VideoFrame> pool_; // recycled buffers
   std::atomic<bool> running_{false};
   std::atomic<bool> restart_{false};
+  double seekTo_ = 0; // with restart_: target time (guarded by mutex_)
   std::atomic<bool> loop_{true};
   bool eof_ = false;
   double loopLength_ = 0;

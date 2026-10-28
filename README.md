@@ -3,15 +3,16 @@
 Media server para **videomapping** e **instalações interativas**, inspirado no
 Millumin, feito para **Windows** (também compila no Linux).
 
-## O que já funciona (v0.9)
+## O que já funciona (v0.10)
 
 | Área | Recursos |
 |---|---|
 | **Show** | Dashboard em colunas (cues) × layers, GO pela barra de espaço, crossfade por coluna, disparo de célula individual, blackout, master |
 | **Mídia** | Vídeo via FFmpeg (H.264, HEVC, ProRes, HAP, VP9, AV1...) em thread separada, imagens (PNG, JPG, TIFF, WebP...), geradores: test card, cor sólida, degradê, grade, plasma, listras |
-| **Áudio** | Som dos vídeos (WASAPI no Windows), volume e mudo por layer, o fade do áudio acompanha o fade da imagem, volume master, escolha da placa de som, medidores. O relógio do áudio comanda o vídeo, então imagem e som não se perdem nem depois de horas em loop |
+| **Áudio** | Som dos vídeos (WASAPI no Windows, **modo exclusivo** de baixa latência), **multicanal**: todos os canais da interface, cada layer num par de saídas ou numa **matriz** própria, arquivos 5.1/7.1 nativos ou mixados. Volume e mudo por layer, o fade do áudio acompanha o da imagem, medidores por canal. O relógio do áudio comanda o vídeo, então imagem e som não se perdem nem depois de horas em loop. Veja [docs/AUDIO.md](docs/AUDIO.md) |
 | **Ao vivo** | Câmeras e placas de captura (DirectShow), streams de rede (RTSP, SRT, UDP, HTTP) e **Spout** (receber de TouchDesigner, Resolume, OBS, Unreal...). Uma câmera usada por várias layers abre uma vez só. Reconecta sozinho se o sinal cair |
-| **Desempenho** | Conversão de cor YUV → RGB na GPU (8, 10 e 12 bits, BT.601/709/2020), **decodificação por hardware** (D3D11VA/DXVA2), **HAP / HAP Alpha / HAP Q / HAP Q Alpha direto na GPU** como textura comprimida, sem decodificar na CPU |
+| **Desempenho** | Conversão de cor YUV → RGB na GPU (8, 10 e 12 bits, BT.601/709/2020), **decodificação por hardware** (D3D11VA/DXVA2), **HAP / HAP Alpha / HAP Q / HAP Q Alpha direto na GPU** como textura comprimida, **envio assíncrono à GPU** (PBO, cópia em várias threads) para 8K e vários 4K, leitura assíncrona para o NDI |
+| **Redundância** | **Máquina reserva**: segue a principal pela rede (colunas, tempo dos vídeos, timelines, masters) e **assume sozinha** se ela parar, rodando comandos de troca (switcher, PJLink). Veja [docs/REDUNDANCIA.md](docs/REDUNDANCIA.md) |
 | **Videomapping** | Fatias (slices) com recorte UV, perspectiva de 4 cantos (homografia, com troca automática para bilinear quando o quadrilátero fica côncavo), malha deformável (mesh warp) até 33×33, máscaras poligonais com borda suave, bordas com anti-aliasing |
 | **Composição** | Blend normal / adição / multiplicar / tela, opacidade, brilho, contraste, saturação, matiz, inverter, tinta, transformação (posição, escala, rotação) por layer |
 | **Saídas / blend** | Várias saídas (abertas só quando você pede: **Abrir saídas** / Ctrl+P), cada uma num monitor sem bordas. **Assistente de blend** para grades de projetores, soft edge com curva complementar, **compensação de nível de preto**, **cor por projetor**, **máscaras por saída**, warp por saída (keystone e malha), padrões de teste (card, **grade contínua**, branco, preto) e identificação das saídas. Veja [docs/BLEND.md](docs/BLEND.md) |
@@ -99,7 +100,7 @@ código compila para Windows: `./scripts/check-windows-mingw.sh`.
 O instalador (NSIS, também roda no Linux com `sudo apt install nsis`):
 
 ```bash
-cd installer && makensis -DVERSION=0.9.0 -DSRCDIR=../build-mingw/Lumen -DOUTFILE=../Lumen-0.9.0-setup.exe lumen.nsi
+cd installer && makensis -DVERSION=0.10.0 -DSRCDIR=../build-mingw/Lumen -DOUTFILE=../Lumen-0.10.0-setup.exe lumen.nsi
 ```
 
 ## Compilar no Linux (desenvolvimento)
@@ -137,6 +138,10 @@ cmake -S . -B build && cmake --build build -j
   gratuito da Vidvox, e o FFmpeg também: `ffmpeg -i in.mov -c:v hap -format hap_q out.mov`.
 - H.264/HEVC usam a decodificação por hardware da placa de vídeo (*Projeto → Vídeo*).
 - Projetor em monitor: use **Estender** (Win+P), nunca espelhar.
+- A barra de baixo mostra quanto vídeo vai para a placa de vídeo (*GPU: MB/s* e ms por
+  quadro). O diagnóstico (`--diagnose`) mede o envio de um quadro 4K nesta máquina.
+- Se aparecerem quadros corrompidos com algum driver, desligue *Projeto → Vídeo →
+  Envio assíncrono à GPU* (ou rode com `--sync-upload`) e avise.
 
 ### Atalhos
 
@@ -197,6 +202,7 @@ lumen [projeto.lumen] [--launch N] [--outputs | --no-outputs] [--size LxA]
       [--blend 3x1:0.15:1920x1080] [--pattern N] [--black-level V]
       [--frames N --screenshot-canvas F.ppm --screenshot-ui F.ppm --screenshot-output F.ppm]
 lumen --diagnose          # relatório do sistema
+lumen show.lumen --role backup --sync-peer 192.168.10.1   # máquina reserva
 lumen show.lumen --outputs --show-mode   # instalação: abre as saídas com a edição travada
 lumen --check-effects     # compila todos os shaders ISF da pasta effects
 ```

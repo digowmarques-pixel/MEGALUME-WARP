@@ -2,7 +2,7 @@
 
 O Lumen é compilado e testado automaticamente (Linux e Windows no GitHub Actions),
 mas várias partes só podem ser conferidas numa máquina de verdade, com projetor,
-placa de vídeo, câmera e equipamentos. Este roteiro leva cerca de 1 hora.
+placa de vídeo, câmera e equipamentos. Este roteiro leva cerca de 1h30.
 Marque cada item; quando algo falhar, anote o número do item e mande junto o
 relatório do diagnóstico (passo 0).
 
@@ -13,7 +13,7 @@ um Arduino e o NDI Tools.
 
 ## 0. Instalação e diagnóstico
 
-- [ ] 0.1 Instale com `Lumen-0.9.0-setup.exe` (ou descompacte o .zip). O atalho
+- [ ] 0.1 Instale com `Lumen-0.10.0-setup.exe` (ou descompacte o .zip). O atalho
       aparece no Menu Iniciar, e arquivos `.lumen` abrem com o Lumen.
 - [ ] 0.2 Menu Iniciar → *Lumen (console de diagnóstico)*. O relatório abre no Bloco
       de Notas (também fica em `%APPDATA%\Lumen\diagnostico.txt`).
@@ -110,12 +110,29 @@ um Arduino e o NDI Tools.
 - [ ] 8.5 Desinstale pelo *Configurações → Aplicativos*: os projetos e mídias do
       usuário continuam onde estavam.
 
-## 9. Resistência (show longo)
+## 9. Desempenho, áudio multicanal e reserva (v0.10)
 
-- [ ] 9.1 Deixe um projeto com auto-GO em loop rodando por 8 horas com as saídas
+- [ ] 9.1 Três ou quatro vídeos 4K H.264 ao mesmo tempo: a barra de baixo mostra
+      *GPU: ... MB/s* e o fps fica estável. Compare com *Envio assíncrono à GPU*
+      desligado (anote os dois valores de fps e de ms por quadro).
+- [ ] 9.2 Um vídeo 8K (H.265 ou HAP): toca sem engasgar? Anote a placa de vídeo.
+- [ ] 9.3 Interface de áudio multicanal: *Canais* mostra todos; uma layer em *Saídas 3-4*
+      sai nas saídas 3 e 4; a matriz manda um canal para uma saída escolhida.
+- [ ] 9.4 Um arquivo 5.1: com placa de 6+ canais sai em 6 saídas; com placa estéreo
+      sai mixado (centro nos dois lados).
+- [ ] 9.5 Modo exclusivo ligado: *Em uso* diz "exclusivo"; o som não estala com buffer
+      de 5 ms.
+- [ ] 9.6 Duas máquinas na rede (veja docs/REDUNDANCIA.md): GO na principal muda a
+      reserva; tirar o cabo de rede da principal faz a reserva assumir em ~1 s e rodar
+      o comando de troca.
+- [ ] 9.7 Envio NDI de uma saída 4K: o fps do Lumen não cai em relação ao NDI desligado.
+
+## 10. Resistência (show longo)
+
+- [ ] 10.1 Deixe um projeto com auto-GO em loop rodando por 8 horas com as saídas
       abertas. Anote o uso de memória no começo e no fim (não pode crescer sem
       parar) e se houve algum engasgo.
-- [ ] 9.2 Abra o projeto pela pasta *Inicializar* do Windows (`shell:startup`)
+- [ ] 10.2 Abra o projeto pela pasta *Inicializar* do Windows (`shell:startup`)
       com *Ao abrir o projeto → Abrir as saídas* e reinicie o PC: o show volta sozinho.
 
 ## Como relatar

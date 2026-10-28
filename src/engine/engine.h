@@ -32,6 +32,7 @@ struct TimelineRun {
 
 struct LayerState {
   std::unique_ptr<Playback> current, previous;
+  int run = 0;             // changes at every launch / stop / restart (redundancy)
   float fade = 1;          // 0..1 progress of the current transition
   float fadeDuration = 0;  // seconds
   bool fadingOut = false;  // current is being stopped
@@ -60,10 +61,31 @@ struct ParamTween {
   float from = 0, to = 0, elapsed = 0, duration = 0;
 };
 
+// Redundancy: a main computer streams the show state; a backup follows it and
+// takes over when the main goes silent (engine/sync.cpp).
+enum class SyncRole { Off, Main, Backup };
+enum class SyncState { Off, Main, Waiting, Following, Active };
+
 class Engine {
 public:
   bool init();
   void shutdown();
+
+  // Redundancy (role, peer "ip[:port]" and port are settings of this computer).
+  void setSync(SyncRole role, const std::string &peer, int port);
+  SyncRole syncRole() const { return syncRole_; }
+  SyncState syncState() const { return syncState_; }
+  const std::string &syncStatus() const { return syncStatus_; }
+  const std::string &syncPeerStatus() const { return syncPeerStatus_; }
+  bool syncMainBack() const { return syncMainBack_; } // backup took over and the main is alive again
+  void syncTakeOver();  // backup: take over now
+  void syncFollow();    // backup: go back to following the main
+  // True while the backup mirrors the main: local triggers (inputs, auto-GO,
+  // schedule, timecode cues, column commands) must not fire twice.
+  bool following() const { return syncState_ == SyncState::Waiting || syncState_ == SyncState::Following; }
+  // Show commands from this computer are ignored while following (only the
+  // follower itself, applying the main's state, may launch).
+  bool localBlocked() const { return following() && !syncApplying_; }
 
   // Replaces the project (open / new / undo). Playback is kept for layers that still exist.
   void setProject(Project p, bool keepPlayback);
@@ -137,6 +159,7 @@ public:
 
   // Device commands (PJLink, MIDI out, DMX, TCP/UDP, serial).
   DeviceCommands devices;
+  bool forceSyncUpload = false; // --sync-upload (comparisons, driver problems)
 
   // Timecode (MTC / LTC input): seconds, valid while frames keep arriving.
   bool timecodeValid() const { return timecodeValid_; }
@@ -207,6 +230,7 @@ private:
   std::vector<MappingState> mappingStates_;
   int activeColumn_ = -1;
   double columnLaunchedAt_ = 0;
+  int columnRun_ = 0; // changes at every column launch / stop all (redundancy)
   bool autoGoFired_ = false;
   std::vector<ParamTween> tweens_;
   std::vector<OscMessage> injected_;
@@ -252,16 +276,37 @@ private:
   uint64_t frame_ = 0;
   OscServer osc_;
   OscSender oscOut_;
+
+  // Redundancy (engine/sync.cpp).
+  void updateSync();
+  void syncSendState();
+  void syncApply(const std::string &json);
+  std::string syncProjectSignature() const;
+  SyncRole syncRole_ = SyncRole::Off;
+  SyncState syncState_ = SyncState::Off;
+  std::string syncPeer_, syncStatus_, syncPeerStatus_, syncMainHost_, syncSignature_;
+  int syncPort_ = 7400;
+  OscServer syncIn_;
+  OscSender syncOut_;
+  double syncLastRx_ = -1, syncLastTx_ = -10, syncLastPeerRx_ = -1, syncSignatureAt_ = -10;
+  long long syncSeq_ = 0, syncRxSeq_ = -1;
+  int syncSentColumnRun_ = -1, syncSentColumn_ = -2, syncAppliedColumnRun_ = -1;
+  bool syncSentBlackout_ = false, syncMainBack_ = false, syncApplying_ = false;
+  std::map<int, int> syncAppliedRun_; // layer -> main's run already applied
+  std::map<int, double> syncSeekedAt_; // layer -> time of the last drift correction
   int oscSent_ = 0;
   std::string oscError_;
   MidiInputs midi_;
   double midiRescanAt_ = 0;
   std::vector<OscMessage> inbox_;
-  std::string audioDeviceInUse_ = "\x01"; // forces the first start
+  std::string audioInUse_ = "\x01"; // device + options in use; forces the first start
+  std::string audioKey() const;
   SpoutOut spoutOut_;
   std::string spoutStatus_, ndiStatus_;
   NdiSender ndiOut_;
-  std::vector<unsigned char> ndiPixels_, ndiFlip_;
+  AsyncReadback ndiReadback_;
+  std::vector<unsigned char> ndiPixels_;
+  bool ndiOk_ = true;
   SerialReader serialIn_;
   std::string serialPortInUse_, serialError_;
   int serialBaudInUse_ = 0;

@@ -4,6 +4,7 @@
 #include "platform/platform.h"
 #include "ui/ui.h"
 #include "ui/i18n.h"
+#include "core/machine_settings.h"
 
 #include <GLFW/glfw3.h>
 #include <imgui.h>
@@ -238,6 +239,14 @@ int App::relinkMissing(const std::string &dir) {
   return fixed;
 }
 
+void App::applySync(SyncRole role, const std::string &peer, int port, bool save) {
+  engine.setSync(role, peer, port);
+  if (!save) return;
+  setMachineSetting("syncRole", role == SyncRole::Main ? "main" : role == SyncRole::Backup ? "backup" : "");
+  setMachineSetting("syncPeer", peer);
+  setMachineSetting("syncPort", port);
+}
+
 bool App::saveProject(bool saveAs) {
   std::string path = engine.project.filePath;
   if (saveAs || path.empty()) {
@@ -401,7 +410,7 @@ int App::run(const Options &opts) {
   glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
   glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
   glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GLFW_TRUE);
-  glfwWindowHint(GLFW_MAXIMIZED, opts.frames > 0 ? GLFW_FALSE : GLFW_TRUE);
+  glfwWindowHint(GLFW_MAXIMIZED, opts.frames > 0 || opts.quitAfter > 0 ? GLFW_FALSE : GLFW_TRUE);
   if (opts.diagnose || opts.checkEffects) glfwWindowHint(GLFW_VISIBLE, GLFW_FALSE);
   window = glfwCreateWindow(opts.width, opts.height, "Lumen", nullptr, nullptr);
   if (!window) {
@@ -491,6 +500,14 @@ int App::run(const Options &opts) {
   }
   if (!engine.project.layers.empty() && sel.layerId < 0) sel.layerId = engine.project.layers.front().id;
   showLocked = opts.showMode;
+  engine.forceSyncUpload = opts.syncUpload;
+  {
+    // Redundancy: machine settings, or the command line for this run only.
+    std::string role = opts.role.empty() ? machineSetting("syncRole") : opts.role;
+    std::string peer = opts.syncPeer.empty() ? machineSetting("syncPeer") : opts.syncPeer;
+    int port = opts.syncPort > 0 ? opts.syncPort : machineSettingInt("syncPort", 7400);
+    applySync(role == "main" ? SyncRole::Main : role == "backup" ? SyncRole::Backup : SyncRole::Off, peer, port, false);
+  }
   if (!opts.blend.empty()) {
     BlendLayoutParams bp;
     if (std::sscanf(opts.blend.c_str(), "%dx%d:%f:%dx%d", &bp.cols, &bp.rows, &bp.overlapX, &bp.projW,
@@ -514,7 +531,7 @@ int App::run(const Options &opts) {
   if (opts.launchColumn > 0) engine.launchColumn(opts.launchColumn - 1);
   else if (engine.project.startColumn > 0) engine.launchColumn(engine.project.startColumn - 1);
 
-  double last = glfwGetTime(), fpsTimer = last;
+  double last = glfwGetTime(), fpsTimer = last, started = last;
   int frame = 0, fpsFrames = 0;
   bool showCloseDialog = false;
 
@@ -625,11 +642,13 @@ int App::run(const Options &opts) {
     ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
 
     ++frame;
-    bool lastFrame = opts.frames > 0 && frame >= opts.frames;
+    bool lastFrame = (opts.frames > 0 && frame >= opts.frames) || (opts.quitAfter > 0 && glfwGetTime() - started >= opts.quitAfter);
     if (lastFrame) {
       // Summary for automated tests.
       std::printf("[test] audio device: %s\n", engine.audio.deviceName().c_str());
       std::printf("[test] column=%d\n", engine.activeColumn() + 1);
+      if (engine.syncRole() != SyncRole::Off)
+        std::printf("[test] sync: %s | %s\n", engine.syncStatus().c_str(), engine.syncPeerStatus().c_str());
       for (auto &line : engine.oscLog)
         if (!line.empty() && line[0] == '[') std::printf("[test] log %s\n", line.c_str());
       for (auto &l : engine.project.layers)
@@ -698,7 +717,7 @@ int App::run(const Options &opts) {
     glfwSwapBuffers(window);
 
     commitIfNeeded();
-    if (opts.frames == 0) autosave();
+    if (opts.frames == 0 && opts.quitAfter <= 0) autosave();
     updateTitle();
     if (lastFrame) break;
   }

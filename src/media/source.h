@@ -108,12 +108,16 @@ public:
   // Advances the clock and refreshes the texture. Returns the texture to draw.
   const Texture *update(double dt, const MediaItem &m, MediaContext &ctx);
   void restart();
+  // Jumps to `time` (seconds on the playback clock, loops included).
+  void seek(double time);
   bool finished();
   double time() const { return clock_; }
   double duration() const;
   bool hasAudio() const { return voice_ != nullptr; }
   float audioPeak() const { return voice_ ? voice_->peak() : 0.0f; }
   void setGain(float g);
+  void setRoute(int firstOutput, const std::vector<AudioPatch> &matrix);
+  int audioChannels() const { return voice_ ? voice_->channels() : 0; }
   std::string hwaccel() const { return decoder_ ? decoder_->hwaccel() : std::string(); }
   float speed = 1;
   bool loop = true;

@@ -82,10 +82,35 @@ bool FrameUploader::supportsS3tc() {
   return cached == 1;
 }
 
+void FrameUploader::send(StreamPlane *planes, int count) {
+  size_t total = 0;
+  for (int i = 0; i < count; ++i)
+    total += planes[i].compressedBytes ? planes[i].compressedBytes
+                                       : size_t(planes[i].stride ? planes[i].stride : planes[i].width) * size_t(planes[i].height);
+  // Below ~0.5 MB a direct upload is cheaper than managing buffers.
+  if (total >= (512u << 10) && stream_.upload(planes, count)) return;
+  for (int i = 0; i < count; ++i) {
+    StreamPlane &p = planes[i];
+    if (p.compressedBytes) p.texture->uploadCompressed(p.data, p.width, p.height, p.compressedBytes, p.internalFormat);
+    else p.texture->uploadPlane(p.data, p.width, p.height, p.stride, p.internalFormat);
+  }
+}
+
 const Texture *FrameUploader::upload(const VideoFrame &f, DynamicMesh &mesh) {
   if (f.width <= 0 || f.height <= 0) return nullptr;
+  auto plane = [&](int i, int w, int h, int stride, GLenum fmt) {
+    StreamPlane p;
+    p.data = f.plane[i].data();
+    p.width = w;
+    p.height = h;
+    p.stride = stride;
+    p.internalFormat = fmt;
+    p.texture = &planes_[i];
+    return p;
+  };
   if (f.layout == FrameLayout::RGBA) {
-    planes_[0].uploadPlane(f.plane[0].data(), f.width, f.height, f.stride[0] ? f.stride[0] : f.width * 4, GL_RGBA8);
+    StreamPlane p = plane(0, f.width, f.height, f.stride[0] ? f.stride[0] : f.width * 4, GL_RGBA8);
+    send(&p, 1);
     return &planes_[0];
   }
 
@@ -97,19 +122,19 @@ const Texture *FrameUploader::upload(const VideoFrame &f, DynamicMesh &mesh) {
     int bpp = f.wide ? 2 : 1;
     int cw = (f.width + (1 << f.chromaShiftX) - 1) >> f.chromaShiftX;
     int ch = (f.height + (1 << f.chromaShiftY) - 1) >> f.chromaShiftY;
-    planes_[0].uploadPlane(f.plane[0].data(), f.width, f.height, f.stride[0] ? f.stride[0] : f.width * bpp, fmt);
-    planes_[1].uploadPlane(f.plane[1].data(), cw, ch, f.stride[1] ? f.stride[1] : cw * bpp, fmt);
-    planes_[2].uploadPlane(f.plane[2].data(), cw, ch, f.stride[2] ? f.stride[2] : cw * bpp, fmt);
+    StreamPlane p[3] = {plane(0, f.width, f.height, f.stride[0] ? f.stride[0] : f.width * bpp, fmt),
+                        plane(1, cw, ch, f.stride[1] ? f.stride[1] : cw * bpp, fmt),
+                        plane(2, cw, ch, f.stride[2] ? f.stride[2] : cw * bpp, fmt)};
+    send(p, 3);
     layout = 1;
     break;
   }
   case FrameLayout::NV12: {
     int bpp = f.wide ? 2 : 1;
     int cw = (f.width + 1) / 2, ch = (f.height + 1) / 2;
-    planes_[0].uploadPlane(f.plane[0].data(), f.width, f.height, f.stride[0] ? f.stride[0] : f.width * bpp,
-                           f.wide ? GL_R16 : GL_R8);
-    planes_[1].uploadPlane(f.plane[1].data(), cw, ch, f.stride[1] ? f.stride[1] : cw * 2 * bpp,
-                           f.wide ? GL_RG16 : GL_RG8);
+    StreamPlane p[2] = {plane(0, f.width, f.height, f.stride[0] ? f.stride[0] : f.width * bpp, f.wide ? GL_R16 : GL_R8),
+                        plane(1, cw, ch, f.stride[1] ? f.stride[1] : cw * 2 * bpp, f.wide ? GL_RG16 : GL_RG8)};
+    send(p, 2);
     layout = 2;
     break;
   }
@@ -119,13 +144,18 @@ const Texture *FrameUploader::upload(const VideoFrame &f, DynamicMesh &mesh) {
     bool dxt1 = f.layout == FrameLayout::DXT1;
     size_t need = blocks * (dxt1 ? 8 : 16);
     if (f.plane[0].size() < need) return out_.width() ? &out_.texture() : nullptr;
-    planes_[0].uploadCompressed(f.plane[0].data(), pw, ph, need,
-                                dxt1 ? GL_COMPRESSED_RGB_S3TC_DXT1_EXT : GL_COMPRESSED_RGBA_S3TC_DXT5_EXT);
+    StreamPlane p[2];
+    p[0] = plane(0, pw, ph, 0, dxt1 ? GL_COMPRESSED_RGB_S3TC_DXT1_EXT : GL_COMPRESSED_RGBA_S3TC_DXT5_EXT);
+    p[0].compressedBytes = need;
+    int count = 1;
     layout = (f.layout == FrameLayout::DXT1 || f.layout == FrameLayout::DXT5) ? 3 : 4;
     if (f.layout == FrameLayout::YCoCgDXT5A && f.plane[1].size() >= blocks * 8) {
-      planes_[1].uploadCompressed(f.plane[1].data(), pw, ph, blocks * 8, GL_COMPRESSED_RED_RGTC1);
+      p[1] = plane(1, pw, ph, 0, GL_COMPRESSED_RED_RGTC1);
+      p[1].compressedBytes = blocks * 8;
+      count = 2;
       layout = 5;
     }
+    send(p, count);
     uvx = float(f.width) / float(pw);
     uvy = float(f.height) / float(ph);
     break;

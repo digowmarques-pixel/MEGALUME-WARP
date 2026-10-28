@@ -346,14 +346,21 @@ void Playback::setGain(float g) {
   if (voice_) voice_->gain = g;
 }
 
-void Playback::restart() {
-  clock_ = 0;
+void Playback::setRoute(int firstOutput, const std::vector<AudioPatch> &matrix) {
+  if (voice_) voice_->setRoute(firstOutput, matrix);
+}
+
+void Playback::restart() { seek(0); }
+
+void Playback::seek(double time) {
+  time = std::max(0.0, time);
+  clock_ = time;
   hasFrame_ = false;
-  if (decoder_) decoder_->restart();
-  if (voice_) voice_->reset(); // the clock must jump back immediately
+  if (decoder_) decoder_->seek(time);
+  if (voice_) voice_->reset(time); // the audio clock must jump immediately
   if (audioDecoder_) {
-    audioDecoder_->restart();
-    audioClock_ = true;
+    audioDecoder_->seek(time);
+    audioClock_ = voice_ && voice_->active;
   }
 }
 

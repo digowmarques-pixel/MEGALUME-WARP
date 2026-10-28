@@ -32,7 +32,17 @@ namespace lumen {
 // ------------------------------------------------------------------ voice
 
 AudioVoice::AudioVoice(size_t capacityFrames)
-    : ring_(capacityFrames * kAudioChannels), capacity_(capacityFrames) {}
+    : ring_(capacityFrames * 2), capacity_(capacityFrames) {}
+
+void AudioVoice::setChannels(int channels) {
+  channels = std::clamp(channels, 1, kMaxVoiceChannels);
+  std::lock_guard<std::mutex> lock(mutex_);
+  if (channels == channels_.load() && ring_.size() == capacity_ * size_t(channels)) return;
+  channels_ = channels;
+  ring_.assign(capacity_ * size_t(channels), 0.0f);
+  readPos_ = count_ = 0;
+  routeOut_ = -1; // re-resolve the routing
+}
 
 size_t AudioVoice::space() {
   std::lock_guard<std::mutex> lock(mutex_);
@@ -41,26 +51,40 @@ size_t AudioVoice::space() {
 
 size_t AudioVoice::write(const float *in, size_t frames) {
   std::lock_guard<std::mutex> lock(mutex_);
+  size_t ch = size_t(channels_.load());
   size_t n = std::min(frames, capacity_ - count_);
   size_t writePos = (readPos_ + count_) % capacity_;
   for (size_t i = 0; i < n; ++i) {
     size_t p = (writePos + i) % capacity_;
-    ring_[p * 2] = in[i * 2];
-    ring_[p * 2 + 1] = in[i * 2 + 1];
+    std::memcpy(&ring_[p * ch], &in[i * ch], ch * sizeof(float));
   }
   count_ += n;
   return n;
 }
 
-void AudioVoice::reset() {
+void AudioVoice::reset(double atSeconds) {
   std::lock_guard<std::mutex> lock(mutex_);
   readPos_ = count_ = 0;
-  played_ = 0;
+  played_ = uint64_t(std::llround(std::max(0.0, atSeconds) * kAudioRate));
 }
 
-void AudioVoice::mixInto(float *out, size_t frames) {
+void AudioVoice::setRoute(int firstOutput, const std::vector<AudioPatch> &custom) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  if (firstOutput == firstOutput_ && custom == custom_) return;
+  firstOutput_ = firstOutput;
+  custom_ = custom;
+  routeOut_ = -1;
+}
+
+void AudioVoice::mixInto(float *out, size_t frames, int outChannels) {
   if (!active) { peak_ = 0; return; }
   std::lock_guard<std::mutex> lock(mutex_);
+  int src = channels_.load();
+  if (routeOut_ != outChannels || routeSrc_ != src) { // rare: device or file changed
+    patches_ = resolveAudioRoute(src, outChannels, firstOutput_, custom_);
+    routeOut_ = outChannels;
+    routeSrc_ = src;
+  }
   size_t n = std::min(frames, count_);
   starving_ = n < frames;
   float target = gain.load();
@@ -68,13 +92,17 @@ void AudioVoice::mixInto(float *out, size_t frames) {
   // Linear ramp over the buffer avoids clicks when the gain changes.
   float step = frames ? (target - g) / float(frames) : 0.0f;
   float pk = 0;
+  size_t oc = size_t(outChannels);
   for (size_t i = 0; i < n; ++i) {
     size_t p = (readPos_ + i) % capacity_;
     g += step;
-    float l = ring_[p * 2] * g, r = ring_[p * 2 + 1] * g;
-    out[i * 2] += l;
-    out[i * 2 + 1] += r;
-    pk = std::max(pk, std::max(std::fabs(l), std::fabs(r)));
+    const float *frame = &ring_[p * size_t(src)];
+    float *o = &out[i * oc];
+    for (const AudioPatch &pa : patches_) {
+      float v = frame[pa.src] * pa.gain * g;
+      o[pa.dst] += v;
+      pk = std::max(pk, std::fabs(v));
+    }
   }
   currentGain_ = target;
   readPos_ = (readPos_ + n) % capacity_;
@@ -96,8 +124,7 @@ static void dataCallback(ma_device *d, void *out, const void *, ma_uint32 frames
 }
 
 AudioEngine::AudioEngine() : impl_(std::make_unique<Impl>()) {
-  peak_[0] = 0;
-  peak_[1] = 0;
+  for (auto &p : peak_) p = 0;
 }
 
 AudioEngine::~AudioEngine() { stop(); }
@@ -118,7 +145,7 @@ std::vector<std::string> AudioEngine::devices() {
 static void silentAlsa(const char *, int, const char *, int, const char *, ...) {}
 #endif
 
-bool AudioEngine::start(const std::string &name) {
+bool AudioEngine::start(const std::string &name, const AudioDeviceOptions &opt) {
 #if defined(__linux__) && defined(__LINUX_ALSA__)
   // ALSA prints a page of errors on machines without a sound card.
   snd_lib_error_set_handler(silentAlsa);
@@ -126,16 +153,19 @@ bool AudioEngine::start(const std::string &name) {
   stop();
   error_.clear();
   silent_ = false;
-  auto tryInit = [&](const ma_backend *backends, ma_uint32 nb) -> bool {
+  auto tryInit = [&](const ma_backend *backends, ma_uint32 nb, bool exclusive) -> bool {
     if (ma_context_init(backends, nb, nullptr, &impl_->context) != MA_SUCCESS) return false;
     impl_->hasContext = true;
     ma_device_config cfg = ma_device_config_init(ma_device_type_playback);
     cfg.playback.format = ma_format_f32;
-    cfg.playback.channels = kAudioChannels;
+    // 0 = the device's own channel count (every output of the interface).
+    cfg.playback.channels = ma_uint32(std::clamp(opt.channels, 0, kMaxOutputChannels));
+    cfg.playback.shareMode = exclusive ? ma_share_mode_exclusive : ma_share_mode_shared;
     cfg.sampleRate = kAudioRate;
     cfg.dataCallback = dataCallback;
     cfg.pUserData = this;
-    cfg.periodSizeInMilliseconds = 10;
+    cfg.periodSizeInMilliseconds = ma_uint32(std::clamp(opt.bufferMs, 2, 100));
+    cfg.wasapi.noAutoConvertSRC = exclusive ? MA_TRUE : MA_FALSE;
     ma_device_id id{};
     bool found = false;
     if (!name.empty()) {
@@ -160,16 +190,29 @@ bool AudioEngine::start(const std::string &name) {
     deviceName_ = impl_->device.playback.name;
     return true;
   };
-  if (!tryInit(nullptr, 0)) {
+  exclusive_ = false;
+  bool ok = false;
+  if (opt.exclusive) { // the device may refuse (in use, format): then shared
+    ok = tryInit(nullptr, 0, true);
+    exclusive_ = ok;
+    if (!ok) error_ = "modo exclusivo recusado pelo dispositivo, usando o compartilhado";
+  }
+  if (!ok) ok = tryInit(nullptr, 0, false);
+  if (!ok) {
     // No sound card: a null device keeps the audio clock (and sync) running.
     ma_backend nullBackend[] = {ma_backend_null};
-    if (!tryInit(nullBackend, 1)) {
+    if (!tryInit(nullBackend, 1, false)) {
       error_ = "não foi possível abrir nenhum dispositivo de áudio";
       return false;
     }
     silent_ = true;
     deviceName_ = "(sem saída de áudio)";
   }
+  // What the device really gave us (miniaudio converts if it had to).
+  channels_ = std::clamp(int(impl_->device.playback.channels), 1, kMaxOutputChannels);
+  latencyMs_ = int(impl_->device.playback.internalPeriodSizeInFrames * 1000 /
+                   std::max<ma_uint32>(1, impl_->device.playback.internalSampleRate));
+  for (auto &p : peak_) p = 0;
   running_ = true;
   return true;
 }
@@ -199,22 +242,23 @@ void AudioEngine::removeVoice(const std::shared_ptr<AudioVoice> &v) {
 }
 
 void AudioEngine::callback(float *out, size_t frames) {
-  std::memset(out, 0, frames * kAudioChannels * sizeof(float));
+  const int ch = channels_;
+  std::memset(out, 0, frames * size_t(ch) * sizeof(float));
   {
     std::lock_guard<std::mutex> lock(voicesMutex_);
-    for (auto &v : voices_) v->mixInto(out, frames);
+    for (auto &v : voices_) v->mixInto(out, frames, ch);
   }
-  float m = master.load(), pl = 0, pr = 0;
+  float m = master.load();
+  float pk[kMaxOutputChannels] = {};
   for (size_t i = 0; i < frames; ++i) {
-    // Soft clip keeps several loud voices from wrapping around.
-    float l = std::tanh(out[i * 2] * m), r = std::tanh(out[i * 2 + 1] * m);
-    out[i * 2] = l;
-    out[i * 2 + 1] = r;
-    pl = std::max(pl, std::fabs(l));
-    pr = std::max(pr, std::fabs(r));
+    float *f = &out[i * size_t(ch)];
+    for (int c = 0; c < ch; ++c) {
+      // Soft clip keeps several loud voices from wrapping around.
+      f[c] = std::tanh(f[c] * m);
+      pk[c] = std::max(pk[c], std::fabs(f[c]));
+    }
   }
-  peak_[0] = std::max(pl, peak_[0].load() * 0.92f);
-  peak_[1] = std::max(pr, peak_[1].load() * 0.92f);
+  for (int c = 0; c < ch; ++c) peak_[c] = std::max(pk[c], peak_[c].load() * 0.92f);
 }
 
 // ------------------------------------------------------------------ decoder
@@ -239,7 +283,8 @@ void AudioDecoder::close() {
   if (thread_.joinable()) thread_.join();
 }
 
-void AudioDecoder::restart() {
+void AudioDecoder::seek(double time) {
+  seekTo_ = std::max(0.0, time);
   restart_ = true;
   finished_ = false;
 }
@@ -273,8 +318,14 @@ void AudioDecoder::run() {
   avcodec_parameters_to_context(codec, st->codecpar);
   if (avcodec_open2(codec, dec, nullptr) < 0) { finished_ = true; cleanup(); return; }
 
+  // Keep the file's channels (up to 7.1): the voice routes them to the outputs.
+  const int ch = std::clamp(codec->ch_layout.nb_channels, 1, kMaxVoiceChannels);
   AVChannelLayout outLayout;
-  av_channel_layout_default(&outLayout, kAudioChannels);
+  if (codec->ch_layout.nb_channels == ch && codec->ch_layout.order == AV_CHANNEL_ORDER_NATIVE)
+    av_channel_layout_copy(&outLayout, &codec->ch_layout);
+  else
+    av_channel_layout_default(&outLayout, ch);
+  voice_->setChannels(ch);
   if (swr_alloc_set_opts2(&swr, &outLayout, AV_SAMPLE_FMT_FLT, kAudioRate, &codec->ch_layout,
                           codec->sample_fmt, codec->sample_rate, 0, nullptr) < 0 ||
       swr_init(swr) < 0) {
@@ -291,26 +342,40 @@ void AudioDecoder::run() {
   size_t pendingPos = 0;
   bool eof = false;
 
-  auto rewind = [&] {
-    av_seek_frame(fmt, stream, 0, AVSEEK_FLAG_BACKWARD);
+  // Samples to drop after a seek, counted from the first decoded frame.
+  int64_t skipFrames = 0;
+  bool measureSkip = false;
+  double seekInside = 0;
+  auto seekInFile = [&](double inside) {
+    int64_t ts = inside <= 0 ? 0 : av_rescale_q(int64_t(inside * AV_TIME_BASE), AV_TIME_BASE_Q, st->time_base);
+    if (st->start_time != AV_NOPTS_VALUE) ts += st->start_time;
+    av_seek_frame(fmt, stream, ts, AVSEEK_FLAG_BACKWARD);
     avcodec_flush_buffers(codec);
     swr_init(swr);
-    loopFrames = 0;
+    loopFrames = int64_t(std::llround(inside * kAudioRate));
     pending.clear();
     pendingPos = 0;
     eof = false;
+    seekInside = inside;
+    measureSkip = inside > 0;
+    skipFrames = 0;
   };
+  auto rewind = [&] { seekInFile(0); };
 
   while (running_) {
     if (restart_.exchange(false)) {
-      rewind();
-      voice_->reset();
+      double target = seekTo_.load();
+      double len = loopLength_ > 0 ? loopLength_ : 0;
+      double loops = len > 0 && loop_ ? std::floor(target / len) : 0;
+      double inside = std::max(0.0, target - loops * len);
+      seekInFile(inside);
+      voice_->reset(target);
     }
     // Feed what we already have first.
     if (pendingPos < pending.size()) {
-      size_t frames = (pending.size() - pendingPos) / 2;
+      size_t frames = (pending.size() - pendingPos) / size_t(ch);
       size_t n = voice_->write(pending.data() + pendingPos, frames);
-      pendingPos += n * 2;
+      pendingPos += n * size_t(ch);
       if (n < frames) std::this_thread::sleep_for(std::chrono::milliseconds(5));
       continue;
     }
@@ -321,7 +386,7 @@ void AudioDecoder::run() {
       // Pad with silence up to the exact loop length, then loop or stop.
       if (framesPerLoop > 0 && loopFrames < framesPerLoop && loop_) {
         int64_t n = std::min<int64_t>(framesPerLoop - loopFrames, 2048);
-        pending.assign(size_t(n) * 2, 0.0f);
+        pending.assign(size_t(n) * size_t(ch), 0.0f);
         loopFrames += n;
         continue;
       }
@@ -345,10 +410,10 @@ void AudioDecoder::run() {
       // Drain the resampler.
       int out = swr_get_out_samples(swr, 0);
       if (out > 0) {
-        buf.resize(size_t(out) * 2);
+        buf.resize(size_t(out) * size_t(ch));
         uint8_t *dst = reinterpret_cast<uint8_t *>(buf.data());
         int got = swr_convert(swr, &dst, out, nullptr, 0);
-        if (got > 0) pending.assign(buf.begin(), buf.begin() + got * 2);
+        if (got > 0) pending.assign(buf.begin(), buf.begin() + got * ch);
         loopFrames += got > 0 ? got : 0;
       }
       eof = true;
@@ -356,16 +421,31 @@ void AudioDecoder::run() {
     }
     if (r < 0) { eof = true; continue; }
 
+    if (measureSkip) { // first frame after a seek: how far before the target it starts
+      int64_t ts = frame->best_effort_timestamp != AV_NOPTS_VALUE ? frame->best_effort_timestamp : frame->pts;
+      if (ts != AV_NOPTS_VALUE) {
+        if (st->start_time != AV_NOPTS_VALUE) ts -= st->start_time;
+        double at = double(ts) * av_q2d(st->time_base);
+        skipFrames = std::max<int64_t>(0, std::llround((seekInside - at) * kAudioRate));
+      }
+      measureSkip = false;
+    }
     int out = swr_get_out_samples(swr, frame->nb_samples);
-    buf.resize(size_t(std::max(out, 1)) * 2);
+    buf.resize(size_t(std::max(out, 1)) * size_t(ch));
     uint8_t *dst = reinterpret_cast<uint8_t *>(buf.data());
     int got = swr_convert(swr, &dst, out, const_cast<const uint8_t **>(frame->extended_data), frame->nb_samples);
     av_frame_unref(frame);
     if (got <= 0) continue;
-    int64_t keep = got;
+    int64_t start = 0;
+    if (skipFrames > 0) { // still before the seek target
+      start = std::min<int64_t>(skipFrames, got);
+      skipFrames -= start;
+      if (start == got) continue;
+    }
+    int64_t keep = got - start;
     if (framesPerLoop > 0 && loop_) keep = std::min<int64_t>(keep, framesPerLoop - loopFrames);
     if (keep <= 0) { eof = true; continue; } // audio longer than the video: cut
-    pending.assign(buf.begin(), buf.begin() + keep * 2);
+    pending.assign(buf.begin() + start * ch, buf.begin() + (start + keep) * ch);
     loopFrames += keep;
   }
   av_channel_layout_uninit(&outLayout);

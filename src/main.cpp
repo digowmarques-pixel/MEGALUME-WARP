@@ -19,8 +19,13 @@ static void usage() {
       "  --check-effects         compila todos os shaders ISF da pasta effects e sai\n"
       "  --diagnose              testa GPU, shaders, monitores, áudio, MIDI, serial, Spout e NDI e sai\n"
       "  --show-mode             abre com a edição travada (modo show)\n"
+      "  --sync-upload           envia os quadros à GPU sem PBO (comparação / driver com problema)\n"
+      "  --role main|backup      máquina principal ou reserva (sem salvar a configuração)\n"
+      "  --sync-peer IP[:PORTA]  a outra máquina (vazio = broadcast na rede)\n"
+      "  --sync-port N           porta UDP da sincronia (padrão 7400)\n"
       "  --size LxA              tamanho da janela de controle\n"
       "  --frames N              sai depois de N quadros (testes)\n"
+      "  --quit-after S          sai depois de S segundos, em tempo real (testes)\n"
       "  --screenshot-canvas F   salva o canvas em F (.ppm) no último quadro\n"
       "  --screenshot-ui F       salva a interface em F (.ppm) no último quadro\n"
       "  --screenshot-output F   salva a saída 1 em F (.ppm) no último quadro\n"
@@ -52,11 +57,16 @@ int main(int argc, char **argv) {
     else if (a == "--output-controls") opts.outputControls = true;
     else if (a == "--diagnose") opts.diagnose = true;
     else if (a == "--show-mode") opts.showMode = true;
+    else if (a == "--sync-upload") opts.syncUpload = true;
+    else if (a == "--role") opts.role = next();
+    else if (a == "--sync-peer") opts.syncPeer = next();
+    else if (a == "--sync-port") opts.syncPort = std::atoi(next().c_str());
     else if (a == "--check-effects") {
       opts.checkEffects = true;
       if (i + 1 < int(args.size()) && args[size_t(i + 1)][0] != '-') opts.checkEffectsDir = args[size_t(++i)];
     }
     else if (a == "--frames") opts.frames = std::atoi(next().c_str());
+    else if (a == "--quit-after") opts.quitAfter = std::atof(next().c_str());
     else if (a == "--screenshot-canvas") opts.screenshotCanvas = next();
     else if (a == "--screenshot-ui") opts.screenshotUi = next();
     else if (a == "--screenshot-output") opts.screenshotOutput = next();

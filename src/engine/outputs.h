@@ -4,6 +4,7 @@
 
 #include "core/project.h"
 #include "render/gpu.h"
+#include "render/stream.h"
 #include "io/ndi.h"
 #include "io/spout.h"
 #include "render/mask.h"
@@ -89,7 +90,9 @@ private:
     Framebuffer fb;
     SpoutOut out;
     NdiSender ndi;
-    std::vector<unsigned char> px, flip;
+    AsyncReadback readback; // NDI: pixels arrive a frame later, without stalling
+    bool ndiOk = true;
+    std::vector<unsigned char> px;
   };
   std::map<int, std::unique_ptr<SpoutTarget>> spout_; // by output
 public:

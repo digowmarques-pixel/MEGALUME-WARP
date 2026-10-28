@@ -44,6 +44,7 @@ Layers são endereçadas pela **posição a partir do topo (1, 2, 3...)** ou pel
 | `/lumen/layer/<l>/restart` | | Reinicia a mídia da layer |
 | `/lumen/layer/<l>/effect<n>/<param>` | valor(es) | Parâmetro do efeito ISF `n` (1 = o primeiro) |
 | `/lumen/layer/<l>/text` | `"texto"` | Troca o texto de uma mídia de texto |
+| `/lumen/layer/<l>/time` | `s` | Pula o vídeo da layer para o tempo (`/time/+ 5` avança 5 s) |
 | `/lumen/timeline/<n ou nome>/play` | `[0]` | Toca do início (`0`: continua de onde parou) |
 | `/lumen/timeline/<n>/pause`, `/stop` | | Pausa / para a timeline |
 | `/lumen/timeline/<n>/time` | `s` | Vai para o tempo, em segundos |

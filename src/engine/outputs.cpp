@@ -275,13 +275,11 @@ void OutputManager::sendSpout(const Project &p, const CanvasLookup &canvases, do
       bool ok = t->out.send(t->fb.texture().id(), w, h, o.spoutName);
       status += ok ? "Spout \"" + o.spoutName + "\" " + std::to_string(w) + "×" + std::to_string(h) + ". " : "erro no Spout. ";
     }
-    if (wantNdi) { // NDI wants rows top-down
-      t->fb.readPixels(t->px);
-      t->flip.resize(t->px.size());
-      size_t row = size_t(w) * 4;
-      for (int y = 0; y < h; ++y) std::copy_n(&t->px[size_t(h - 1 - y) * row], row, &t->flip[size_t(y) * row]);
-      bool ok = t->ndi.send(o.ndiName, t->flip.data(), w, h);
-      status += ok ? "NDI \"" + o.ndiName + "\"." : "erro no NDI.";
+    if (wantNdi) { // read back asynchronously; send the newest finished frame (rows top-down)
+      t->readback.request(t->fb);
+      int rw = 0, rh = 0;
+      if (t->readback.collect(t->px, rw, rh)) t->ndiOk = t->ndi.send(o.ndiName, t->px.data(), rw, rh);
+      status += t->ndiOk ? "NDI \"" + o.ndiName + "\"." : "erro no NDI.";
     }
     spoutStatus_[o.id] = status;
   }

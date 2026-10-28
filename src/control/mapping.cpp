@@ -121,6 +121,15 @@ bool Engine::setLayerProperty(Layer &l, const std::vector<std::string> &propIn, 
       {"hue", MappingTarget::Hue},               {"speed", MappingTarget::Speed},
       {"volume", MappingTarget::Volume},         {"audio-volume", MappingTarget::Volume}};
   const std::string &p0 = prop[0];
+  // time <s>: jump the playing media (Millumin: /layer:X/media/time).
+  if (p0 == "time" && prop.size() == 1 && hasArg) {
+    auto st = states_.find(l.id);
+    if (st == states_.end() || !st->second.current) return false;
+    Playback &pb = *st->second.current;
+    pb.seek(rel ? pb.time() + double(rel) * a0 : double(a0));
+    ++st->second.run; // a backup machine follows the jump
+    return true;
+  }
   if (prop.size() == 1)
     for (auto &[name, target] : params)
       if (p0 == name && hasArg) { setParam(l, target, value(target, a0)); return true; }

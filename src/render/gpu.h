@@ -77,6 +77,7 @@ public:
   int width() const { return tex_.width(); }
   int height() const { return tex_.height(); }
   void readPixels(std::vector<unsigned char> &rgba) const;
+  GLuint id() const { return fbo_; }
 
 private:
   GLuint fbo_ = 0, rbo_ = 0;

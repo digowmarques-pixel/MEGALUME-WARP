@@ -61,6 +61,10 @@ public:
 private:
   void menuBar(App &app);
   void recoveryPopup(App &app);
+  void redundancyUi(App &app);
+  bool syncEditInit_ = false;
+  int syncRoleEdit_ = 0, syncPortEdit_ = 7400;
+  char syncPeerEdit_[128] = {};
   bool showDiag_ = false;
   std::string diagReport_;
   void relinkDialog(App &app);
@@ -78,6 +82,7 @@ private:
   void softEdgeControls(App &app, OutputConfig *o);
   void blackAndColorControls(App &app, OutputConfig *o);
   void effectsUi(App &app, Layer &l);
+  void audioRouteUi(App &app, Layer &l);
   void timelineEditor(App &app);
   void showTimeline(int id) { timelineSel_ = id; bottomTab_ = 1; forceBottom_ = true; }
   void blobUi(App &app, Layer &l);

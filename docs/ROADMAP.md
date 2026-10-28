@@ -83,19 +83,32 @@ Ordem pensada para **videomapping** e **instalações interativas**.
   e por pasta), **modo show**, **instalador** (NSIS), interface em **inglês**, ícone,
   **diagnóstico do sistema** (`--diagnose`) e roteiro de teste ([TESTE-WINDOWS.md](TESTE-WINDOWS.md))
 
+## ✅ v0.10 (desempenho para shows grandes)
+- **Envio assíncrono à GPU** (anel de PBOs com fences, cópia em várias threads, HAP
+  atualizado no lugar): mesma imagem bit a bit, sem travar o render; **leitura
+  assíncrona** para o NDI; medição no diagnóstico e na barra de status
+- **Áudio multicanal**: todos os canais da interface, par de saídas ou matriz por layer,
+  arquivos 5.1/7.1 nativos ou mixados, modo exclusivo WASAPI, buffer ajustável, medidores
+  por canal, LTC em qualquer saída ([AUDIO.md](AUDIO.md))
+- **Máquina reserva**: segue a principal pela rede, corrige o tempo dos vídeos com *seek*
+  preciso e assume sozinha rodando comandos de troca ([REDUNDANCIA.md](REDUNDANCIA.md))
+- *Seek* preciso de vídeo e áudio (também por OSC: `/lumen/layer/<l>/time`)
+- Testes de integração no CI (`scripts/test-integration.sh`)
+
 ## ⚠️ Pendente de teste em Windows real
 Tudo foi compilado para Windows, mas **ainda não rodou numa máquina Windows**:
-Spout, NDI, WASAPI, DirectShow, D3D11VA, WinMM, saída MIDI, portas COM e o instalador
+Spout, NDI, WASAPI (multicanal e exclusivo), DirectShow, D3D11VA, PBO, WinMM, saída MIDI,
+portas COM, a máquina reserva entre dois PCs e o instalador
 precisam de um teste de verdade. Siga [TESTE-WINDOWS.md](TESTE-WINDOWS.md).
 MTC/LTC e PJLink foram testados com simuladores, não com equipamentos reais.
 
 ## 🔜 Próximas tarefas (por prioridade)
 
 1. **Teste no Windows** com o roteiro, corrigindo o que aparecer
-2. Detecção de pessoas por IA (esqueleto) e câmeras de profundidade (Kinect, Orbbec)
-3. LUT (.cube) por layer e por saída; transição por layer (fade in/out)
-4. Timeline como mídia dentro de uma célula; Auto States
-5. Estrutura 3D (anamorfose): importar OBJ, câmera do público, calibração por 6 pontos (DLT)
-6. Scripts (JavaScript/QuickJS), gamepad, MSC e ATEM nos comandos
-7. Áudio multicanal por layer, ASIO; upload assíncrono (PBO) para 8K
+2. ASIO (depende da decisão de licença: GPLv3 ou acordo com a Steinberg)
+3. Detecção de pessoas por IA (esqueleto) e câmeras de profundidade (Kinect, Orbbec)
+4. LUT (.cube) por layer e por saída; transição por layer (fade in/out)
+5. Timeline como mídia dentro de uma célula; Auto States
+6. Estrutura 3D (anamorfose): importar OBJ, câmera do público, calibração por 6 pontos (DLT)
+7. Scripts (JavaScript/QuickJS), gamepad, MSC e ATEM nos comandos
 8. Triângulo e cantos soldados nas surfaces; mídias navegador, PDF e captura de tela

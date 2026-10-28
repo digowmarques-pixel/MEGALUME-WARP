@@ -13,6 +13,9 @@
 #include "core/warp.h"
 #include "platform/platform.h"
 #include "ui/i18n.h"
+#include "core/parallel.h"
+#include <atomic>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -780,7 +783,86 @@ static void testI18n() {
   setLanguage(before);
 }
 
+static void testParallel() {
+  using namespace lumen;
+  std::atomic<int> sum{0};
+  std::vector<int> hits(1000, 0);
+  parallelFor(1000, [&](int i) { ++hits[size_t(i)]; sum += i; });
+  CHECK(sum == 999 * 1000 / 2);
+  CHECK(std::all_of(hits.begin(), hits.end(), [](int h) { return h == 1; }));
+  // Big copy with padding in the source rows (split across threads).
+  int w = 4000, h = 1200;
+  size_t row = size_t(w), stride = row + 64;
+  std::vector<unsigned char> src(stride * size_t(h)), dst(row * size_t(h)), flip(row * size_t(h));
+  for (size_t i = 0; i < src.size(); ++i) src[i] = (unsigned char)(i * 31 + i / 7);
+  parallelCopyRows(dst.data(), ptrdiff_t(row), src.data(), ptrdiff_t(stride), row, h);
+  bool ok = true;
+  for (int y = 0; y < h && ok; ++y) ok = std::memcmp(&dst[size_t(y) * row], &src[size_t(y) * stride], row) == 0;
+  CHECK(ok);
+  // Vertical flip with a negative source stride.
+  parallelCopyRows(flip.data(), ptrdiff_t(row), dst.data() + row * size_t(h - 1), -ptrdiff_t(row), row, h);
+  ok = true;
+  for (int y = 0; y < h && ok; ++y) ok = std::memcmp(&flip[size_t(y) * row], &dst[size_t(h - 1 - y) * row], row) == 0;
+  CHECK(ok);
+  // Many concurrent callers are serialized safely.
+  std::atomic<int> total{0};
+  std::vector<std::thread> ts;
+  for (int t = 0; t < 4; ++t)
+    ts.emplace_back([&] { for (int k = 0; k < 50; ++k) parallelFor(8, [&](int) { ++total; }); });
+  for (auto &t : ts) t.join();
+  CHECK(total == 4 * 50 * 8);
+}
+
+static bool hasPatch(const std::vector<lumen::AudioPatch> &r, int src, int dst) {
+  return std::any_of(r.begin(), r.end(), [&](const lumen::AudioPatch &p) { return p.src == src && p.dst == dst; });
+}
+
+static void testAudioRoute() {
+  using namespace lumen;
+  // Stereo on a stereo card: L->1, R->2.
+  auto r = resolveAudioRoute(2, 2, 0, {});
+  CHECK(r.size() == 2 && hasPatch(r, 0, 0) && hasPatch(r, 1, 1));
+  // Stereo to outputs 3-4 of an 8-channel interface.
+  r = resolveAudioRoute(2, 8, 2, {});
+  CHECK(r.size() == 2 && hasPatch(r, 0, 2) && hasPatch(r, 1, 3));
+  // Mono goes to both outputs of the pair.
+  r = resolveAudioRoute(1, 8, 4, {});
+  CHECK(r.size() == 2 && hasPatch(r, 0, 4) && hasPatch(r, 0, 5));
+  // 5.1 on an 8-channel card: one output per channel.
+  r = resolveAudioRoute(6, 8, 0, {});
+  CHECK(r.size() == 6 && hasPatch(r, 3, 3) && hasPatch(r, 5, 5));
+  // 5.1 on a stereo card: downmix (centre in both, surrounds to their side, no LFE).
+  r = resolveAudioRoute(6, 2, 0, {});
+  CHECK(hasPatch(r, 2, 0) && hasPatch(r, 2, 1) && hasPatch(r, 4, 0) && hasPatch(r, 5, 1) && !hasPatch(r, 3, 0) &&
+        !hasPatch(r, 3, 1));
+  // A pair beyond the device (show made for 8 channels, laptop): falls back to 1-2.
+  r = resolveAudioRoute(2, 2, 6, {});
+  CHECK(hasPatch(r, 0, 0) && hasPatch(r, 1, 1));
+  // Custom matrix: invalid connections are dropped.
+  r = resolveAudioRoute(2, 4, 0, {{0, 3, 1}, {1, 9, 1}, {5, 0, 1}, {1, 2, 0.5f}});
+  CHECK(r.size() == 2 && hasPatch(r, 0, 3) && hasPatch(r, 1, 2));
+  // Single-output device: everything summed at half gain.
+  r = resolveAudioRoute(2, 1, 0, {});
+  CHECK(r.size() == 2 && hasPatch(r, 0, 0) && hasPatch(r, 1, 0) && std::fabs(r[0].gain - 0.5f) < 1e-6f);
+
+  // The layer routing survives saving and loading.
+  Project p;
+  Layer &l = p.addLayer("Som");
+  l.audioOutput = 4;
+  l.audioMatrix = {{0, 6, 1}, {1, 7, 0.5f}};
+  p.audioChannels = 16;
+  p.audioExclusive = true;
+  p.audioBufferMs = 5;
+  Project q;
+  CHECK(deserializeProject(serializeProject(p, ""), "", q));
+  CHECK(q.layers.size() == 1 && q.layers[0].audioOutput == 4 && q.layers[0].audioMatrix.size() == 2 &&
+        q.layers[0].audioMatrix[1].dst == 7 && std::fabs(q.layers[0].audioMatrix[1].gain - 0.5f) < 1e-6f);
+  CHECK(q.audioChannels == 16 && q.audioExclusive && q.audioBufferMs == 5);
+}
+
 int main() {
+  testAudioRoute();
+  testParallel();
   testI18n();
   testV09();
   testV08();

@@ -2,6 +2,7 @@
 
 #include "app.h"
 #include "core/svg.h"
+#include "core/machine_settings.h"
 #include "io/ndi.h"
 #include "io/serial.h"
 #include "engine/outputs.h"
@@ -9,6 +10,7 @@
 #include "media/decoder.h"
 #include "media/upload.h"
 #include "platform/platform.h"
+#include "render/stream.h"
 
 #include <GLFW/glfw3.h>
 #include <imgui.h>
@@ -52,6 +54,16 @@ bool colorEdit(const char *label, Color &c, bool alpha = false) {
   return changed;
 }
 
+bool inputTextMultiline(const char *label, std::string &s, ImVec2 size) {
+  char buf[4096];
+  std::snprintf(buf, sizeof(buf), "%s", s.c_str());
+  if (ImGui::InputTextMultiline(label, buf, sizeof(buf), size)) {
+    s = buf;
+    return true;
+  }
+  return false;
+}
+
 bool inputText(const char *label, std::string &s) {
   char buf[512];
   std::snprintf(buf, sizeof(buf), "%s", s.c_str());
@@ -71,6 +83,35 @@ void helpMarker(const char *text) {
     ImGui::PopTextWrapPos();
     ImGui::EndTooltip();
   }
+}
+
+// One level meter per output channel of the sound card, numbered.
+void audioMeters(const AudioEngine &audio) {
+  int n = audio.channels();
+  ImDrawList *dl = ImGui::GetWindowDrawList();
+  ImVec2 p = ImGui::GetCursorScreenPos();
+  float avail = ImGui::GetContentRegionAvail().x;
+  float w = std::min(22.0f, (avail - 2.0f * float(n)) / float(std::max(n, 1)));
+  float h = 46;
+  for (int c = 0; c < n; ++c) {
+    float x = p.x + float(c) * (w + 2);
+    float v = std::min(1.0f, audio.peak(c));
+    dl->AddRectFilled({x, p.y}, {x + w, p.y + h}, IM_COL32(28, 28, 28, 255), 2);
+    ImU32 col = v > 0.95f ? IM_COL32(230, 60, 60, 255) : v > 0.7f ? IM_COL32(255, 196, 0, 255) : IM_COL32(90, 200, 110, 255);
+    if (v > 0.001f) dl->AddRectFilled({x, p.y + h * (1 - v)}, {x + w, p.y + h}, col, 2);
+    char num[16];
+    std::snprintf(num, sizeof(num), "%d", c + 1);
+    ImVec2 ts = ImGui::CalcTextSize(num);
+    if (ts.x <= w + 2) dl->AddText({x + (w - ts.x) / 2, p.y + h + 1}, IM_COL32(140, 140, 140, 255), num);
+  }
+  ImGui::Dummy({avail, h + ImGui::GetTextLineHeight() + 2});
+}
+
+const char *channelName(int srcChannels, int c) {
+  static const char *surround[] = {"FL", "FR", "C", "LFE", "BL", "BR", "SL", "SR"};
+  if (srcChannels == 1) return "M";
+  if (srcChannels == 2) return c == 0 ? T("E") : T("D");
+  return c < 8 ? surround[c] : "?";
 }
 
 // Draws a texture fitted inside a box, keeping its aspect ratio.
@@ -546,6 +587,28 @@ void Ui::toolbar(App &app) {
     ImGui::SetCursorPosY(2 + ImGui::GetStyle().WindowPadding.y);
   }
 
+  // Redundancy badge: which machine this is, and whether it is in charge.
+  if (e.syncRole() != SyncRole::Off) {
+    const char *label = T("PRINCIPAL");
+    ImU32 bg = IM_COL32(60, 60, 60, 255);
+    if (e.syncState() == SyncState::Waiting || e.syncState() == SyncState::Following) {
+      label = T("RESERVA");
+      bg = IM_COL32(90, 72, 10, 255);
+    } else if (e.syncState() == SyncState::Active) {
+      label = T("RESERVA NO COMANDO");
+      bg = IM_COL32(170, 40, 35, 255);
+    }
+    ImGui::SetCursorPosY(ImGui::GetCursorPosY() + 7);
+    ImVec2 p = ImGui::GetCursorScreenPos(), ts = ImGui::CalcTextSize(label);
+    ImGui::GetWindowDrawList()->AddRectFilled({p.x - 2, p.y - 3}, {p.x + ts.x + 14, p.y + ts.y + 3}, bg, 10);
+    ImGui::SetCursorScreenPos({p.x + 6, p.y});
+    ImGui::TextUnformatted(label);
+    ImGui::SetItemTooltip("%s\n%s", e.syncStatus().c_str(), e.syncPeerStatus().c_str());
+    ImGui::SameLine(0, 22);
+    ImGui::SetCursorPosY(2 + ImGui::GetStyle().WindowPadding.y);
+  }
+
+  ImGui::BeginDisabled(e.following()); // the backup obeys the main only
   pushPrimary();
   if (ImGui::Button(T("GO"), {84, 30})) e.go();
   popPrimary();
@@ -556,6 +619,7 @@ void Ui::toolbar(App &app) {
   ImGui::SameLine();
   if (ImGui::Button(T("Parar"), {60, 30})) e.stopAll();
   ImGui::SetItemTooltip("%s", T("Para tudo com fade (Esc)"));
+  ImGui::EndDisabled();
   ImGui::SameLine();
   if (e.blackout) {
     ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.75f, 0.15f, 0.15f, 1));
@@ -1875,6 +1939,83 @@ void Ui::timelineEditor(App &app) {
   ImGui::EndChild();
 }
 
+void Ui::audioRouteUi(App &app, Layer &l) {
+  const AudioEngine &audio = app.engine.audio;
+  const int outs = audio.channels();
+  int src = 2; // until the media plays, assume stereo
+  if (const LayerState *st = app.engine.layerState(l.id); st && st->current && st->current->audioChannels() > 0)
+    src = st->current->audioChannels();
+  for (auto &pa : l.audioMatrix) src = std::max(src, pa.src + 1);
+  bool custom = !l.audioMatrix.empty();
+
+  char current[64];
+  if (custom) std::snprintf(current, sizeof(current), "%s", T("Matriz personalizada"));
+  else std::snprintf(current, sizeof(current), T("Saídas %d-%d"), l.audioOutput + 1, l.audioOutput + 2);
+  ImGui::SetNextItemWidth(170);
+  if (ImGui::BeginCombo(T("Saída de áudio##layer"), current)) {
+    for (int first = 0; first + 1 < std::max(outs, 2); first += 2) {
+      char label[48];
+      std::snprintf(label, sizeof(label), T("Saídas %d-%d"), first + 1, first + 2);
+      if (ImGui::Selectable(label, !custom && l.audioOutput == first)) {
+        l.audioOutput = first;
+        l.audioMatrix.clear();
+        app.edited();
+      }
+    }
+    if (ImGui::Selectable(T("Matriz personalizada"), custom) && !custom) {
+      l.audioMatrix = resolveAudioRoute(src, std::max(outs, 2), l.audioOutput, {});
+      app.edited();
+    }
+    ImGui::EndCombo();
+  }
+  helpMarker(T("Para onde vai o som desta layer numa placa multicanal: um par de saídas, ou a matriz "
+               "(cada canal do arquivo para qualquer saída). Arquivos 5.1/7.1 ocupam saídas seguidas, "
+               "ou são mixados no par quando não cabem."));
+  if (!custom && l.audioOutput + 1 >= outs && l.audioOutput > 0)
+    ImGui::TextColored({1, 0.7f, 0.3f, 1}, T("O dispositivo atual só tem %d canais: tocando em 1-2."), outs);
+  if (!custom) return;
+
+  // Matrix: rows = channels of the media, columns = outputs of the device.
+  const int cols = std::max(outs, 2);
+  float rowH = ImGui::GetFrameHeight();
+  if (ImGui::BeginTable("##amatrix", cols + 1,
+                        ImGuiTableFlags_ScrollX | ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_SizingFixedFit,
+                        {0, rowH * float(src + 1) + 14})) {
+    ImGui::TableSetupScrollFreeze(1, 1);
+    ImGui::TableSetupColumn("##src", ImGuiTableColumnFlags_WidthFixed, 34);
+    for (int o = 0; o < cols; ++o) {
+      char h[16];
+      std::snprintf(h, sizeof(h), "%d", o + 1);
+      ImGui::TableSetupColumn(h, ImGuiTableColumnFlags_WidthFixed, rowH);
+    }
+    ImGui::TableHeadersRow();
+    for (int c = 0; c < src; ++c) {
+      ImGui::TableNextRow();
+      ImGui::TableSetColumnIndex(0);
+      ImGui::TextUnformatted(channelName(src, c));
+      for (int o = 0; o < cols; ++o) {
+        ImGui::TableSetColumnIndex(o + 1);
+        auto it = std::find_if(l.audioMatrix.begin(), l.audioMatrix.end(),
+                               [&](const AudioPatch &pa) { return pa.src == c && pa.dst == o; });
+        bool on = it != l.audioMatrix.end();
+        ImGui::PushID(c * 64 + o);
+        if (ImGui::Checkbox("##p", &on)) {
+          if (on) l.audioMatrix.push_back({c, o, 1});
+          else l.audioMatrix.erase(it);
+          if (l.audioMatrix.empty()) l.audioMatrix.push_back({0, 0, 0}); // keep "custom" (silent)
+          app.edited();
+        }
+        ImGui::PopID();
+      }
+    }
+    ImGui::EndTable();
+  }
+  if (ImGui::SmallButton(T("Voltar ao automático"))) {
+    l.audioMatrix.clear();
+    app.edited();
+  }
+}
+
 void Ui::effectsUi(App &app, Layer &l) {
   Engine &e = app.engine;
   int remove = -1, move = -1, dir = 0;
@@ -2157,6 +2298,7 @@ void Ui::layerInspector(App &app) {
     std::string hw = st->current->hwaccel();
     if (!hw.empty()) ImGui::TextDisabled(T("Decodificação por hardware: %s"), hw.c_str());
   }
+  audioRouteUi(app, *l);
   int blend = int(l->blend);
   if (ImGui::Combo(T("Blend"), &blend, TZ("Normal\0Adição\0Multiplicar\0Tela (screen)\0"
                                     "Matte alpha (máscara da layer de baixo)\0Matte alpha invertido\0"
@@ -2885,9 +3027,68 @@ void Ui::outputMaskControls(App &app, OutputConfig *o, Workspace &ws) {
   }
 }
 
+void Ui::redundancyUi(App &app) {
+  Engine &e = app.engine;
+  Project &p = e.project;
+  ImGui::SeparatorText(T("Máquina reserva (redundância)"));
+  // Role, peer and port are settings of this computer (the project is copied
+  // to both machines); edited here, applied with the button.
+  if (!syncEditInit_) {
+    syncRoleEdit_ = int(e.syncRole());
+    std::snprintf(syncPeerEdit_, sizeof(syncPeerEdit_), "%s", machineSetting("syncPeer").c_str());
+    syncPortEdit_ = machineSettingInt("syncPort", 7400);
+    syncEditInit_ = true;
+  }
+  ImGui::RadioButton(T("Desligada"), &syncRoleEdit_, int(SyncRole::Off));
+  ImGui::SameLine();
+  ImGui::RadioButton(T("Principal"), &syncRoleEdit_, int(SyncRole::Main));
+  ImGui::SameLine();
+  ImGui::RadioButton(T("Reserva"), &syncRoleEdit_, int(SyncRole::Backup));
+  if (syncRoleEdit_ != int(SyncRole::Off)) {
+    ImGui::SetNextItemWidth(170);
+    ImGui::InputTextWithHint(T("Outra máquina"), T("IP (vazio = rede toda)"), syncPeerEdit_, sizeof(syncPeerEdit_));
+    ImGui::SetNextItemWidth(110);
+    ImGui::InputInt(T("Porta##sync"), &syncPortEdit_);
+    syncPortEdit_ = std::clamp(syncPortEdit_, 1, 65535);
+  }
+  bool dirtySync = syncRoleEdit_ != int(e.syncRole());
+  if (dirtySync) pushPrimary();
+  if (ImGui::Button(T("Aplicar nesta máquina"))) app.applySync(SyncRole(syncRoleEdit_), syncPeerEdit_, syncPortEdit_, true);
+  if (dirtySync) popPrimary();
+  helpMarker(T("As duas máquinas abrem o mesmo projeto (mesmas mídias). A principal envia o estado do show; "
+               "a reserva dispara as mesmas colunas, corrige o tempo dos vídeos e ignora os comandos locais. "
+               "Se a principal parar de responder, a reserva assume e roda os comandos abaixo (ex.: trocar a "
+               "entrada do switcher de vídeo). Esta escolha fica salva neste computador."));
+
+  if (e.syncRole() == SyncRole::Off) return;
+  ImVec4 col = e.syncState() == SyncState::Active ? ImVec4(1, 0.4f, 0.35f, 1) : kAccent;
+  if (!e.syncStatus().empty()) ImGui::TextColored(col, "%s", e.syncStatus().c_str());
+  if (!e.syncPeerStatus().empty()) ImGui::TextDisabled("%s", e.syncPeerStatus().c_str());
+  if (e.syncRole() == SyncRole::Backup) {
+    if (e.syncState() == SyncState::Active) {
+      if (ImGui::Button(e.syncMainBack() ? T("A principal voltou: voltar a seguir") : T("Voltar a seguir a principal")))
+        e.syncFollow();
+    } else if (ImGui::Button(T("Assumir agora"))) {
+      e.syncTakeOver();
+    }
+  }
+  ImGui::SetNextItemWidth(120);
+  if (ImGui::DragFloat(T("Tempo para assumir (s)"), &p.redundancy.timeout, 0.05f, 0.2f, 30, "%.1f")) app.edited();
+  ImGui::SetNextItemWidth(120);
+  float ms = p.redundancy.tolerance * 1000;
+  if (ImGui::DragFloat(T("Tolerância de sincronia (ms)"), &ms, 1, 10, 2000, "%.0f")) {
+    p.redundancy.tolerance = ms / 1000;
+    app.edited();
+  }
+  helpMarker(T("Se o vídeo da reserva se afastar mais que isto do da principal, ele salta para o tempo certo."));
+  ImGui::TextDisabled("%s", T("Comandos da reserva ao assumir (um por linha):"));
+  if (inputTextMultiline("##takeover", p.redundancy.takeoverCommands, {-1, 70})) app.edited();
+}
+
 void Ui::interactionInspector(App &app) {
   Engine &e = app.engine;
   Project &p = e.project;
+  redundancyUi(app);
   ImGui::SeparatorText(T("Entrada OSC"));
   bool changed = ImGui::Checkbox(T("Ativar OSC"), &p.oscEnabled);
   ImGui::SetNextItemWidth(120);
@@ -3020,7 +3221,21 @@ void Ui::interactionInspector(App &app) {
       if (tc.genLtc) {
         ImGui::SameLine();
         ImGui::SetNextItemWidth(100);
-        if (ImGui::Combo("##ltcch", &tc.genLtcChannel, TZ("esquerdo\0direito\0os dois\0"))) app.edited();
+        // Left / right / both, or a dedicated output of a multichannel interface.
+        auto ltcLabel = [](int v) -> std::string {
+          if (v == 0) return T("esquerdo");
+          if (v == 1) return T("direito");
+          if (v == 2) return T("os dois");
+          char b[32];
+          std::snprintf(b, sizeof(b), T("saída %d"), v);
+          return b;
+        };
+        if (ImGui::BeginCombo("##ltcch", ltcLabel(tc.genLtcChannel).c_str())) {
+          for (int v = 0; v <= std::max(2, e.audio.channels()); ++v) {
+            if (ImGui::Selectable(ltcLabel(v).c_str(), tc.genLtcChannel == v)) { tc.genLtcChannel = v; app.edited(); }
+          }
+          ImGui::EndCombo();
+        }
       }
       if (e.generatingTimecode())
         ImGui::TextColored(kAccent, T("Gerando %s"), Timecode::fromSeconds(e.generatedTimecode(), tc.genFps).str().c_str());
@@ -3618,16 +3833,45 @@ void Ui::projectInspector(App &app) {
       if (ImGui::Selectable(d.c_str(), d == p.audioDevice)) { p.audioDevice = d; app.edited(); }
     ImGui::EndCombo();
   }
-  ImGui::TextDisabled(T("Em uso: %s"), e.audio.deviceName().c_str());
+  {
+    const int options[] = {0, 2, 4, 6, 8, 10, 12, 16, 24, 32};
+    char current[64];
+    if (p.audioChannels == 0) std::snprintf(current, sizeof(current), "%s", T("Todos do dispositivo"));
+    else std::snprintf(current, sizeof(current), "%d", p.audioChannels);
+    if (ImGui::BeginCombo(T("Canais"), current)) {
+      for (int o : options) {
+        char label[64];
+        if (o == 0) std::snprintf(label, sizeof(label), "%s", T("Todos do dispositivo"));
+        else std::snprintf(label, sizeof(label), "%d", o);
+        if (ImGui::Selectable(label, p.audioChannels == o)) { p.audioChannels = o; app.edited(); }
+      }
+      ImGui::EndCombo();
+    }
+    helpMarker(T("Interfaces multicanal (Focusrite, RME, MOTU, Dante Virtual Soundcard...) aparecem com "
+                 "todos os canais. Cada layer escolhe as suas saídas em Layer → Saída de áudio."));
+  }
+#ifdef _WIN32
+  if (ImGui::Checkbox(T("Modo exclusivo (WASAPI, menor latência)"), &p.audioExclusive)) app.edited();
+  helpMarker(T("O Lumen usa a placa sozinho, sem o mixer do Windows: menos latência e sem reamostragem. "
+               "Outros programas ficam sem som nessa placa. Se o dispositivo recusar, volta ao modo compartilhado."));
+#endif
+  ImGui::SetNextItemWidth(120);
+  if (ImGui::SliderInt(T("Buffer (ms)"), &p.audioBufferMs, 2, 50)) app.edited();
+  helpMarker(T("Menor = menos atraso entre imagem e som, mas pode estalar em computadores carregados. 10 ms é seguro."));
+  ImGui::TextDisabled(T("Em uso: %s · %d canais · %d ms%s"), e.audio.deviceName().c_str(), e.audio.channels(),
+                      e.audio.latencyMs(), e.audio.exclusive() ? T(" · exclusivo") : "");
   if (!e.audio.error().empty()) ImGui::TextColored({1, 0.5f, 0.4f, 1}, "%s", e.audio.error().c_str());
   if (ImGui::SliderFloat(T("Volume master"), &p.masterVolume, 0, 2, "%.2f")) app.edited();
-  ImGui::ProgressBar(std::min(1.0f, e.audio.peak(0)), {-1, 5}, "");
-  ImGui::ProgressBar(std::min(1.0f, e.audio.peak(1)), {-1, 5}, "");
+  audioMeters(e.audio);
 
   ImGui::SeparatorText(T("Vídeo"));
   if (ImGui::Checkbox(T("Decodificação por hardware"), &p.hardwareDecode)) app.edited();
   helpMarker(T("Usa a GPU (D3D11VA/DXVA2 no Windows) para H.264/HEVC/VP9/AV1. Vale para mídias "
              "disparadas depois da mudança. HAP sempre vai direto para a GPU."));
+  if (ImGui::Checkbox(T("Envio assíncrono à GPU (PBO)"), &p.asyncUpload)) app.edited();
+  helpMarker(T("Os quadros de vídeo vão para a placa de vídeo sem parar o desenho: a cópia é feita "
+               "em várias threads e a transferência é por DMA. Ajuda com 8K e vários 4K. Desligue só "
+               "se aparecerem quadros corrompidos (driver com problema)."));
   ImGui::TextDisabled(T("HAP comprimido na GPU: %s"), FrameUploader::supportsS3tc() ? T("sim") : T("não suportado"));
 
   ImGui::SeparatorText(T("Spout (enviar o canvas)"));
@@ -3658,6 +3902,25 @@ void Ui::statusBar(App &app) {
   ImGui::SameLine(0, 20);
   ImGui::TextDisabled(T("Saídas abertas: %d (%.1f ms)"), app.outputs.openCount(), app.outputs.renderMs());
   ImGui::SameLine(0, 20);
+  { // video sent to the GPU through the PBOs, averaged over a second
+    static double mb = 0, ms = 0, shownMb = 0, shownMs = 0, since = 0;
+    double m, t;
+    StreamUploader::takeStats(m, t);
+    mb += m;
+    ms += t;
+    double now = ImGui::GetTime();
+    if (now - since >= 1) {
+      shownMb = mb / (now - since);
+      shownMs = ms / std::max(1.0, app.fps() * (now - since));
+      mb = ms = 0;
+      since = now;
+    }
+    if (shownMb > 0.5) {
+      ImGui::TextDisabled(T("GPU: %.0f MB/s (%.1f ms/quadro)"), shownMb, shownMs);
+      ImGui::SetItemTooltip("%s", T("Vídeo enviado à placa de vídeo por segundo, e quanto do tempo de cada quadro isso ocupa."));
+      ImGui::SameLine(0, 20);
+    }
+  }
   if (app.engine.oscServer().running()) ImGui::TextDisabled(T("OSC :%d"), app.engine.oscServer().port());
   else ImGui::TextDisabled("%s", T("OSC desligado"));
   if (!app.statusText().empty() && app.statusAge() < 6) {

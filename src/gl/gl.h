@@ -81,6 +81,11 @@
   X(PFNGLDELETESYNCPROC, glDeleteSync)                                           \
   X(PFNGLFLUSHPROC, glFlush)                                                     \
   X(PFNGLCOMPRESSEDTEXIMAGE2DPROC, glCompressedTexImage2D)                       \
+  X(PFNGLCOMPRESSEDTEXSUBIMAGE2DPROC, glCompressedTexSubImage2D)                 \
+  X(PFNGLMAPBUFFERRANGEPROC, glMapBufferRange)                                   \
+  X(PFNGLUNMAPBUFFERPROC, glUnmapBuffer)                                         \
+  X(PFNGLCLIENTWAITSYNCPROC, glClientWaitSync)                                   \
+  X(PFNGLGETBUFFERSUBDATAPROC, glGetBufferSubData)                               \
   X(PFNGLGETSTRINGIPROC, glGetStringi)                                           \
   X(PFNGLUNIFORMMATRIX3FVPROC, glUniformMatrix3fv)
 
@@ -161,6 +166,11 @@ LUMEN_GL_FUNCS(LUMEN_GL_DECLARE)
 #define glDeleteSync lumen_glDeleteSync
 #define glFlush lumen_glFlush
 #define glCompressedTexImage2D lumen_glCompressedTexImage2D
+#define glCompressedTexSubImage2D lumen_glCompressedTexSubImage2D
+#define glMapBufferRange lumen_glMapBufferRange
+#define glUnmapBuffer lumen_glUnmapBuffer
+#define glClientWaitSync lumen_glClientWaitSync
+#define glGetBufferSubData lumen_glGetBufferSubData
 #define glGetStringi lumen_glGetStringi
 #define glUniformMatrix3fv lumen_glUniformMatrix3fv
 

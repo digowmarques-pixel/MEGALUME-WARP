@@ -312,8 +312,8 @@ bool OscServer::start(int port, std::string *error) {
   ensureNetwork();
   auto s = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
   if (s == LUMEN_BADSOCK) { if (error) *error = "socket() failed"; return false; }
-  int yes = 1;
-  setsockopt(s, SOL_SOCKET, SO_REUSEADDR, reinterpret_cast<const char *>(&yes), sizeof(yes));
+  // No SO_REUSEADDR: a second Lumen on the same port must fail visibly
+  // instead of silently taking the messages meant for the first one.
   sockaddr_in addr{};
   addr.sin_family = AF_INET;
   addr.sin_addr.s_addr = htonl(INADDR_ANY);

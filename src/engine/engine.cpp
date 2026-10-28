@@ -34,6 +34,7 @@ void Engine::shutdown() {
 }
 
 MediaContext Engine::context() {
+  StreamUploader::setEnabled(project.asyncUpload && !forceSyncUpload);
   DecoderSettings s;
   s.hardware = project.hardwareDecode;
   s.nativeHap = FrameUploader::supportsS3tc();
@@ -127,7 +128,7 @@ void Engine::setProject(Project p, bool keepPlayback) {
   if (activeColumn_ >= int(project.columns.size())) activeColumn_ = -1;
   if (portChanged || !keepPlayback) restartOsc();
   if (midiChanged || !keepPlayback) restartMidi();
-  if (audioDeviceInUse_ != project.audioDevice) restartAudio();
+  if (audioInUse_ != audioKey()) restartAudio();
   restartDmxInput();
   tweens_.erase(std::remove_if(tweens_.begin(), tweens_.end(),
                                [&](const ParamTween &t) { return !project.layer(t.layerId); }),
@@ -198,6 +199,7 @@ void Engine::startTransition(int layerId, const Cell *cell, float duration, int 
   st.fade = duration > 0 ? 0.0f : 1.0f;
   st.fadeDuration = duration;
   st.type = type;
+  ++st.run;
   st.fadingOut = !media;
   st.columnId = media ? columnId : -1;
   st.endMode = cell ? cell->endMode : EndMode::Loop;
@@ -205,6 +207,7 @@ void Engine::startTransition(int layerId, const Cell *cell, float duration, int 
 }
 
 void Engine::sendOsc(const OscMessage &m, bool feedbackOnly) {
+  if (following()) return;
   for (auto &t : project.oscTargets) {
     if (!t.enabled || (feedbackOnly && !t.feedback)) continue;
     if (oscOut_.send(t.host, t.port, m)) ++oscSent_;
@@ -212,6 +215,7 @@ void Engine::sendOsc(const OscMessage &m, bool feedbackOnly) {
 }
 
 void Engine::runColumnActions(const Column &c, int index) {
+  if (following()) return; // the main runs them; the backup must not repeat them
   if (!c.commands.empty()) devices.runBatch(c.commands, project);
   if (project.oscTargets.empty()) return;
   OscMessage status{"/lumen/status/column", {int32_t(index + 1), c.name}, ""};
@@ -225,7 +229,7 @@ void Engine::runColumnActions(const Column &c, int index) {
 }
 
 void Engine::launchColumn(int index) {
-  if (index < 0 || index >= int(project.columns.size())) return;
+  if (index < 0 || index >= int(project.columns.size()) || localBlocked()) return;
   const Column &col = project.columns[size_t(index)];
   // Stinger: a video (with alpha) plays over everything and the cue changes
   // with a cut in the middle of it, hidden by the stinger.
@@ -266,6 +270,7 @@ void Engine::launchColumnNow(int index, bool cut) {
   }
   activeColumn_ = index;
   columnLaunchedAt_ = time_;
+  ++columnRun_;
   autoGoFired_ = false;
   applyColumnStates(index, type == TransitionType::Cut ? 0.0f : fade);
   // Timelines: the column's timeline starts (or keeps running if it was
@@ -434,12 +439,12 @@ void Engine::updateTimelines(double dt) {
     for (auto &f : tl->flags) {
       double ft = f.time;
       bool hit = wrapped ? (ft > before || ft <= r.time) : (ft > before && ft <= r.time) || (before == 0 && ft == 0 && r.time > 0);
-      if (hit && !f.command.empty()) runCommand(f.command);
+      if (hit && !f.command.empty() && !following()) runCommand(f.command);
     }
     if (r.playing || tl->followTimecode || before != r.time) applyTimeline(*tl, r.time);
     ++it;
   }
-  if (next) go();
+  if (next && !following()) go();
 }
 
 void Engine::updateTimecode(double dt) {
@@ -479,7 +484,7 @@ void Engine::updateTimecode(double dt) {
     if (tcPrev_ >= 0 && timecodeSeconds_ >= tcPrev_ && timecodeSeconds_ - tcPrev_ < 1.0)
       for (size_t i = 0; i < project.columns.size(); ++i) {
         float cue = project.columns[i].timecodeCue;
-        if (cue >= 0 && cue > tcPrev_ && cue <= timecodeSeconds_) launchColumn(int(i));
+        if (cue >= 0 && cue > tcPrev_ && cue <= timecodeSeconds_ && !following()) launchColumn(int(i));
       }
     tcPrev_ = timecodeSeconds_;
   } else {
@@ -523,16 +528,19 @@ void Engine::updateTimecode(double dt) {
       ltcVoice_->reset();
       ltcClock_ = genTime_;
     }
-    std::vector<float> mono, stereo;
+    // A mono voice routed to the chosen output: left, right, both or any
+    // channel of a multichannel interface (a dedicated LTC output).
+    ltcVoice_->setChannels(1);
+    std::vector<AudioPatch> route;
+    if (cfg.genLtcChannel == 0 || cfg.genLtcChannel == 2) route.push_back({0, 0, 1});
+    if (cfg.genLtcChannel == 1 || cfg.genLtcChannel == 2) route.push_back({0, 1, 1});
+    if (cfg.genLtcChannel >= 3) route.push_back({0, cfg.genLtcChannel - 1, 1});
+    ltcVoice_->setRoute(0, route);
+    std::vector<float> mono;
     while (ltcClock_ < genTime_ + 0.12) { // keep ~100 ms queued
       mono.clear();
       ltcEnc_.encode(Timecode::fromSeconds(ltcClock_, fps), mono, 0.5f);
-      stereo.assign(mono.size() * 2, 0.0f);
-      for (size_t k = 0; k < mono.size(); ++k) {
-        if (cfg.genLtcChannel != 1) stereo[k * 2] = mono[k];
-        if (cfg.genLtcChannel != 0) stereo[k * 2 + 1] = mono[k];
-      }
-      ltcVoice_->write(stereo.data(), mono.size());
+      ltcVoice_->write(mono.data(), mono.size());
       ltcClock_ += 1.0 / fps;
     }
   }
@@ -607,6 +615,7 @@ float Engine::autoGoRemaining() const {
 }
 
 void Engine::updateAutoGo() {
+  if (following()) return;
   float left = autoGoRemaining();
   if (left < 0 || left > 0) return;
   autoGoFired_ = true;
@@ -617,6 +626,7 @@ void Engine::updateAutoGo() {
 }
 
 void Engine::updateSchedule() {
+  if (following()) return;
   if (project.schedule.empty()) return;
   std::time_t now = std::time(nullptr);
   std::tm lt{};
@@ -656,7 +666,7 @@ void Engine::back() {
 }
 
 void Engine::launchCell(int columnIndex, int layerId) {
-  if (columnIndex < 0 || columnIndex >= int(project.columns.size())) return;
+  if (columnIndex < 0 || columnIndex >= int(project.columns.size()) || localBlocked()) return;
   const Column &col = project.columns[size_t(columnIndex)];
   auto it = col.cells.find(layerId);
   if (it == col.cells.end() || it->second.mediaId < 0) {
@@ -666,6 +676,7 @@ void Engine::launchCell(int columnIndex, int layerId) {
   LayerState &st = states_[layerId];
   if (st.current && st.current->mediaId() == it->second.mediaId && st.columnId == col.id) {
     st.current->restart(); // clicking a playing cell restarts it
+    ++st.run;
     return;
   }
   startTransition(layerId, &it->second, columnTransition(columnIndex), col.id, col.transitionType);
@@ -676,19 +687,30 @@ void Engine::stopLayer(int layerId, float fade) {
 }
 
 void Engine::stopAll(float fade) {
+  if (localBlocked()) return;
   for (auto &l : project.layers) stopLayer(l.id, fade);
   if (activeColumn_ >= 0 && activeColumn_ < int(project.columns.size()) && !project.oscTargets.empty())
     sendOsc(OscMessage{"/millumin/board/stoppedColumn",
                        {int32_t(activeColumn_ + 1), project.columns[size_t(activeColumn_)].name}, ""}, true);
   activeColumn_ = -1;
+  ++columnRun_;
   if (!project.oscTargets.empty()) sendOsc(OscMessage{"/lumen/status/column", {int32_t(0), std::string()}, ""}, true);
 }
 
+std::string Engine::audioKey() const {
+  return project.audioDevice + "|" + std::to_string(project.audioChannels) + "|" +
+         std::to_string(project.audioExclusive) + "|" + std::to_string(project.audioBufferMs);
+}
+
 void Engine::restartAudio() {
-  audioDeviceInUse_ = project.audioDevice;
+  audioInUse_ = audioKey();
   // Voices hold no reference to the device, so playing media keep their
   // voices; they are simply mixed by the new device.
-  if (!audio.start(project.audioDevice))
+  AudioDeviceOptions o;
+  o.channels = project.audioChannels;
+  o.exclusive = project.audioExclusive;
+  o.bufferMs = project.audioBufferMs;
+  if (!audio.start(project.audioDevice, o))
     std::fprintf(stderr, "[audio] %s\n", audio.error().c_str());
 }
 
@@ -700,7 +722,7 @@ void Engine::restartMidi() {
 void Engine::update(double dt) {
   time_ += dt;
   ++frame_;
-  if (audioDeviceInUse_ != project.audioDevice) restartAudio();
+  if (audioInUse_ != audioKey()) restartAudio();
   audio.master = project.masterVolume;
 
   // Control input first so parameter changes apply to this frame.
@@ -754,6 +776,10 @@ void Engine::update(double dt) {
   injected_.clear();
   for (size_t i = 0; i < inbox_.size(); ++i) {
     const OscMessage &m = inbox_[i];
+    if (following()) { // the main reacts to its inputs; the backup only watches
+      oscLog.push_back("(reserva) " + m.toString() + "   [" + m.sender + "]");
+      continue;
+    }
     bool known = i < oscCount ? handleOsc(m) : true;
     applyMappings(m);
     if (m.sender == "blob") continue; // every frame: see the Interaction panel instead
@@ -766,6 +792,7 @@ void Engine::update(double dt) {
     midiRescanAt_ = time_ + 3.0;
   }
 
+  updateSync();
   updateTweens(dt);
   updateSchedule();
   updateTimecode(dt);
@@ -812,6 +839,7 @@ void Engine::update(double dt) {
       if (!m) { pb.reset(); return; } // media removed from the library
       // Sound follows the visual crossfade of the layer.
       pb->setGain(vol * fade);
+      if (layer) pb->setRoute(layer->audioOutput, layer->audioMatrix);
       tex = pb->update(dt, *m, ctx);
     };
     tick(st.current, st.currentTex, incomingOpacity(st));
@@ -865,7 +893,7 @@ void Engine::update(double dt) {
     if (it->second.endMode == EndMode::Stop) stopLayer(id, columnTransition(activeColumn_));
     else if (it->second.endMode == EndMode::NextColumn) next = true;
   }
-  if (next && activeColumn_ + 1 < int(project.columns.size())) launchColumn(activeColumn_ + 1);
+  if (next && !following() && activeColumn_ + 1 < int(project.columns.size())) launchColumn(activeColumn_ + 1);
   // Stinger playback.
   stingerTex_ = nullptr;
   if (stinger_) {
@@ -928,18 +956,15 @@ void Engine::render() {
   // the DMX master dims only the LEDs.
   leds.update(project, [this](int id) -> const Texture & { return canvasTexture(id); }, mesh, time_);
 
-  // NDI of the main canvas: read back (synchronous), rows top-down for NDI.
+  // NDI of the main canvas: asynchronous read back, sent a frame later.
   if (project.ndiSend) {
     if (!ndiAvailable()) {
       ndiStatus_ = lumen::ndiStatus();
     } else {
-      canvas().readPixels(ndiPixels_);
-      int w = canvas().width(), h = canvas().height();
-      ndiFlip_.resize(ndiPixels_.size());
-      size_t row = size_t(w) * 4;
-      for (int y = 0; y < h; ++y)
-        std::copy_n(&ndiPixels_[size_t(h - 1 - y) * row], row, &ndiFlip_[size_t(y) * row]);
-      ndiStatus_ = ndiOut_.send(project.ndiName, ndiFlip_.data(), w, h) ? "enviando \"" + project.ndiName + "\"" : "erro";
+      ndiReadback_.request(canvas());
+      int w = 0, h = 0;
+      if (ndiReadback_.collect(ndiPixels_, w, h)) ndiOk_ = ndiOut_.send(project.ndiName, ndiPixels_.data(), w, h);
+      ndiStatus_ = ndiOk_ ? "enviando \"" + project.ndiName + "\"" : "erro";
     }
   } else {
     ndiStatus_.clear();

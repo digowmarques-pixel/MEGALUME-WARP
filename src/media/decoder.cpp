@@ -235,8 +235,13 @@ struct Pipeline {
     }
   }
 
-  void rewind() {
-    av_seek_frame(fmt, stream, 0, AVSEEK_FLAG_BACKWARD);
+  void rewind() { seekTo(0); }
+
+  // Lands on the keyframe at or before `seconds`; the caller drops the frames
+  // before the target.
+  void seekTo(double seconds) {
+    int64_t ts = seconds <= 0 ? 0 : int64_t((seconds + startTime) / timeBase);
+    if (av_seek_frame(fmt, stream, ts, AVSEEK_FLAG_BACKWARD) < 0) av_seek_frame(fmt, stream, 0, AVSEEK_FLAG_BACKWARD);
     if (codec) avcodec_flush_buffers(codec);
   }
 
@@ -421,13 +426,16 @@ void VideoDecoder::close() {
   queue_.clear();
 }
 
-void VideoDecoder::restart() {
+void VideoDecoder::restart() { seek(0); }
+
+void VideoDecoder::seek(double time) {
   if (src_.live) return;
   {
     std::lock_guard<std::mutex> lock(mutex_);
     for (auto &f : queue_) pool_.push_back(std::move(f));
     queue_.clear();
     eof_ = false;
+    seekTo_ = std::max(0.0, time);
     restart_ = true;
   }
   cv_.notify_all();
@@ -493,13 +501,26 @@ void VideoDecoder::run() {
 
     double loopOffset = 0; // added to pts so time keeps increasing across loops
     double maxPts = 0;
+    double skipBefore = -1; // after a seek: frames earlier than this are dropped
     bool reopen = false;
 
     while (running_ && !reopen) {
       if (restart_.exchange(false)) {
-        p.rewind();
-        loopOffset = 0;
+        double target;
+        {
+          std::lock_guard<std::mutex> lock(mutex_);
+          target = seekTo_;
+        }
+        // Which loop the target falls in, and where inside the file.
+        double len = loopLength_ > 0 ? loopLength_ : 0;
+        double loops = len > 0 && loop_ ? std::floor(target / len) : 0;
+        double inside = target - loops * len;
+        if (len > 0 && inside > len) inside = len; // past the end of a non-looping file
+        loopOffset = loops * len;
         maxPts = 0;
+        if (inside > 0) p.seekTo(inside);
+        else p.rewind();
+        skipBefore = inside > 0 ? inside - p.frameDuration * 0.5 : -1;
       }
       if (!src_.live) {
         std::unique_lock<std::mutex> lock(mutex_);
@@ -527,6 +548,14 @@ void VideoDecoder::run() {
         }
       }
 
+      if (r == 1 && skipBefore >= 0) {
+        if (pts < skipBefore) { // decoded from the keyframe: not there yet
+          std::lock_guard<std::mutex> lock(mutex_);
+          pool_.push_back(std::move(f));
+          continue;
+        }
+        skipBefore = -1;
+      }
       if (r == 1) {
         maxPts = std::max(maxPts, pts);
         f.pts = loopOffset + pts;
@@ -541,6 +570,7 @@ void VideoDecoder::run() {
         double len = loopLength_ > 0 ? loopLength_ : maxPts + p.frameDuration;
         loopOffset += len;
         maxPts = 0;
+        skipBefore = -1;
         p.rewind();
       } else if (r == AVERROR_INVALIDDATA) {
         continue; // skip a damaged frame
