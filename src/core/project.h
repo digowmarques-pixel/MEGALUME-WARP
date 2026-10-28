@@ -93,9 +93,14 @@ struct Cell {
   float speed = 1;
 };
 
+// Values are stored in project files: only append.
+enum class TransitionType { Crossfade, Cut, ThroughBlack, COUNT };
+
 struct Column {
   int id = 0;
   std::string name;
+  std::string notes;     // cue notes for the operator
+  TransitionType transitionType = TransitionType::Crossfade;
   float transition = -1; // seconds, <0 = project default
   std::map<int, Cell> cells; // by layer id
   // OSC messages sent to every OSC output target when the column is launched,
@@ -221,6 +226,9 @@ struct Project {
   bool spoutSend = false;       // publish the canvas as a Spout sender (Windows)
   std::string spoutName = "Lumen";
   float dmxMaster = 1; // intensity of every LED mapping (blackout of the lights)
+  // Output layout of the Outputs window (projector grid). Applied with
+  // applyBlendLayout; kept so the window shows the current layout.
+  BlendLayoutParams outputLayout{1, 1, 1920, 1080, 0, 0, {}, {}};
   int nextId = 1;
 
   std::vector<MediaItem> library;

@@ -101,9 +101,17 @@ void Ui::setup() {
     std::error_code ec;
     if (std::filesystem::exists(f, ec)) {
       // Latin-1 plus punctuation (– — … ·) and arrows (→) used in the interface.
-      static const ImWchar ranges[] = {0x0020, 0x00FF, 0x2000, 0x206F, 0x2190, 0x21FF, 0x2212, 0x2212, 0};
+      static const ImWchar ranges[] = {0x0020, 0x00FF, 0x2000, 0x206F, 0x2190, 0x21FF, 0x2212, 0x2212,
+                                       0x25A0, 0x25FF, 0};
       if (io.Fonts->AddFontFromFileTTF(f, 16.0f, nullptr, ranges)) {
         loaded = true;
+        // Symbols (▶ ■ ⚙ ...) from Windows' symbol font when the UI font lacks them.
+        static const ImWchar symbols[] = {0x2190, 0x21FF, 0x25A0, 0x25FF, 0x2600, 0x26FF, 0};
+        if (std::filesystem::exists("C:/Windows/Fonts/seguisym.ttf", ec)) {
+          ImFontConfig merge;
+          merge.MergeMode = true;
+          io.Fonts->AddFontFromFileTTF("C:/Windows/Fonts/seguisym.ttf", 16.0f, &merge, symbols);
+        }
         break;
       }
     }
@@ -194,6 +202,7 @@ void Ui::draw(App &app) {
   ImGui::End();
   ImGui::PopStyleVar();
 
+  outputsWindow(app);
   if (showDemo_) ImGui::ShowDemoWindow(&showDemo_);
   if (showHelp_) {
     ImGui::SetNextWindowSize({520, 460}, ImGuiCond_FirstUseEver);
@@ -250,6 +259,7 @@ void Ui::menuBar(App &app) {
     ImGui::EndMenu();
   }
   if (ImGui::BeginMenu("Saídas")) {
+    if (ImGui::MenuItem("Configurar saídas...", "Ctrl+Shift+P")) openOutputs();
     if (ImGui::MenuItem(app.outputsOpen ? "Fechar saídas" : "Abrir saídas", "Ctrl+P")) app.outputsOpen = !app.outputsOpen;
     ImGui::Separator();
     if (ImGui::MenuItem("Adicionar saída")) {
@@ -307,6 +317,9 @@ void Ui::toolbar(App &app) {
   }
   if (ImGui::Button(open ? "Fechar saídas" : "Abrir saídas", {110, 30})) app.outputsOpen = !open;
   if (open) ImGui::PopStyleColor(2);
+  ImGui::SameLine();
+  if (ImGui::Button("Saídas...", {80, 30})) openOutputs();
+  ImGui::SetItemTooltip("Layout dos projetores, telas, soft edge e mapping de cada saída");
   ImGui::SetItemTooltip("Abre/fecha as janelas dos projetores (Ctrl+P). O workspace mostra a prévia mesmo fechadas.");
 
   ImGui::SameLine(0, 20);
@@ -456,17 +469,22 @@ void Ui::dashboard(App &app) {
     app.edited();
   }
   ImGui::SameLine();
-  ImGui::TextDisabled("Arraste mídias da biblioteca para as células. Clique numa célula para disparar.");
+  ImGui::TextDisabled("Arraste mídias para as células. Clique numa célula para disparar.");
+  ImGui::SameLine(std::max(ImGui::GetCursorPosX() + 10, ImGui::GetWindowWidth() - 150));
+  ImGui::SetNextItemWidth(130);
+  ImGui::Combo("##zoom", &dashZoom_, "pequeno\0médio\0grande\0");
 
-  const float cellW = 116, cellH = 74, nameW = 150;
+  const float zw[] = {86, 116, 160}, zh[] = {50, 74, 104};
+  const float cellW = zw[std::clamp(dashZoom_, 0, 2)], cellH = zh[std::clamp(dashZoom_, 0, 2)], nameW = 150;
   int ncols = int(p.columns.size());
   ImGuiTableFlags flags = ImGuiTableFlags_ScrollX | ImGuiTableFlags_ScrollY |
                           ImGuiTableFlags_BordersInner | ImGuiTableFlags_RowBg;
-  if (!ImGui::BeginTable("##dash", ncols + 1, flags)) return;
+  if (!ImGui::BeginTable("##dash", ncols + 2, flags)) return;
   ImGui::TableSetupScrollFreeze(1, 1);
   ImGui::TableSetupColumn("##layers", ImGuiTableColumnFlags_WidthFixed, nameW);
   for (int c = 0; c < ncols; ++c)
     ImGui::TableSetupColumn(p.columns[size_t(c)].name.c_str(), ImGuiTableColumnFlags_WidthFixed, cellW);
+  ImGui::TableSetupColumn("##stop", ImGuiTableColumnFlags_WidthFixed, 40);
 
   // Header row: one launch button per column.
   ImGui::TableNextRow(ImGuiTableRowFlags_Headers);
@@ -476,25 +494,58 @@ void Ui::dashboard(App &app) {
   for (int c = 0; c < ncols; ++c) {
     ImGui::TableSetColumnIndex(c + 1);
     ImGui::PushID(p.columns[size_t(c)].id);
+    Column &colRef = p.columns[size_t(c)];
     bool active = e.activeColumn() == c;
     if (active) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.98f, 0.62f, 0.18f, 0.85f));
     char label[96];
-    std::snprintf(label, sizeof(label), "%d  %s", c + 1, p.columns[size_t(c)].name.c_str());
+    std::snprintf(label, sizeof(label), "%02d  \xe2\x96\xb6  %s", c + 1, colRef.name.c_str()); // ▶
     if (ImGui::Button(label, {cellW - 4, 0})) e.launchColumn(c);
     if (active) ImGui::PopStyleColor();
-    if (ImGui::BeginPopupContextItem()) {
+    if (!colRef.notes.empty()) ImGui::SetItemTooltip("%s", colRef.notes.c_str());
+    // Transition line (click: column window), like Millumin's "no transition ⚙".
+    {
+      float dur = colRef.transition < 0 ? p.defaultTransition : colRef.transition;
+      char tl[64];
+      if (colRef.transitionType == TransitionType::Cut || dur <= 0) std::snprintf(tl, sizeof(tl), "corte");
+      else std::snprintf(tl, sizeof(tl), "%s %.1fs", colRef.transitionType == TransitionType::ThroughBlack ? "pelo preto" : "crossfade", dur);
+      ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
+      ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+      if (ImGui::SmallButton(tl)) ImGui::OpenPopup("colpop");
+      ImGui::PopStyleColor(2);
+    }
+    bool popupOpen = ImGui::BeginPopup("colpop");
+    if (!popupOpen) popupOpen = ImGui::BeginPopupContextItem("colpop");
+    if (popupOpen) {
+      ImGui::SeparatorText("Coluna");
+      ImGui::SetNextItemWidth(220);
+      if (inputText("Título", colRef.name)) app.edited();
+      {
+        char notes[1024];
+        std::snprintf(notes, sizeof(notes), "%s", colRef.notes.c_str());
+        if (ImGui::InputTextMultiline("Notas", notes, sizeof(notes), {220, 54})) {
+          colRef.notes = notes;
+          app.edited();
+        }
+      }
+      ImGui::SeparatorText("Transição");
+      int tt = int(colRef.transitionType);
       ImGui::SetNextItemWidth(160);
-      if (inputText("Nome", p.columns[size_t(c)].name)) app.edited();
-      ImGui::SetNextItemWidth(160);
-      float &tr = p.columns[size_t(c)].transition;
+      if (ImGui::Combo("Tipo", &tt, "Crossfade\0Corte (sem transição)\0Fade pelo preto\0")) {
+        colRef.transitionType = TransitionType(tt);
+        app.edited();
+      }
+      float &tr = colRef.transition;
       bool custom = tr >= 0;
-      if (ImGui::Checkbox("Fade próprio", &custom)) {
+      if (ImGui::Checkbox("Duração própria", &custom)) {
         tr = custom ? p.defaultTransition : -1;
         app.edited();
       }
       if (custom) {
         ImGui::SetNextItemWidth(160);
-        if (ImGui::DragFloat("Fade (s)", &tr, 0.05f, 0, 60)) app.edited();
+        if (ImGui::DragFloat("Duração (s)", &tr, 0.05f, 0, 60, "%.2f s")) app.edited();
+      } else {
+        ImGui::SameLine();
+        ImGui::TextDisabled("(padrão %.2f s)", p.defaultTransition);
       }
       if (ImGui::MenuItem("Mover para a esquerda", nullptr, false, c > 0)) { moveColumn = c; moveDir = -1; }
       if (ImGui::MenuItem("Mover para a direita", nullptr, false, c + 1 < ncols)) { moveColumn = c; moveDir = 1; }
@@ -520,9 +571,12 @@ void Ui::dashboard(App &app) {
       if (ImGui::MenuItem("Remover coluna")) removeColumn = c;
       ImGui::EndPopup();
     }
-    ImGui::SetItemTooltip("Clique: disparar. Botão direito: opções.");
     ImGui::PopID();
   }
+  // Stop column: stops everything, and per layer below.
+  ImGui::TableSetColumnIndex(ncols + 1);
+  if (ImGui::Button("\xe2\x96\xa0##stopall", {32, 0})) e.stopAll(); // ■
+  ImGui::SetItemTooltip("Parar tudo (Esc)");
 
   int removeLayer = -1, moveLayer = -1, moveLayerDir = 0;
   for (size_t li = 0; li < p.layers.size(); ++li) {
@@ -636,6 +690,11 @@ void Ui::dashboard(App &app) {
         dl->AddRect(pos, br, kAccentU32, 4, 0, 1.5f);
       }
       ImGui::PopID();
+    }
+    ImGui::TableSetColumnIndex(ncols + 1);
+    if (st && (st->current || st->previous)) {
+      if (ImGui::Button("\xe2\x96\xa0##stopl", {32, cellH - 10})) e.stopLayer(l.id); // ■
+      ImGui::SetItemTooltip("Parar esta layer");
     }
     ImGui::PopID();
   }
@@ -1190,6 +1249,13 @@ void Ui::outputInspector(App &app) {
     app.edited();
   }
 
+  softEdgeControls(app, o);
+  blackAndColorControls(app, o);
+  outputMaskControls(app, o, workspace);
+  ImGui::PopID();
+}
+
+void Ui::softEdgeControls(App &app, OutputConfig *o) {
   ImGui::SeparatorText("Soft edge (blend entre projetores)");
   bool se = false;
   se |= ImGui::SliderFloat("Esquerda", &o->softEdge.left, 0, 0.5f);
@@ -1203,6 +1269,9 @@ void Ui::outputInspector(App &app) {
              "canvas que inclui a faixa sobreposta, e a borda é suavizada com a mesma largura. "
              "O Assistente de blend calcula tudo isso.");
 
+}
+
+void Ui::blackAndColorControls(App &app, OutputConfig *o) {
   ImGui::SeparatorText("Nível de preto");
   {
     float bl[3] = {o->blackLevel.r, o->blackLevel.g, o->blackLevel.b};
@@ -1249,6 +1318,9 @@ void Ui::outputInspector(App &app) {
                "todos e reduza o ganho do canal que estiver sobrando.");
   }
 
+}
+
+void Ui::outputMaskControls(App &app, OutputConfig *o, Workspace &ws) {
   ImGui::SeparatorText("Máscaras da saída");
   ImGui::TextWrapped("Recortam a imagem deste projetor (obstáculos, bordas irregulares, cúpulas). "
                      "Edite no workspace com a saída em vista e a ferramenta Máscara (K).");
@@ -1278,8 +1350,8 @@ void Ui::outputInspector(App &app) {
       m.feather = 20;
       o->masks.push_back(m);
       app.sel.outMask = int(o->masks.size()) - 1;
-      workspace.viewOutputId = o->id;
-      workspace.tool = Tool::Mask;
+      ws.viewOutputId = o->id;
+      ws.tool = Tool::Mask;
       app.edited();
     }
     if (app.sel.outMask >= 0 && app.sel.outMask < int(o->masks.size())) {
@@ -1290,7 +1362,6 @@ void Ui::outputInspector(App &app) {
       ImGui::Text("%zu pontos", m.points.size());
     }
   }
-  ImGui::PopID();
 }
 
 void Ui::interactionInspector(App &app) {

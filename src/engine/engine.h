@@ -23,6 +23,7 @@ struct LayerState {
   float fade = 1;          // 0..1 progress of the current transition
   float fadeDuration = 0;  // seconds
   bool fadingOut = false;  // current is being stopped
+  TransitionType type = TransitionType::Crossfade;
   int columnId = -1;       // column the current content came from
   const Texture *currentTex = nullptr, *previousTex = nullptr;
 };
@@ -50,6 +51,9 @@ public:
   void stopAll(float fade = -1);
   int activeColumn() const { return activeColumn_; }
   const LayerState *layerState(int layerId) const;
+  // Opacity of the outgoing / incoming content for a transition progress.
+  static float outgoingOpacity(const LayerState &st);
+  static float incomingOpacity(const LayerState &st);
 
   bool blackout = false;
   float masterOpacity = 1;
@@ -92,7 +96,8 @@ public:
 private:
   void applyMappings(const OscMessage &m);
   void updateMappings(double dt);
-  void startTransition(int layerId, const Cell *cell, float duration, int columnId);
+  void startTransition(int layerId, const Cell *cell, float duration, int columnId,
+                       TransitionType type = TransitionType::Crossfade);
   float columnTransition(int index) const;
   Layer *findLayer(const std::string &key);
   MediaContext context();

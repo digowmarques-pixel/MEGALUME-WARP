@@ -99,8 +99,10 @@ cmake -S . -B build && cmake --build build -j
 2. Pressione **Espaço** para avançar as colunas (Alinhamento → Plasma → Só o cubo → Fim).
 3. Selecione a layer **Cubo**, pressione **M** (Perspectiva) e arraste os cantos no workspace.
 4. Pressione **G** (Malha), aumente a malha em *Propriedades → Fatias* (ex.: 5 × 5) e curve a imagem.
-5. Em *Saídas*, escolha o **monitor** do projetor (ou use o *Assistente de blend*) e clique em
-   **Abrir saídas**. Desative o espelhamento (Win+P → *Estender*).
+5. Clique em **Saídas...** (Ctrl+Shift+P), como o painel *Output* do Millumin: defina o
+   *layout* (ex.: 3 × 1 de 1920 × 1080), escolha a **tela** de cada projetor e o **soft edge**
+   (px) entre eles. **Mapping** em cada cartão abre as abas Slice, Mapping (cantos/malha),
+   Máscaras e Cor. **Tela cheia** abre os projetores (Ctrl+P). Use Win+P → *Estender*.
 6. Em *Interação*, envie OSC para a porta 8000 (ex.: `/sensor/1 0.5` gira o matiz do cubo).
 7. Ligue um controlador MIDI, crie um mapeamento, clique em **Aprender** e mexa num knob.
 8. **+ Ao vivo** na biblioteca adiciona câmera, stream de rede ou Spout.

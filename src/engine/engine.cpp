@@ -65,7 +65,20 @@ float Engine::columnTransition(int index) const {
   return t < 0 ? project.defaultTransition : t;
 }
 
-void Engine::startTransition(int layerId, const Cell *cell, float duration, int columnId) {
+float Engine::outgoingOpacity(const LayerState &st) {
+  // Through black: the old content is gone by the middle, the new one starts there.
+  if (st.type == TransitionType::ThroughBlack) return std::max(0.0f, 1.0f - 2.0f * st.fade);
+  return 1.0f - st.fade;
+}
+
+float Engine::incomingOpacity(const LayerState &st) {
+  if (st.type == TransitionType::ThroughBlack && st.previous) return std::max(0.0f, 2.0f * st.fade - 1.0f);
+  return st.fade;
+}
+
+void Engine::startTransition(int layerId, const Cell *cell, float duration, int columnId,
+                             TransitionType type) {
+  if (type == TransitionType::Cut) duration = 0;
   LayerState &st = states_[layerId];
   const MediaItem *media = cell ? project.media(cell->mediaId) : nullptr;
 
@@ -87,6 +100,7 @@ void Engine::startTransition(int layerId, const Cell *cell, float duration, int 
   }
   st.fade = duration > 0 ? 0.0f : 1.0f;
   st.fadeDuration = duration;
+  st.type = type;
   st.fadingOut = !media;
   st.columnId = media ? columnId : -1;
 }
@@ -146,7 +160,7 @@ void Engine::launchColumn(int index) {
   for (auto &l : project.layers) {
     auto it = col.cells.find(l.id);
     const Cell *cell = (it != col.cells.end() && it->second.mediaId >= 0) ? &it->second : nullptr;
-    startTransition(l.id, cell, fade, col.id);
+    startTransition(l.id, cell, fade, col.id, col.transitionType);
   }
   activeColumn_ = index;
   runColumnActions(col, index);
@@ -175,7 +189,7 @@ void Engine::launchCell(int columnIndex, int layerId) {
     st.current->restart(); // clicking a playing cell restarts it
     return;
   }
-  startTransition(layerId, &it->second, columnTransition(columnIndex), col.id);
+  startTransition(layerId, &it->second, columnTransition(columnIndex), col.id, col.transitionType);
 }
 
 void Engine::stopLayer(int layerId, float fade) {
@@ -246,8 +260,8 @@ void Engine::update(double dt) {
       pb->setGain(vol * fade);
       tex = pb->update(dt, *m, ctx);
     };
-    tick(st.current, st.currentTex, st.fade);
-    tick(st.previous, st.previousTex, 1.0f - st.fade);
+    tick(st.current, st.currentTex, incomingOpacity(st));
+    tick(st.previous, st.previousTex, outgoingOpacity(st));
     if (!st.current && !st.previous) it = states_.erase(it);
     else ++it;
   }
@@ -262,9 +276,9 @@ void Engine::render() {
     auto st = states_.find(l.id);
     if (st == states_.end()) continue;
     if (st->second.previous && st->second.previousTex)
-      draws.push_back({&l, st->second.previousTex, 1.0f - st->second.fade});
+      draws.push_back({&l, st->second.previousTex, outgoingOpacity(st->second)});
     if (st->second.current && st->second.currentTex)
-      draws.push_back({&l, st->second.currentTex, st->second.fade});
+      draws.push_back({&l, st->second.currentTex, incomingOpacity(st->second)});
   }
   compositor_.render(project, draws, mesh, blackout ? 0.0f : masterOpacity);
   // LEDs sample the final canvas, so master and blackout darken them too; the

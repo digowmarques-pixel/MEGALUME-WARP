@@ -346,7 +346,8 @@ int App::run(const Options &opts) {
       if (ctrl && ImGui::IsKeyPressed(ImGuiKey_O, false)) openDialog();
       if (ctrl && ImGui::IsKeyPressed(ImGuiKey_N, false)) newProject();
       if (ctrl && ImGui::IsKeyPressed(ImGuiKey_I, false)) importDialog();
-      if (ctrl && ImGui::IsKeyPressed(ImGuiKey_P, false)) outputsOpen = !outputsOpen;
+      if (ctrl && !shift && ImGui::IsKeyPressed(ImGuiKey_P, false)) outputsOpen = !outputsOpen;
+      if (ctrl && shift && ImGui::IsKeyPressed(ImGuiKey_P, false)) ui_->openOutputs();
       if (ctrl && ImGui::IsKeyPressed(ImGuiKey_Z)) shift ? redo() : undo();
       if (ctrl && ImGui::IsKeyPressed(ImGuiKey_Y)) redo();
       ui_->workspace.handleShortcuts(*this);

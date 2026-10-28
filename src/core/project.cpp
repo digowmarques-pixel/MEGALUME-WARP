@@ -214,6 +214,7 @@ Project Project::makeDefault() {
 }
 
 void applyBlendLayout(Project &p, const BlendLayoutParams &params, int firstMonitor, bool scaleContent) {
+  p.outputLayout = params;
   BlendLayout lay = computeBlendLayout(params);
   if (scaleContent && p.canvasW > 0 && p.canvasH > 0) {
     float sx = float(lay.canvasW) / float(p.canvasW), sy = float(lay.canvasH) / float(p.canvasH);
@@ -377,6 +378,11 @@ std::string serializeProject(const Project &p, const std::string &baseDir) {
   j["audio"] = {{"device", p.audioDevice}, {"master", p.masterVolume}};
   j["video"] = {{"hardwareDecode", p.hardwareDecode}};
   j["spout"] = {{"send", p.spoutSend}, {"name", p.spoutName}};
+  {
+    const BlendLayoutParams &b = p.outputLayout;
+    j["outputLayout"] = {{"cols", b.cols}, {"rows", b.rows}, {"size", {b.projW, b.projH}},
+                         {"gapsX", b.gapsX}, {"gapsY", b.gapsY}};
+  }
   j["dmx"] = {{"master", p.dmxMaster}, {"devices", json::array()}, {"leds", json::array()}};
   for (auto &d : p.dmxDevices)
     j["dmx"]["devices"].push_back({{"id", d.id}, {"name", d.name}, {"enabled", d.enabled},
@@ -429,7 +435,9 @@ std::string serializeProject(const Project &p, const std::string &baseDir) {
   }
 
   for (auto &c : p.columns) {
-    json jc = {{"id", c.id}, {"name", c.name}, {"transition", c.transition}, {"cells", json::array()}};
+    json jc = {{"id", c.id}, {"name", c.name}, {"transition", c.transition}, {"cells", json::array()},
+               {"transitionType", int(c.transitionType)}};
+    if (!c.notes.empty()) jc["notes"] = c.notes;
     if (!c.oscActions.empty()) jc["oscActions"] = c.oscActions;
     for (auto &[lid, cell] : c.cells)
       if (cell.mediaId >= 0)
@@ -497,6 +505,17 @@ bool deserializeProject(const std::string &text, const std::string &baseDir, Pro
       p.masterVolume = j["audio"].value("master", 1.0f);
     }
     if (j.contains("video")) p.hardwareDecode = j["video"].value("hardwareDecode", true);
+    if (j.contains("outputLayout")) {
+      auto &b = j["outputLayout"];
+      p.outputLayout.cols = std::clamp(b.value("cols", 1), 1, 16);
+      p.outputLayout.rows = std::clamp(b.value("rows", 1), 1, 16);
+      if (b.contains("size")) { p.outputLayout.projW = b["size"][0]; p.outputLayout.projH = b["size"][1]; }
+      for (auto &g : b.value("gapsX", json::array())) p.outputLayout.gapsX.push_back(g.get<int>());
+      for (auto &g : b.value("gapsY", json::array())) p.outputLayout.gapsY.push_back(g.get<int>());
+    } else if (!p.outputs.empty()) {
+      p.outputLayout.projW = int(p.outputs.front().srcW);
+      p.outputLayout.projH = int(p.outputs.front().srcH);
+    }
     if (j.contains("dmx")) {
       auto &jd = j["dmx"];
       p.dmxMaster = jd.value("master", 1.0f);
@@ -611,6 +630,8 @@ bool deserializeProject(const std::string &text, const std::string &baseDir, Pro
       c.id = jc.value("id", 0);
       c.name = jc.value("name", "");
       c.transition = jc.value("transition", -1.0f);
+      c.notes = jc.value("notes", "");
+      c.transitionType = enumFrom(jc, "transitionType", TransitionType::Crossfade, int(TransitionType::COUNT));
       for (auto &a : jc.value("oscActions", json::array()))
         if (a.is_string()) c.oscActions.push_back(a.get<std::string>());
       for (auto &cell : jc.value("cells", json::array())) {

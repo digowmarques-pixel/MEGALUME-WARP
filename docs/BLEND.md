@@ -11,6 +11,14 @@ Vários projetores sobrepostos formam uma imagem única e sem emendas.
 
 ## Passo a passo no Lumen
 
+**Atalho: janela Saídas (Ctrl+Shift+P)**, no mesmo formato do Millumin: `layout 3 × 1 de 1920 × 1080`,
+um cartão por projetor (tela e botão *Mapping*) e o campo **soft edge (px)** em cada emenda. Cada
+emenda pode ter a sua sobreposição. O botão *Mapping* abre as abas **Slice** (parte do canvas),
+**Mapping** (cantos ou malha do projetor), **Máscaras** e **Cor e blend**. Embaixo: **Tela cheia**,
+**Test Card**, **Grade** e **Identificar**.
+
+O mesmo também está em *Propriedades → Saídas → Assistente de blend*:
+
 1. **Propriedades → Saídas → Assistente de blend**:
    - Colunas × linhas (ex.: 3 × 1 para três lado a lado; 2 × 2 em grade)
    - Resolução do projetor

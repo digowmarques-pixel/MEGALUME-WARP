@@ -300,6 +300,12 @@ static void testBlendLayout() {
   p.cols = 2; p.rows = 2; p.overlapY = 0.1f;
   b = computeBlendLayout(p);
   CHECK(b.projectors.size() == 4 && b.projectors[0].bottom > 0 && b.projectors[3].top > 0 && b.projectors[3].bottom == 0);
+  // Per-seam pixel overlaps (Millumin-style soft edge fields).
+  BlendLayoutParams g;
+  g.cols = 3; g.rows = 1; g.gapsX = {200, 300};
+  b = computeBlendLayout(g);
+  CHECK(b.canvasW == 3 * 1920 - 500 && b.projectors[1].srcX == 1720 && b.projectors[2].srcX == 1720 + 1620);
+  CHECK(std::fabs(b.projectors[1].left * 1920 - 200) < 0.01f && std::fabs(b.projectors[1].right * 1920 - 300) < 0.01f);
   // The curve is complementary: two projectors always add to one.
   for (float t = 0; t <= 1.0f; t += 0.05f)
     for (float pw : {1.0f, 2.0f, 3.5f}) CHECK(std::fabs(blendCurve(t, pw) + blendCurve(1 - t, pw) - 1) < 1e-5f);

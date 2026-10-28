@@ -75,7 +75,12 @@ void Workspace::draw(App &app, ImVec2 size) {
   ImGui::SetNextItemWidth(200);
   std::string viewName = viewOut ? "Saída: " + viewOut->name : "Canvas";
   bool refit = false;
-  if (ImGui::BeginCombo("##view", viewName.c_str())) {
+  static int lastView = -2;
+  if (lockView && lastView != viewOutputId) refit = true; // switched output in the embedded view
+  if (lockView) lastView = viewOutputId;
+  if (lockView) {
+    ImGui::TextDisabled("%s", viewName.c_str());
+  } else if (ImGui::BeginCombo("##view", viewName.c_str())) {
     if (ImGui::Selectable("Canvas", !viewOut)) { viewOutputId = -1; refit = true; }
     for (auto &o : p.outputs)
       if (ImGui::Selectable(("Saída: " + o.name).c_str(), viewOutputId == o.id)) {

@@ -10,6 +10,12 @@ struct BlendLayoutParams {
   int projW = 1920, projH = 1080;  // native resolution of each projector
   float overlapX = 0.15f;          // fraction of the projector width shared with the neighbour
   float overlapY = 0.15f;
+  // Optional per-seam overlaps in pixels (cols-1 / rows-1 entries). When set
+  // they win over overlapX / overlapY, like Millumin's soft edge fields.
+  std::vector<int> gapsX, gapsY;
+  // Pixel overlap of seam i (between column i and i+1 / row i and i+1).
+  int gapX(int i) const;
+  int gapY(int i) const;
 };
 
 struct BlendProjector {

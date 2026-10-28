@@ -30,6 +30,13 @@ Ordem pensada para **videomapping** e **instalações interativas**.
   identificar saídas, sincronia por DwmFlush no Windows. Validado numericamente
 - Saídas abrem só quando solicitado; perspectiva côncava sem distorção
 
+## ✅ v0.5
+- Janela **Saídas** no estilo do Millumin (layout, telas, soft edge em px por emenda,
+  Tela cheia / Test Card / Grade / Identificar) e página de mapping por saída
+  (Slice, Mapping, Máscaras, Cor e blend)
+- Coluna com título, notas e tipo de transição (crossfade, corte, fade pelo preto)
+- Dashboard: colunas 01, 02… com ▶, linha de transição, coluna de parar e zoom
+
 ## ⚠️ Pendente de teste em Windows real
 Tudo foi compilado para Windows, mas **ainda não rodou numa máquina Windows**:
 Spout, WASAPI, DirectShow, D3D11VA e WinMM precisam de um teste de verdade.

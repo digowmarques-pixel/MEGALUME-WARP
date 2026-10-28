@@ -12,6 +12,7 @@
 namespace lumen {
 
 class App;
+struct OutputConfig;
 
 enum class Tool { Select, Perspective, Mesh, Mask, Led };
 
@@ -21,6 +22,7 @@ public:
   Tool tool = Tool::Select;
   int viewOutputId = -1; // -1: canvas view, otherwise preview of that output
   bool fitRequested = false;
+  bool lockView = false; // embedded use: no canvas/output view selector
   void handleShortcuts(App &app);
 
 private:
@@ -42,6 +44,7 @@ private:
 class Ui {
 public:
   void setup();
+  void openOutputs() { showOutputs_ = true; outputsPage_ = 0; }
   void draw(App &app);
   Workspace workspace;
 
@@ -58,9 +61,20 @@ private:
   void mediaInspector(App &app);
   void outputInspector(App &app);
   void interactionInspector(App &app);
+  void softEdgeControls(App &app, OutputConfig *o);
+  void blackAndColorControls(App &app, OutputConfig *o);
+  void outputMaskControls(App &app, OutputConfig *o, Workspace &ws);
+  void outputsWindow(App &app);   // Millumin-style output setup (layout + mapping pages)
+  void columnPopup(App &app, int columnIndex);
   void ledInspector(App &app);
   void projectInspector(App &app);
 
+  bool showOutputs_ = false;
+  int outputsPage_ = 0;   // 0 layout, 1 mapping of one output
+  int outputsSel_ = -1;   // output id shown in the mapping page
+  int mappingTab_ = 0;    // slice, mapping, masks, colour
+  Workspace outputsWs_;   // workspace embedded in the mapping page
+  int dashZoom_ = 1;      // 0 small, 1 medium, 2 large cells
   bool showDemo_ = false;
   bool showHelp_ = false;
   char filterText_[128] = "";
