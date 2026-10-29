@@ -103,7 +103,7 @@
 {"%s\nUse Arquivo > Procurar mídias ausentes ou troque o arquivo nas propriedades.", "%s\nUse File > Find missing media or replace the file in the properties."},
 {"Arraste vídeos ou imagens para esta janela, ou clique em Importar. Geradores (test card, grade...) ajudam a alinhar projetores.", "Drag videos or images onto this window, or click Import. Generators (test card, grid...) help aligning projectors."},
 {"+ Coluna", "+ Column"},
-{"Arraste mídias para as células. Clique seleciona; o \xe2\x96\xb6 da coluna ou Espaço põe no ar.", "Drag media onto the cells. Click selects; the column's \xe2\x96\xb6 or Space puts it on air."},
+{"Arraste mídias (da biblioteca ou do Explorer) para as células. Clique seleciona; o \xe2\x96\xb6 da coluna ou Espaço põe no ar.", "Drag media (from the library or the file manager) onto the cells. Click selects; the column's \xe2\x96\xb6 or Space puts it on air."},
 {"corte", "cut"},
 {"pelo preto", "through black"},
 {"Coluna", "Column"},

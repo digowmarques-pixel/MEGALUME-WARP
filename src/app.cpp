@@ -17,6 +17,7 @@
 #include <cstdio>
 #include <fstream>
 #include <algorithm>
+#include <sstream>
 #include <filesystem>
 #include <map>
 
@@ -301,6 +302,7 @@ void App::importDialog() {
 
 void App::importFiles(const std::vector<std::string> &paths, int column, int layerId) {
   int count = 0;
+  bool placed = false; // into a cell: each further file goes to the next column of that dashboard
   for (auto &path : paths) {
     std::error_code ec;
     if (std::filesystem::is_directory(platform::toPath(path), ec)) {
@@ -320,9 +322,21 @@ void App::importFiles(const std::vector<std::string> &paths, int column, int lay
     sel.mediaId = m.id;
     ++count;
     if (column >= 0 && column < int(engine.project.columns.size()) && layerId >= 0) {
+      Project &p = engine.project;
+      if (placed) { // the next column of the same dashboard, a new one past the last
+        int board = p.columns[size_t(column)].board, next = -1;
+        for (int j = column + 1; j < int(p.columns.size()) && next < 0; ++j)
+          if (p.columns[size_t(j)].board == board) next = j;
+        if (next < 0) {
+          p.addColumn().board = board;
+          next = int(p.columns.size()) - 1;
+        }
+        column = next;
+      }
       Cell c;
       c.mediaId = m.id;
-      engine.project.columns[size_t(column)].cells[layerId] = c;
+      p.columns[size_t(column)].cells[layerId] = c;
+      placed = true;
     }
   }
   if (count) {
@@ -557,6 +571,7 @@ int App::run(const Options &opts) {
   else if (engine.project.startColumn > 0) engine.launchColumn(engine.project.startColumn - 1);
 
   double last = glfwGetTime(), fpsTimer = last, started = last;
+  bool testDropDone = false;
   bool audioStallDone = false;
   if (!opts.testAudioRecord.empty()) engine.audio.debugRecord(opts.quitAfter > 0 ? opts.quitAfter + 1 : 30);
   int frame = 0, fpsFrames = 0;
@@ -574,6 +589,18 @@ int App::run(const Options &opts) {
       fpsTimer = now;
     }
 
+    double dropX = -1, dropY = -1;
+    if (!opts.testDrop.empty() && !testDropDone && glfwGetTime() - started >= 3.0) { // tests: a drop at a given point
+      std::vector<std::string> parts;
+      std::stringstream ss(opts.testDrop);
+      for (std::string part; std::getline(ss, part, ',');) parts.push_back(part);
+      if (parts.size() >= 3) {
+        dropX = std::atof(parts[0].c_str());
+        dropY = std::atof(parts[1].c_str());
+        g_droppedFiles.assign(parts.begin() + 2, parts.end());
+      }
+      testDropDone = true;
+    }
     if (!g_droppedFiles.empty()) {
       auto files = std::move(g_droppedFiles);
       g_droppedFiles.clear();
@@ -583,7 +610,12 @@ int App::run(const Options &opts) {
         std::string path = files[0];
         unlessUnsaved([this, path] { openProject(path); });
       } else {
-        importFiles(files);
+        // Dropped on a dashboard cell: imported and placed in it (more files: the next columns).
+        double mx = dropX, my = dropY;
+        if (mx < 0) glfwGetCursorPos(window, &mx, &my);
+        int column = -1, layerId = -1;
+        ui_->dashboardCellAt(float(mx), float(my), column, layerId);
+        importFiles(files, column, layerId);
       }
     }
 

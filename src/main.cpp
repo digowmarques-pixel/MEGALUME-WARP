@@ -76,6 +76,7 @@ int main(int argc, char **argv) {
     else if (a == "--frames") opts.frames = std::atoi(next().c_str());
     else if (a == "--quit-after") opts.quitAfter = std::atof(next().c_str());
     else if (a == "--test-audio-stall") opts.testAudioStall = std::atof(next().c_str());
+    else if (a == "--test-drop") opts.testDrop = next();
     else if (a == "--test-audio-record") opts.testAudioRecord = next();
     else if (a == "--screenshot-canvas") opts.screenshotCanvas = next();
     else if (a == "--screenshot-ui") opts.screenshotUi = next();

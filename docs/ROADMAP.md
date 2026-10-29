@@ -95,6 +95,10 @@ Ordem pensada para **videomapping** e **instalações interativas**.
 - *Seek* preciso de vídeo e áudio (também por OSC: `/lumen/layer/<l>/time`)
 - Testes de integração no CI (`scripts/test-integration.sh`)
 
+## ✅ v0.10.12
+- Arrastar arquivos do Explorer **direto para uma célula** do dashboard: a mídia é
+  importada e posta nela; vários arquivos vão para as colunas seguintes (criadas se faltar)
+
 ## ✅ v0.10.11
 - **Painéis móveis**: arraste qualquer painel (Biblioteca, Workspace, Dashboard, Timeline,
   Propriedades) pela aba para cima, para baixo ou para os lados; o layout fica salvo

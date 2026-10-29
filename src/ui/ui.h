@@ -62,6 +62,9 @@ private:
 
 class Ui {
 public:
+  // The dashboard cell under a screen point (last frame's layout): files dropped
+  // there from the file manager go into it. False (column / layer -1) elsewhere.
+  bool dashboardCellAt(float x, float y, int &column, int &layerId) const;
   void setup();
   void openOutputs() { showOutputs_ = true; outputsPage_ = 0; }
   // Output shown in the mapping page of the Outputs window (-1: none).
@@ -86,6 +89,8 @@ private:
   void library(App &app);
   void dashboard(App &app);
   void mappingSection(App &app, Layer &layer, float CW, float CH);
+  struct CellRect { float x0, y0, x1, y1; int column, layerId; };
+  std::vector<CellRect> dashCells_;
   void inspector(App &app);
   void statusBar(App &app);
 

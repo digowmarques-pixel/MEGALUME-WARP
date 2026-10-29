@@ -1058,7 +1058,19 @@ void Ui::library(App &app) {
   }
 }
 
+bool Ui::dashboardCellAt(float x, float y, int &column, int &layerId) const {
+  column = layerId = -1;
+  for (const CellRect &r : dashCells_)
+    if (x >= r.x0 && x < r.x1 && y >= r.y0 && y < r.y1) {
+      column = r.column;
+      layerId = r.layerId;
+      return true;
+    }
+  return false;
+}
+
 void Ui::dashboard(App &app) {
+  dashCells_.clear();
   Engine &e = app.engine;
   Project &p = e.project;
   const bool locked = app.showLocked; // show mode: launching only, no editing
@@ -1135,7 +1147,7 @@ void Ui::dashboard(App &app) {
   ImGui::EndDisabled();
   ImGui::EndDisabled();
   ImGui::SameLine();
-  ImGui::TextDisabled("%s", T("Arraste mídias para as células. Clique seleciona; o \xe2\x96\xb6 da coluna ou Espaço põe no ar."));
+  ImGui::TextDisabled("%s", T("Arraste mídias (da biblioteca ou do Explorer) para as células. Clique seleciona; o \xe2\x96\xb6 da coluna ou Espaço põe no ar."));
   ImGui::SameLine(std::max(ImGui::GetCursorPosX() + 10, ImGui::GetWindowWidth() - 150));
   ImGui::SetNextItemWidth(130);
   ImGui::Combo("##zoom", &dashZoom_, TZ("pequeno\0médio\0grande\0"));
@@ -1500,6 +1512,7 @@ void Ui::dashboard(App &app) {
       ImVec2 pos = ImGui::GetCursorScreenPos();
       ImVec2 size{cellW - 6, cellH - 6};
       ImGui::InvisibleButton("##cell", size);
+      if (ImGui::IsItemVisible()) dashCells_.push_back({pos.x, pos.y, pos.x + size.x, pos.y + size.y, c, l.id});
       bool hovered = ImGui::IsItemHovered();
       // A click only selects (to edit the cell); it goes on air with the column's
       // play, GO, or "Disparar só esta célula".

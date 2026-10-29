@@ -36,6 +36,8 @@ struct Options {
   int syncPort = 0;
   double quitAfter = 0;         // tests in real time: exit after this many seconds
   double testAudioStall = 0;    // tests: the sound card stops after this many seconds
+  // tests: "X,Y,file[,file...]" dropped at window point X,Y after 3 s (as from the file manager)
+  std::string testDrop;
   std::string testAudioRecord;  // tests: WAV file with what was sent to the sound card
   int width = 1600, height = 900;
   std::string blend;             // "3x1:0.15:1920x1080" applies the blend assistant at start
