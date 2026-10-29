@@ -720,7 +720,7 @@ int App::run(const Options &opts) {
     int fbw, fbh;
     glfwGetFramebufferSize(window, &fbw, &fbh);
     glViewport(0, 0, fbw, fbh);
-    glClearColor(0.03f, 0.03f, 0.035f, 1); // gaps between the panels
+    glClearColor(0, 0, 0, 1); // true black between the panels
     glClear(GL_COLOR_BUFFER_BIT);
     ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
 

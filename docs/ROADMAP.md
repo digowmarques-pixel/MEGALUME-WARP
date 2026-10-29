@@ -95,6 +95,14 @@ Ordem pensada para **videomapping** e **instalações interativas**.
 - *Seek* preciso de vídeo e áudio (também por OSC: `/lumen/layer/<l>/time`)
 - Testes de integração no CI (`scripts/test-integration.sh`)
 
+## ✅ v0.10.13
+- Nova paleta: fundo preto de verdade, painéis cinza bem escuro, menos bordas; o **amarelo**
+  continua sendo a marca e o que você aciona. Uma cor por tipo de coisa, só em detalhes finos
+  (faixa no título do painel, barra na seção, contornos): **verde** = o que está tocando
+  (célula no ar, relógio, barra de tempo, medidores), **ciano** = mapping e saídas,
+  **magenta** = máscaras, **roxo** = efeitos e timeline, **laranja** = avisos e últimos 10 s,
+  **vermelho** = parar e blackout
+
 ## ✅ v0.10.12
 - Arrastar arquivos do Explorer **direto para uma célula** do dashboard: a mídia é
   importada e posta nela; vários arquivos vão para as colunas seguintes (criadas se faltar)

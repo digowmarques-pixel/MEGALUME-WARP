@@ -1,6 +1,7 @@
 // Interactive canvas / output view with the videomapping tools.
 #include "app.h"
 #include "engine/compositor.h"
+#include "ui/palette.h"
 #include "ui/ui.h"
 
 #include <imgui.h>
@@ -305,8 +306,8 @@ void Workspace::drawCanvasOverlay(App &app, ImDrawList *dl, ImVec2 origin, float
   for (auto &o : p.outputs) {
     if (!o.enabled || o.canvasId != viewCanvas) continue;
     ImVec2 a = toScreen({o.srcX, o.srcY}), b = toScreen({o.srcX + o.srcW, o.srcY + o.srcH});
-    dl->AddRect(a, b, IM_COL32(90, 160, 255, 110), 0, 0, 1.0f);
-    dl->AddText({a.x + 4, a.y + 2}, IM_COL32(90, 160, 255, 160), o.name.c_str());
+    dl->AddRect(a, b, pal::u32(pal::kCyan, 110), 0, 0, 1.0f);
+    dl->AddText({a.x + 4, a.y + 2}, pal::u32(pal::kCyan, 160), o.name.c_str());
   }
 
   // Outlines of every slice; selected layer drawn on top.
@@ -362,7 +363,7 @@ void Workspace::drawCanvasOverlay(App &app, ImDrawList *dl, ImVec2 origin, float
       std::vector<ImVec2> sp;
       for (auto &v : pts) sp.push_back(toScreen(v));
       bool active = int(si) == app.sel.slice;
-      dl->AddPolyline(sp.data(), int(sp.size()), active ? IM_COL32(255, 196, 0, 255) : IM_COL32(255, 196, 0, 110),
+      dl->AddPolyline(sp.data(), int(sp.size()), active ? pal::u32(pal::kCyan) : pal::u32(pal::kCyan, 110),
                       ImDrawFlags_Closed, active ? 2.0f : 1.0f);
     }
     // Masks of the selected layer.
@@ -372,7 +373,7 @@ void Workspace::drawCanvasOverlay(App &app, ImDrawList *dl, ImVec2 origin, float
       std::vector<ImVec2> sp;
       for (auto &v : maskOutline(m)) sp.push_back(toScreen(v));
       bool active = int(mi) == app.sel.mask && tool == Tool::Mask;
-      ImU32 col = m.subtract ? IM_COL32(255, 90, 90, active ? 255 : 120) : IM_COL32(80, 220, 255, active ? 255 : 120);
+      ImU32 col = pal::u32(m.subtract ? pal::Rgb{200, 50, 150} : pal::kMagenta, active ? 255 : 120); // hide: darker
       dl->AddPolyline(sp.data(), int(sp.size()), col, ImDrawFlags_Closed, active ? 2.0f : 1.0f);
     }
 
@@ -405,7 +406,7 @@ void Workspace::drawCanvasOverlay(App &app, ImDrawList *dl, ImVec2 origin, float
       break;
     }
     case Tool::Perspective: {
-      for (int c = 0; c < 4; ++c) handle(dl, toScreen(tw.corners[size_t(c)]), IM_COL32(255, 196, 0, 255), app.sel.corner == c);
+      for (int c = 0; c < 4; ++c) handle(dl, toScreen(tw.corners[size_t(c)]), pal::u32(pal::kCyan), app.sel.corner == c);
       if (clicked) {
         int best = -1;
         float bestD = kPick;
@@ -441,10 +442,10 @@ void Workspace::drawCanvasOverlay(App &app, ImDrawList *dl, ImVec2 origin, float
     case Tool::Mesh: {
       Warp &w = slice.warp;
       // Grid lines through the control points, along the warp's curves.
-      drawMeshGrid(dl, transformedWarp(*sel, slice), toScreen, IM_COL32(255, 196, 0, 150));
+      drawMeshGrid(dl, transformedWarp(*sel, slice), toScreen, pal::u32(pal::kCyan, 150));
       for (int r = 0; r < w.meshRows; ++r)
         for (int c = 0; c < w.meshCols; ++c)
-          handle(dl, toScreen(tw.meshPointDest(c, r)), IM_COL32(255, 196, 0, 255),
+          handle(dl, toScreen(tw.meshPointDest(c, r)), pal::u32(pal::kCyan),
                  app.sel.meshPoint == r * w.meshCols + c, true);
       if (clicked) {
         int best = -1;
@@ -490,7 +491,7 @@ void Workspace::drawCanvasOverlay(App &app, ImDrawList *dl, ImVec2 origin, float
         }
       }
       Mask &m = sel->masks[size_t(app.sel.mask)];
-      if (editMask(m, app.sel.maskPoint, toScreen, mc, scale, dl, IM_COL32(80, 220, 255, 255), 20)) app.edited();
+      if (editMask(m, app.sel.maskPoint, toScreen, mc, scale, dl, pal::u32(pal::kMagenta), 20)) app.edited();
       break;
     }
     }
@@ -615,7 +616,7 @@ void Workspace::drawOutputOverlay(App &app, ImDrawList *dl, ImVec2 origin, ImVec
   auto pts = warpOutline(w);
   std::vector<ImVec2> sp;
   for (auto &v : pts) sp.push_back(toScreen(v));
-  dl->AddPolyline(sp.data(), int(sp.size()), IM_COL32(90, 160, 255, 255), ImDrawFlags_Closed, 2);
+  dl->AddPolyline(sp.data(), int(sp.size()), pal::u32(pal::kCyan), ImDrawFlags_Closed, 2);
 
   // Output masks (projector space, 0..1).
   for (size_t mi = 0; mi < o->masks.size(); ++mi) {
@@ -624,7 +625,7 @@ void Workspace::drawOutputOverlay(App &app, ImDrawList *dl, ImVec2 origin, ImVec
     std::vector<ImVec2> sp;
     for (auto &v : maskOutline(m)) sp.push_back(toScreen(v));
     bool active = int(mi) == app.sel.outMask && tool == Tool::Mask;
-    ImU32 col = m.subtract ? IM_COL32(255, 90, 90, active ? 255 : 130) : IM_COL32(80, 220, 255, active ? 255 : 130);
+    ImU32 col = pal::u32(m.subtract ? pal::Rgb{200, 50, 150} : pal::kMagenta, active ? 255 : 130);
     dl->AddPolyline(sp.data(), int(sp.size()), col, ImDrawFlags_Closed, active ? 2.0f : 1.0f);
   }
 
@@ -639,7 +640,7 @@ void Workspace::drawOutputOverlay(App &app, ImDrawList *dl, ImVec2 origin, ImVec
       app.sel.outMask = int(o->masks.size()) - 1;
     }
     Mask &m = o->masks[size_t(app.sel.outMask)];
-    if (editMask(m, app.sel.outMaskPoint, toScreen, mn, std::max(1.0f, size.x), dl, IM_COL32(255, 120, 120, 255), 30))
+    if (editMask(m, app.sel.outMaskPoint, toScreen, mn, std::max(1.0f, size.x), dl, pal::u32(pal::kMagenta), 30))
       app.edited();
     dl->AddText({origin.x + 8, origin.y + 8}, IM_COL32(255, 255, 255, 220),
                 maskAddPoints ? T("Máscara da saída: clique adiciona ponto, arraste move, botão direito apaga, Alt+clique faz curva.")
@@ -648,10 +649,10 @@ void Workspace::drawOutputOverlay(App &app, ImDrawList *dl, ImVec2 origin, ImVec
   }
 
   if (tool == Tool::Mesh) {
-    drawMeshGrid(dl, w, toScreen, IM_COL32(90, 160, 255, 170));
+    drawMeshGrid(dl, w, toScreen, pal::u32(pal::kCyan, 170));
     for (int r = 0; r < w.meshRows; ++r)
       for (int c = 0; c < w.meshCols; ++c)
-        handle(dl, toScreen(w.meshPointDest(c, r)), IM_COL32(90, 160, 255, 255),
+        handle(dl, toScreen(w.meshPointDest(c, r)), pal::u32(pal::kCyan),
                app.sel.meshPoint == r * w.meshCols + c, true);
     if (clicked) {
       int best = -1;
@@ -676,7 +677,7 @@ void Workspace::drawOutputOverlay(App &app, ImDrawList *dl, ImVec2 origin, ImVec
       }
     }
   } else {
-    for (int c = 0; c < 4; ++c) handle(dl, toScreen(w.corners[size_t(c)]), IM_COL32(90, 160, 255, 255), app.sel.corner == c);
+    for (int c = 0; c < 4; ++c) handle(dl, toScreen(w.corners[size_t(c)]), pal::u32(pal::kCyan), app.sel.corner == c);
     if (clicked) {
       int best = -1;
       float bestD = kPick;

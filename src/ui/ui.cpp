@@ -1,3 +1,4 @@
+#include "ui/palette.h"
 #include "ui/ui.h"
 
 #include "app.h"
@@ -35,7 +36,7 @@ ImTextureID texId(const Texture &t) { return ImTextureID(intptr_t(t.id())); }
 // Lumen palette: black and yellow.
 const ImVec4 kAccent{1.0f, 0.77f, 0.0f, 1.0f};        // #FFC400
 const ImU32 kAccentU32 = IM_COL32(255, 196, 0, 255);
-const ImU32 kPlayingU32 = IM_COL32(255, 214, 64, 255); // what is on air
+const ImU32 kPlayingU32 = pal::u32(pal::kGreen); // what is playing (cells on air, time bars)
 const ImVec4 kOnAccent{0.05f, 0.05f, 0.05f, 1.0f};    // text on yellow
 
 constexpr int kMaxDashColumns = 509; // dashboard table: under 512 columns (ImGui), 2 of them fixed
@@ -53,6 +54,25 @@ void wrapLine(float w, float spacing = -1) {
   ImGui::SameLine(0, spacing);
   if (ImGui::GetContentRegionAvail().x < w) ImGui::NewLine();
 }
+
+// A thin coloured stripe under a panel's title: its kind of thing (palette.h).
+void panelStripe(pal::Rgb c) {
+  ImVec2 wp = ImGui::GetWindowPos(), cur = ImGui::GetCursorScreenPos();
+  ImGui::GetWindowDrawList()->AddRectFilled({wp.x + 6, cur.y - 5}, {wp.x + ImGui::GetWindowWidth() - 6, cur.y - 3},
+                                            pal::u32(c, 200), 1);
+}
+
+// A section of the properties with a short bar of its colour on the left.
+bool section(const char *label, pal::Rgb c) {
+  bool open = ImGui::CollapsingHeader(label);
+  ImVec2 a = ImGui::GetItemRectMin(), b = ImGui::GetItemRectMax();
+  ImGui::GetWindowDrawList()->AddRectFilled({a.x, a.y + 3}, {a.x + 3, b.y - 3}, pal::u32(c), 1);
+  return open;
+}
+
+// Red text: stop and blackout.
+void pushStop() { ImGui::PushStyleColor(ImGuiCol_Text, pal::vec(pal::kRed)); }
+void popStop() { ImGui::PopStyleColor(); }
 
 // Yellow button with black text (main actions, active tools).
 void pushPrimary() {
@@ -134,7 +154,7 @@ void audioMeters(const AudioEngine &audio) {
     float x = p.x + float(c) * (w + 2);
     float v = std::min(1.0f, audio.peak(c));
     dl->AddRectFilled({x, p.y}, {x + w, p.y + h}, IM_COL32(28, 28, 28, 255), 2);
-    ImU32 col = v > 0.95f ? IM_COL32(230, 60, 60, 255) : v > 0.7f ? IM_COL32(255, 196, 0, 255) : IM_COL32(90, 200, 110, 255);
+    ImU32 col = v > 0.95f ? pal::u32(pal::kRed) : v > 0.7f ? pal::u32(pal::kOrange) : pal::u32(pal::kGreen);
     if (v > 0.001f) dl->AddRectFilled({x, p.y + h * (1 - v)}, {x + w, p.y + h}, col, 2);
     char num[16];
     std::snprintf(num, sizeof(num), "%d", c + 1);
@@ -328,8 +348,9 @@ void Ui::setup() {
   s.WindowTitleAlign = {0.0f, 0.5f};
   s.SelectableTextAlign = {0.0f, 0.5f};
 
-  const ImVec4 black{0.035f, 0.035f, 0.04f, 1}, panel{0.085f, 0.085f, 0.09f, 1}, inset{0.06f, 0.06f, 0.065f, 1};
-  const ImVec4 frame{0.14f, 0.14f, 0.15f, 1}, frameHi{0.19f, 0.19f, 0.205f, 1}, line{0.2f, 0.2f, 0.21f, 1};
+  // True black behind, the panels a very dark grey, few lines: the colours stand out.
+  const ImVec4 black{0, 0, 0, 1}, panel{0.07f, 0.07f, 0.075f, 1}, inset{0.05f, 0.05f, 0.055f, 1};
+  const ImVec4 frame{0.13f, 0.13f, 0.14f, 1}, frameHi{0.18f, 0.18f, 0.195f, 1}, line{0.14f, 0.14f, 0.15f, 1};
   const ImVec4 y = kAccent;
   auto ya = [&](float a) { return ImVec4(y.x, y.y, y.z, a); };
   ImVec4 *c = s.Colors;
@@ -438,6 +459,7 @@ void Ui::draw(App &app) {
 
   const ImGuiWindowFlags panel = ImGuiWindowFlags_NoCollapse;
   ImGui::Begin((std::string(T("Biblioteca")) + "###lib").c_str(), nullptr, panel);
+  panelStripe(pal::kYellow);
   ImGui::BeginDisabled(locked);
   library(app);
   ImGui::EndDisabled();
@@ -446,6 +468,7 @@ void Ui::draw(App &app) {
   ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {4, 4});
   ImGui::Begin((std::string(T("Workspace")) + "###ws").c_str(), nullptr,
                panel | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+  panelStripe(pal::kCyan);
   ImGui::BeginDisabled(locked);
   workspace.draw(app, ImGui::GetContentRegionAvail());
   ImGui::EndDisabled();
@@ -454,10 +477,14 @@ void Ui::draw(App &app) {
 
   // Dashboard and Timeline: two panels, tabs of the same place by default.
   if (forceBottom_ && bottomTab_ == 0) ImGui::SetNextWindowFocus();
-  if (ImGui::Begin((std::string(T("Dashboard")) + "###dash").c_str(), nullptr, panel)) dashboard(app);
+  if (ImGui::Begin((std::string(T("Dashboard")) + "###dash").c_str(), nullptr, panel)) {
+    panelStripe(pal::kGreen);
+    dashboard(app);
+  }
   ImGui::End();
   if (forceBottom_ && bottomTab_ == 1) ImGui::SetNextWindowFocus();
   if (ImGui::Begin((std::string(T("Timeline")) + "###tl").c_str(), nullptr, panel)) {
+    panelStripe(pal::kPurple);
     ImGui::BeginDisabled(locked);
     timelineEditor(app);
     ImGui::EndDisabled();
@@ -466,6 +493,7 @@ void Ui::draw(App &app) {
   forceBottom_ = false;
 
   ImGui::Begin((std::string(T("Propriedades")) + "###props").c_str(), nullptr, panel);
+  panelStripe(pal::kYellow);
   ImGui::BeginDisabled(locked);
   inspector(app);
   ImGui::EndDisabled();
@@ -810,7 +838,9 @@ void Ui::toolbar(App &app) {
   if (ImGui::Button("<", {30, 30})) e.back();
   ImGui::SetItemTooltip("%s", T("Coluna anterior (Shift+Espaço)"));
   ImGui::SameLine();
+  pushStop();
   if (ImGui::Button(T("Parar"), {60, 30})) e.stopAll();
+  popStop();
   ImGui::SetItemTooltip("%s", T("Para tudo com fade"));
   ImGui::EndDisabled();
   ImGui::SameLine();
@@ -1461,7 +1491,9 @@ void Ui::dashboard(App &app) {
   }
   // Stop column: stops everything, and per layer below.
   ImGui::TableSetColumnIndex(ncols + 1);
+  pushStop();
   if (ImGui::Button("\xe2\x96\xa0##stopall", {32, 0})) e.stopAll(); // ■
+  popStop();
   ImGui::SetItemTooltip("%s", T("Parar tudo"));
 
   int removeLayer = -1, moveLayer = -1, moveLayerDir = 0;
@@ -1610,7 +1642,9 @@ void Ui::dashboard(App &app) {
     }
     ImGui::TableSetColumnIndex(ncols + 1);
     if (st && (st->current || st->previous)) {
+      pushStop();
       if (ImGui::Button("\xe2\x96\xa0##stopl", {32, cellH - 10})) e.stopLayer(l.id); // ■
+      popStop();
       ImGui::SetItemTooltip("%s", T("Parar esta layer"));
     }
     ImGui::PopID();
@@ -1728,10 +1762,10 @@ void Ui::timePanel(App &app, const std::vector<TimeRow> &rows, float bodyTop, fl
     const float cw = timeCounter_ == 0 ? 0.0f : 84.0f, ch = std::min(30.0f, top - 6);
     float cx = x1 - bs - 6 - cw, cy = r.y1 + (top - ch) * 0.5f;
     std::string txt = live ? T("ao vivo") : (timeCounter_ == 2 && left >= 0 ? clockText(left, true) : clockText(pos, false));
-    ImU32 bg = kAccentU32, fg = IM_COL32(0, 0, 0, 255);
+    ImU32 bg = pal::u32(pal::kGreen), fg = IM_COL32(0, 0, 0, 255); // playing: green
     if (live) { bg = IM_COL32(48, 48, 52, 255); fg = IM_COL32(200, 200, 200, 255); }
     else if (pb.paused) { bg = IM_COL32(70, 70, 75, 255); fg = IM_COL32(255, 255, 255, 255); }
-    else if (left >= 0 && left < 10 && !pb.loop) bg = IM_COL32(240, 100, 30, 255);
+    else if (left >= 0 && left < 10 && !pb.loop) bg = pal::u32(pal::kOrange);
     if (cw > 0) {
       dl->AddRectFilled({cx, cy}, {cx + cw, cy + ch}, bg, 5);
       ImFont *f = bigFont_ ? bigFont_ : ImGui::GetFont();
@@ -3102,7 +3136,7 @@ void Ui::layerInspector(App &app) {
   if (ImGui::Checkbox(T("Visível"), &l->visible)) app.edited();
 
   // Sections like Millumin's: Layer, Mapping, Effects, Masks, Current Media.
-  if (ImGui::CollapsingHeader(T("Layer##sec"))) {
+  if (section(T("Layer##sec"), pal::kYellow)) {
     int blend = int(l->blend);
     if (ImGui::Combo(T("Blend"), &blend, TZ("Normal\0Adição\0Multiplicar\0Tela (screen)\0"
                                       "Matte alpha (máscara da layer de baixo)\0Matte alpha invertido\0"
@@ -3145,9 +3179,9 @@ void Ui::layerInspector(App &app) {
   if (isMatte(l->blend))
     ImGui::TextColored({1.0f, 0.77f, 0.0f, 1}, "%s", T("Matte: esta layer não aparece; ela recorta a layer logo abaixo."));
 
-  if (ImGui::CollapsingHeader(T("Mapping##sec"))) mappingSection(app, *l, CW, CH);
+  if (section(T("Mapping##sec"), pal::kCyan)) mappingSection(app, *l, CW, CH);
 
-  if (ImGui::CollapsingHeader(T("Efeitos##sec"))) {
+  if (section(T("Efeitos##sec"), pal::kPurple)) {
     if (ImGui::TreeNodeEx(T("Ajuste de cor"), ImGuiTreeNodeFlags_DefaultOpen)) {
       if (ImGui::SliderFloat(T("Brilho"), &l->fx.brightness, -1, 1)) app.edited();
       if (ImGui::SliderFloat(T("Contraste"), &l->fx.contrast, 0, 2)) app.edited();
@@ -3164,11 +3198,11 @@ void Ui::layerInspector(App &app) {
     effectsUi(app, *l);
   }
 
-  if (ImGui::CollapsingHeader(T("Máscaras"))) {
+  if (section(T("Máscaras"), pal::kMagenta)) {
     maskList(app, l->masks, app.sel.mask, app.sel.maskPoint, {1, 1}, {CW, CH}, false);
   }
 
-  if (ImGui::CollapsingHeader(T("Mídia atual"))) {
+  if (section(T("Mídia atual"), pal::kGreen)) {
     const LayerState *st = app.engine.layerState(l->id);
     const MediaItem *m = st && st->current ? p.media(st->current->mediaId()) : nullptr;
     if (!m) {
