@@ -74,6 +74,7 @@ size_t AudioVoice::write(const float *in, size_t frames) {
 void AudioVoice::reset(double atSeconds) {
   std::lock_guard<std::mutex> lock(mutex_);
   readPos_ = count_ = 0;
+  pos_ = 0;
   played_ = uint64_t(std::llround(std::max(0.0, atSeconds) * kAudioRate));
 }
 
@@ -105,14 +106,45 @@ void AudioVoice::mixInto(float *out, size_t frames, int stride, int outChannels)
     if (retiring) retired = true;
     return;
   }
-  size_t n = std::min(frames, count_);
-  starving_ = n < frames;
   float target = retiring || held ? 0.0f : gain.load(); // a removed or paused voice fades out: no click
   float g = currentGain_;
   // Linear ramp over the buffer avoids clicks when the gain changes.
   float step = frames ? (target - g) / float(frames) : 0.0f;
   float pk = 0;
   size_t oc = size_t(stride);
+  double r = std::clamp(double(rate.load()), 0.0, 8.0);
+  if (r != 1.0 || pos_ != 0) {
+    // Another speed: read the source at `r` frames per output frame, linear interpolation.
+    size_t i = 0;
+    for (; i < frames; ++i) {
+      size_t k = size_t(pos_);
+      if (k + 1 >= count_) break; // not enough decoded sound yet
+      float t = float(pos_ - double(k));
+      const float *a = &ring_[((readPos_ + k) % capacity_) * size_t(src)];
+      const float *b = &ring_[((readPos_ + k + 1) % capacity_) * size_t(src)];
+      g += step;
+      float *o = &out[i * oc];
+      for (const AudioPatch &pa : patches_) {
+        float v = (a[pa.src] + (b[pa.src] - a[pa.src]) * t) * pa.gain * g;
+        o[pa.dst] += v;
+        pk = std::max(pk, std::fabs(v));
+      }
+      pos_ += r;
+    }
+    starving_ = i < frames;
+    size_t used = std::min(size_t(pos_), count_);
+    pos_ -= double(used);
+    if (r == 1.0 && pos_ < 1e-9) pos_ = 0; // back at normal speed: the exact path again
+    currentGain_ = target;
+    readPos_ = (readPos_ + used) % capacity_;
+    count_ -= used;
+    played_ += used;
+    peak_ = std::max(pk, peak_.load() * 0.9f);
+    if (retiring) retired = true;
+    return;
+  }
+  size_t n = std::min(frames, count_);
+  starving_ = n < frames;
   for (size_t i = 0; i < n; ++i) {
     size_t p = (readPos_ + i) % capacity_;
     g += step;

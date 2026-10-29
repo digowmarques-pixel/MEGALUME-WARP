@@ -95,6 +95,11 @@ Ordem pensada para **videomapping** e **instalações interativas**.
 - *Seek* preciso de vídeo e áudio (também por OSC: `/lumen/layer/<l>/time`)
 - Testes de integração no CI (`scripts/test-integration.sh`)
 
+## ✅ v0.10.10
+- **Som com velocidade ≠ 1**: o áudio acompanha de 0,25x a 4x (como fita: o tom muda) e
+  continua comandando a imagem; antes ficava mudo
+- Saídas → Slice: clicar na área de outro projetor seleciona ele (os nomes aparecem nas áreas)
+
 ## ✅ v0.10.9
 - **Monitores virtuais**: saídas sem tela aparecem juntas numa janela do Lumen em vez de
   abrir uma janela cada (*Saídas → Saídas sem tela em monitores virtuais*)

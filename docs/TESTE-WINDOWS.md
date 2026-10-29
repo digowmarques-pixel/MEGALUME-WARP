@@ -13,7 +13,7 @@ um Arduino e o NDI Tools.
 
 ## 0. Instalação e diagnóstico
 
-- [ ] 0.1 Instale com `Lumen-0.10.9-setup.exe` (ou descompacte o .zip). O atalho
+- [ ] 0.1 Instale com `Lumen-0.10.10-setup.exe` (ou descompacte o .zip). O atalho
       aparece no Menu Iniciar, e arquivos `.lumen` abrem com o Lumen.
 - [ ] 0.2 Menu Iniciar → *Lumen (console de diagnóstico)*. O relatório abre no Bloco
       de Notas (também fica em `%APPDATA%\Lumen\diagnostico.txt`).
@@ -195,6 +195,8 @@ um Arduino e o NDI Tools.
 - [ ] 13.13 Máscara: com *Adicionar pontos* desligado, clicar no workspace não cria ponto;
       ligado, cria.
 - [ ] 13.14 Mudar a velocidade da célula com o vídeo tocando muda na hora.
+- [ ] 13.15 Vídeo com som a 1,5x: o som continua (mais agudo) e em sincronia com a imagem.
+- [ ] 13.16 Saídas → Mapping → Slice: clicar na área de outro projetor o seleciona.
 - [ ] 13.6 LED escondido: sem botão LED, sem aba LED; *Janela → LED mapping* mostra tudo de volta.
 
 ## Como relatar

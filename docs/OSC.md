@@ -36,7 +36,7 @@ Layers são endereçadas pela **posição a partir do topo (1, 2, 3...)** ou pel
 | `/lumen/layer/<l>/saturation` | `0..2` | Saturação |
 | `/lumen/layer/<l>/hue` | `graus` | Matiz |
 | `/lumen/layer/<l>/tint` | `r g b` | Tinta (0..1) |
-| `/lumen/layer/<l>/speed` | `x` | Velocidade do vídeo em reprodução (≠ 1 desliga o som) |
+| `/lumen/layer/<l>/speed` | `x` | Velocidade do vídeo em reprodução (o som acompanha de 0,25 a 4, com o tom mudando como numa fita) |
 | `/lumen/layer/<l>/volume` | `0..2` | Volume da layer |
 | `/lumen/layer/<l>/mute` | `0/1` | Mudo |
 | `/lumen/layer/<l>/launch` | `n` | Dispara a célula da coluna `n` nesta layer |

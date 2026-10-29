@@ -3023,10 +3023,11 @@ void Ui::layerInspector(App &app) {
     ImGui::SameLine();
     if (ImGui::Checkbox(T("Mudo"), &l->mute)) app.edited();
     if (const LayerState *st = app.engine.layerState(l->id); st && st->current) {
-      if (st->current->hasAudio()) {
+      float sp = st->current->speed;
+      if (st->current->hasAudio() && sp >= 0.25f && sp <= 4.0f) {
         ImGui::ProgressBar(std::min(1.0f, st->current->audioPeak()), {-1, 6}, "");
-      } else if (st->current->speed != 1.0f) {
-        ImGui::TextDisabled("%s", T("Áudio desligado: velocidade diferente de 1x"));
+      } else if (st->current->hasAudio()) {
+        ImGui::TextDisabled("%s", T("Áudio desligado: velocidade fora de 0,25x a 4x"));
       }
       std::string hw = st->current->hwaccel();
       if (!hw.empty()) ImGui::TextDisabled(T("Decodificação por hardware: %s"), hw.c_str());

@@ -63,3 +63,9 @@ GPLv3 ou com um acordo com a Steinberg; isso precisa ser decidido antes de inclu
 Enquanto isso, o **modo exclusivo do WASAPI** dá latência parecida, e quase todas as
 interfaces profissionais têm driver WASAPI multicanal (Dante Virtual Soundcard
 também, no modo WDM).
+
+## Velocidade
+
+Um vídeo com velocidade diferente de 1x continua com som, como numa fita: o som acelera ou
+desacelera junto e o tom sobe ou desce (1,03x quase não se nota; 2x fica uma oitava acima).
+De 0,25x a 4x o som acompanha e continua comandando a imagem; fora disso o vídeo toca sem som.

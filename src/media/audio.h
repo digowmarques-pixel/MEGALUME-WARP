@@ -51,6 +51,9 @@ public:
   // Paused: fades out over one buffer, then consumes nothing (the played clock
   // stops) until released, when it fades back in from the same sample.
   std::atomic<bool> hold{false};
+  // Playback speed (like a tape: the pitch follows). The played clock counts
+  // source samples, so it keeps pacing the picture at any rate.
+  std::atomic<float> rate{1.0f};
   double playedSeconds() const { return double(played_.load()) / kAudioRate; }
   float peak() const { return peak_.load(); }
   bool starving() const { return starving_.load(); }
@@ -64,6 +67,7 @@ private:
   std::vector<AudioPatch> custom_, patches_; // patches_: custom_ resolved for:
   int routeOut_ = -1, routeSrc_ = -1;        // what patches_ was resolved for
   float currentGain_ = 0;
+  double pos_ = 0; // fractional read position past readPos_ (rate != 1)
   std::atomic<uint64_t> played_{0};
   std::atomic<float> peak_{0};
   std::atomic<bool> starving_{false};

@@ -344,6 +344,8 @@ void MediaCache::clear() { entries_.clear(); }
 
 // ------------------------------------------------------------------ playback
 
+static bool audibleSpeed(float s);
+
 Playback::Playback(const MediaItem &m, const Cell &cell, MediaContext &ctx)
     : speed(cell.speed), loop(cell.loop), mediaId_(m.id), type_(m.type), audio_(ctx.audio) {
   if (type_ == MediaType::Live || type_ == MediaType::Spout || type_ == MediaType::NDI) {
@@ -358,10 +360,11 @@ Playback::Playback(const MediaItem &m, const Cell &cell, MediaContext &ctx)
     decoder_.reset();
     return;
   }
-  // Sound: only at normal speed (no time-stretching yet).
-  if (audio_ && audio_->running() && decoder_->info().hasAudio && speed == 1.0f) {
+  // Sound: at any speed the card can follow (like a tape: the pitch follows the speed).
+  if (audio_ && audio_->running() && decoder_->info().hasAudio && audibleSpeed(speed)) {
     voice_ = audio_->createVoice();
     voice_->gain = 0; // the engine sets the real gain on the first update
+    voice_->rate = speed;
     audioDecoder_ = std::make_unique<AudioDecoder>();
     audioDecoder_->open(m.path, voice_, loop, decoder_->info().duration, decoder_->info().startTime);
     audioClock_ = true;
@@ -402,13 +405,18 @@ void Playback::seek(double time) {
   }
 }
 
+// Sound follows speeds from 0.25x to 4x (resampled, like a tape); outside that
+// the picture plays alone.
+static bool audibleSpeed(float s) { return s >= 0.25f && s <= 4.0f; }
+
 // The sound card paces the picture while the clip plays at normal speed. A
 // speed change, or a card that stopped taking sound (unplugged, driver), hands
 // the picture to the frame clock; the sound comes back in step when the cause
 // goes away.
 void Playback::watchAudio(double dt) {
   if (audioClock_) {
-    if (speed != 1.0f) { // no time-stretching: the picture goes on alone
+    voice_->rate = speed;
+    if (!audibleSpeed(speed)) { // too fast / slow for the sound: the picture goes on alone
       voice_->active = false;
       audioClock_ = false;
       audioOff_ = AudioOff::Speed;
@@ -437,7 +445,7 @@ void Playback::watchAudio(double dt) {
     }
     return;
   }
-  bool back = speed == 1.0f && (audioOff_ == AudioOff::Speed ||
+  bool back = audibleSpeed(speed) && (audioOff_ == AudioOff::Speed ||
                                 (audioOff_ == AudioOff::Stall && audio_ && audio_->generation() != audioGen_ && !audio_->stalled()));
   if (!back) return;
   voice_->reset(clock_); // sound again from where the picture is now

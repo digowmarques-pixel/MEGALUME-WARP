@@ -286,6 +286,7 @@ void Ui::outputsWindow(App &app) {
         if (o.id == sel->id || o.canvasId != sel->canvasId) continue;
         dl->AddRect({o0.x + o.srcX * k, o0.y + o.srcY * k}, {o0.x + (o.srcX + o.srcW) * k, o0.y + (o.srcY + o.srcH) * k},
                     IM_COL32(90, 160, 255, 90));
+        dl->AddText({o0.x + o.srcX * k + 6, o0.y + o.srcY * k + 4}, IM_COL32(150, 190, 255, 200), o.name.c_str());
       }
       ImVec2 ra{o0.x + sel->srcX * k, o0.y + sel->srcY * k};
       ImVec2 rb{o0.x + (sel->srcX + sel->srcW) * k, o0.y + (sel->srcY + sel->srcH) * k};
@@ -326,6 +327,15 @@ void Ui::outputsWindow(App &app) {
         auto near = [&](ImVec2 q) { return std::hypot(io.MousePos.x - q.x, io.MousePos.y - q.y) < 12; };
         dragCorner = near(ra) ? 0 : near(rb) ? 1
                    : (io.MousePos.x >= ra.x && io.MousePos.x <= rb.x && io.MousePos.y >= ra.y && io.MousePos.y <= rb.y) ? -1 : -2;
+        if (dragCorner == -2) // a click on another projector's slice selects that projector
+          for (auto &o : p.outputs) {
+            if (o.id == sel->id || o.canvasId != sel->canvasId) continue;
+            float cx = (io.MousePos.x - o0.x) / k, cy = (io.MousePos.y - o0.y) / k;
+            if (cx >= o.srcX && cx <= o.srcX + o.srcW && cy >= o.srcY && cy <= o.srcY + o.srcH) {
+              outputsSel_ = o.id;
+              break;
+            }
+          }
       }
       if (!ImGui::IsMouseDown(ImGuiMouseButton_Left)) dragCorner = -2;
       if (dragCorner != -2 && ImGui::IsItemActive() && (io.MouseDelta.x != 0 || io.MouseDelta.y != 0)) {

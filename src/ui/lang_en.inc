@@ -338,7 +338,7 @@
 {"Dispare uma mídia nesta layer para ver a imagem.", "Launch a media on this layer to see the image."},
 {"Selecione uma layer no dashboard.", "Select a layer in the dashboard."},
 {"Mudo", "Mute"},
-{"Áudio desligado: velocidade diferente de 1x", "Audio off: speed is not 1x"},
+{"Áudio desligado: velocidade fora de 0,25x a 4x", "Audio off: speed outside 0.25x to 4x"},
 {"Decodificação por hardware: %s", "Hardware decoding: %s"},
 {"Transformação", "Transform"},
 {"Posição (px)", "Position (px)"},
