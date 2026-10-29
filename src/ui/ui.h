@@ -75,6 +75,7 @@ private:
   void toolbar(App &app);
   void library(App &app);
   void dashboard(App &app);
+  void mappingSection(App &app, Layer &layer, float CW, float CH);
   void inspector(App &app);
   void statusBar(App &app);
 

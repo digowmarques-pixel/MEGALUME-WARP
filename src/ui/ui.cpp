@@ -548,27 +548,114 @@ void Ui::menuBar(App &app) {
     if (ImGui::MenuItem(T("Sair"))) app.requestQuit = true;
     ImGui::EndMenu();
   }
-  if (ImGui::BeginMenu(T("Editar"), !app.showLocked)) {
+  Engine &e = app.engine;
+  Project &p = e.project;
+  const bool edit = !app.showLocked;
+  if (ImGui::BeginMenu(T("Editar"), edit)) {
     if (ImGui::MenuItem(T("Desfazer"), T("Ctrl+Z"))) app.undo();
     if (ImGui::MenuItem(T("Refazer"), T("Ctrl+Y"))) app.redo();
-    ImGui::Separator();
+    ImGui::EndMenu();
+  }
+  // Layers (Millumin's "List").
+  if (ImGui::BeginMenu(T("Lista"), edit)) {
+    int li = -1;
+    for (size_t i = 0; i < p.layers.size(); ++i)
+      if (p.layers[i].id == app.sel.layerId) li = int(i);
+    int n = int(p.layers.size());
     if (ImGui::MenuItem(T("Nova layer"))) {
-      Layer &l = app.engine.project.addLayer("", workspace.viewCanvas);
+      Layer &l = p.addLayer("", workspace.viewCanvas);
       app.sel.layerId = l.id;
+      app.sel.slice = 0;
       app.edited();
     }
-    if (ImGui::MenuItem(T("Nova coluna"))) {
-      app.engine.project.addColumn();
+    if (ImGui::MenuItem(T("Remover layer selecionada"), nullptr, false, li >= 0)) {
+      p.removeLayer(app.sel.layerId);
+      app.sel.layerId = -1;
+      app.edited();
+    }
+    ImGui::Separator();
+    auto moveTo = [&](int to) {
+      Layer moved = p.layers[size_t(li)];
+      p.layers.erase(p.layers.begin() + li);
+      p.layers.insert(p.layers.begin() + std::clamp(to, 0, n - 1), moved);
+      app.edited();
+    };
+    // layers[0] is drawn on top.
+    if (ImGui::MenuItem(T("Subir"), nullptr, false, li > 0)) moveTo(li - 1);
+    if (ImGui::MenuItem(T("Para o topo"), nullptr, false, li > 0)) moveTo(0);
+    if (ImGui::MenuItem(T("Descer"), nullptr, false, li >= 0 && li + 1 < n)) moveTo(li + 1);
+    if (ImGui::MenuItem(T("Para o fundo"), nullptr, false, li >= 0 && li + 1 < n)) moveTo(n - 1);
+    ImGui::Separator();
+    if (ImGui::MenuItem(T("Solo: só a layer selecionada visível"), nullptr, false, li >= 0)) {
+      for (auto &l : p.layers) l.visible = l.id == app.sel.layerId;
+      app.edited();
+    }
+    if (ImGui::MenuItem(T("Mostrar todas as layers"))) {
+      for (auto &l : p.layers) l.visible = true;
       app.edited();
     }
     ImGui::EndMenu();
   }
+  // The dashboard (Millumin's "Board").
+  if (ImGui::BeginMenu(T("Quadro"))) {
+    if (ImGui::MenuItem(T("Disparar coluna anterior"), T("Shift+Espaço"))) e.back();
+    if (ImGui::MenuItem(T("Disparar próxima coluna"), T("Espaço"))) e.go();
+    if (ImGui::MenuItem(T("Parar tudo"))) e.stopAll();
+    ImGui::Separator();
+    ImGui::BeginDisabled(!edit);
+    if (ImGui::MenuItem(T("Nova coluna"))) {
+      p.addColumn();
+      app.edited();
+    }
+    int c = app.sel.cellColumn;
+    bool hasCol = c >= 0 && c < int(p.columns.size());
+    if (ImGui::MenuItem(T("Duplicar a coluna selecionada"), nullptr, false, hasCol)) {
+      Column copy = p.columns[size_t(c)];
+      copy.id = p.newId();
+      copy.name += T(" cópia");
+      p.columns.insert(p.columns.begin() + c + 1, copy);
+      app.edited();
+    }
+    if (ImGui::MenuItem(T("Remover colunas vazias"))) {
+      auto empty = [](const Column &col) {
+        for (auto &[id, cell] : col.cells)
+          if (cell.mediaId >= 0) return false;
+        return col.oscActions.empty() && col.commands.empty() && col.timelineId < 0;
+      };
+      size_t before = p.columns.size();
+      p.columns.erase(std::remove_if(p.columns.begin(), p.columns.end(), empty), p.columns.end());
+      if (p.columns.size() != before) {
+        app.sel.cellColumn = -1;
+        app.edited();
+      }
+    }
+    ImGui::Separator();
+    if (ImGui::MenuItem(T("Nova timeline"))) {
+      Timeline &t = p.addTimeline();
+      showTimeline(t.id);
+      app.edited();
+    }
+    ImGui::EndDisabled();
+    ImGui::EndMenu();
+  }
   if (ImGui::BeginMenu(T("Saídas"))) {
-    if (ImGui::MenuItem(T("Configurar saídas..."), T("Ctrl+Shift+P"), false, !app.showLocked)) openOutputs();
+    if (ImGui::MenuItem(T("Configurar saídas..."), T("Ctrl+Shift+P"), false, edit)) openOutputs();
     if (ImGui::MenuItem(app.outputsOpen ? T("Fechar saídas") : T("Abrir saídas"), T("Ctrl+P"))) app.outputsOpen = !app.outputsOpen;
     ImGui::Separator();
-    if (ImGui::MenuItem(T("Adicionar saída"), nullptr, false, !app.showLocked)) {
-      OutputConfig &o = app.engine.project.addOutput();
+    if (ImGui::BeginMenu(T("Padrão de teste em todas"), edit)) {
+      const char *names[] = {T("Nenhum (conteúdo)"), T("Test card"), T("Grade de blend"), T("Branco"), T("Preto")};
+      for (int k = 0; k < int(TestPattern::COUNT); ++k)
+        if (ImGui::MenuItem(names[k])) {
+          for (auto &o : p.outputs) o.pattern = TestPattern(k);
+          app.edited();
+        }
+      ImGui::EndMenu();
+    }
+    ImGui::MenuItem(T("Mostrar controles na saída"), T("Ctrl+Shift+D"), &app.showOutputControls);
+    if (ImGui::MenuItem(T("Identificar saídas"))) app.outputs.identify();
+    ImGui::Separator();
+    if (ImGui::MenuItem(T("Adicionar saída"), nullptr, false, edit)) {
+      OutputConfig &o = p.addOutput();
       app.sel.outputId = o.id;
       app.sel.inspector = Inspector::Output;
       app.edited();
@@ -579,6 +666,25 @@ void Ui::menuBar(App &app) {
     for (size_t i = 0; i < mons.size(); ++i)
       ImGui::TextDisabled(T("  %zu: %s  %dx%d @%dHz"), i + 1, mons[i].name.c_str(), mons[i].w,
                           mons[i].h, mons[i].refresh);
+    ImGui::EndMenu();
+  }
+  // Panels (Millumin's "Window").
+  if (ImGui::BeginMenu(T("Janela"))) {
+    if (ImGui::MenuItem(T("Dashboard"))) { bottomTab_ = 0; forceBottom_ = true; }
+    if (ImGui::MenuItem(T("Timeline"))) { bottomTab_ = 1; forceBottom_ = true; }
+    if (ImGui::MenuItem(T("Saídas..."), nullptr, false, edit)) openOutputs();
+    ImGui::SeparatorText(T("Propriedades"));
+    struct P { const char *name; Inspector id; };
+    const P panels[] = {{T("Layer"), Inspector::Layer}, {T("Célula"), Inspector::Cell}, {T("Mídia"), Inspector::Media},
+                        {T("Saídas"), Inspector::Output}, {T("LED"), Inspector::Led},
+                        {T("Interação (OSC, MIDI, DMX, serial)"), Inspector::Interaction}, {T("Projeto"), Inspector::Project}};
+    for (auto &pn : panels)
+      if (ImGui::MenuItem(pn.name, nullptr, app.sel.inspector == pn.id)) app.sel.inspector = pn.id;
+    ImGui::Separator();
+    if (ImGui::MenuItem(T("Diagnóstico do sistema..."))) {
+      diagReport_ = app.diagnosticReport();
+      showDiag_ = true;
+    }
     ImGui::EndMenu();
   }
   if (ImGui::BeginMenu("Idioma / Language")) {
@@ -2267,12 +2373,29 @@ void Ui::effectsUi(App &app, Layer &l) {
       l.effects.push_back(fx);
       app.edited();
     };
-    // Built-ins by category.
+    // Like Millumin's list: sections with the effects in them, the rest by category.
     std::map<std::string, std::vector<const IsfCatalog::Entry *>> byCat;
     for (auto &x : e.isfCatalog.builtins())
-      if (x.info.filter) byCat[x.info.categories.empty() ? T("Outros") : x.info.categories.front()].push_back(&x);
-    for (auto &[cat, list] : byCat) {
-      if (!ImGui::BeginMenu(cat.c_str())) continue;
+      if (x.info.filter) byCat[x.info.categories.empty() ? std::string("Outros") : x.info.categories.front()].push_back(&x);
+    auto items = [&](const char *cat) {
+      auto it = byCat.find(cat);
+      if (it == byCat.end()) return;
+      for (auto *x : it->second) {
+        if (ImGui::MenuItem(x->name.c_str())) add(x->path, x->name);
+        if (!x->info.description.empty()) ImGui::SetItemTooltip("%s", x->info.description.c_str());
+      }
+      byCat.erase(it);
+    };
+    ImGui::SeparatorText(T("COR"));
+    items("Cor");
+    ImGui::SeparatorText(T("PADRÃO"));
+    items("Geometria");
+    items("Desfoque");
+    ImGui::SeparatorText(T("ESPECIAL"));
+    if (ImGui::MenuItem(T("Rastreamento de blobs (câmera)"))) add(kBlobTrackerId, T("Blob tracker"));
+    ImGui::SeparatorText(T("VÁRIOS"));
+    for (auto &[cat, list] : byCat) { // Estilizar, and the categories of downloaded effects
+      if (!ImGui::BeginMenu(T(cat.c_str()))) continue;
       for (auto *x : list) {
         if (ImGui::MenuItem(x->name.c_str())) add(x->path, x->name);
         if (!x->info.description.empty()) ImGui::SetItemTooltip("%s", x->info.description.c_str());
@@ -2280,7 +2403,6 @@ void Ui::effectsUi(App &app, Layer &l) {
       ImGui::EndMenu();
     }
     ImGui::Separator();
-    if (ImGui::MenuItem(T("Rastreamento de blobs (câmera)"))) add(kBlobTrackerId, T("Blob tracker"));
     if (ImGui::MenuItem(T("Abrir arquivo ISF (.fs)..."))) {
       auto files = platform::openFileDialog("Efeito ISF", "ISF|*.fs|Todos|*.*", false);
       if (!files.empty()) add(files[0], platform::toUtf8(platform::toPath(files[0]).stem()));
@@ -2468,6 +2590,33 @@ void Ui::inputMeshWindow(App &app) {
   ImGui::End();
 }
 
+// Where the slice lands on the canvas: the canvas frame, the slice outline
+// and its mesh lines (like the surface preview of Millumin's Mapping section).
+static void slicePreview(const Slice &s, float CW, float CH) {
+  float w = ImGui::GetContentRegionAvail().x, h = std::min(w * CH / std::max(1.0f, CW), 220.0f);
+  w = std::min(w, h * CW / std::max(1.0f, CH));
+  ImVec2 a = ImGui::GetCursorScreenPos();
+  ImGui::Dummy({w, h});
+  ImDrawList *dl = ImGui::GetWindowDrawList();
+  dl->AddRectFilled(a, {a.x + w, a.y + h}, IM_COL32(0, 0, 0, 255));
+  dl->AddRect(a, {a.x + w, a.y + h}, IM_COL32(90, 90, 96, 255));
+  auto at = [&](Vec2 v) { return ImVec2{a.x + v.x / CW * w, a.y + v.y / CH * h}; };
+  const Warp &wp = s.warp;
+  const int n = 8;
+  for (int r = 0; r < wp.meshRows; ++r) // rows and columns of the mesh, through the warp
+    for (int k = 0; k < (wp.meshCols - 1) * n; ++k) {
+      float u0 = float(k) / float((wp.meshCols - 1) * n), u1 = float(k + 1) / float((wp.meshCols - 1) * n);
+      float v = float(r) / float(wp.meshRows - 1);
+      dl->AddLine(at(wp.map(u0, v)), at(wp.map(u1, v)), IM_COL32(255, 196, 0, r == 0 || r == wp.meshRows - 1 ? 255 : 110));
+    }
+  for (int c = 0; c < wp.meshCols; ++c)
+    for (int k = 0; k < (wp.meshRows - 1) * n; ++k) {
+      float v0 = float(k) / float((wp.meshRows - 1) * n), v1 = float(k + 1) / float((wp.meshRows - 1) * n);
+      float u = float(c) / float(wp.meshCols - 1);
+      dl->AddLine(at(wp.map(u, v0)), at(wp.map(u, v1)), IM_COL32(255, 196, 0, c == 0 || c == wp.meshCols - 1 ? 255 : 110));
+    }
+}
+
 void Ui::layerInspector(App &app) {
   Project &p = app.engine.project;
   Layer *l = p.layer(app.sel.layerId);
@@ -2492,62 +2641,98 @@ void Ui::layerInspector(App &app) {
     }
   }
   if (ImGui::Checkbox(T("Visível"), &l->visible)) app.edited();
-  if (ImGui::SliderFloat(T("Opacidade"), &l->opacity, 0, 1)) app.edited();
-  if (ImGui::SliderFloat(T("Volume"), &l->volume, 0, 2, "%.2f")) app.edited();
-  ImGui::SameLine();
-  if (ImGui::Checkbox(T("Mudo"), &l->mute)) app.edited();
-  if (const LayerState *st = app.engine.layerState(l->id); st && st->current) {
-    if (st->current->hasAudio()) {
-      ImGui::ProgressBar(std::min(1.0f, st->current->audioPeak()), {-1, 6}, "");
-    } else if (st->current->speed != 1.0f) {
-      ImGui::TextDisabled("%s", T("Áudio desligado: velocidade diferente de 1x"));
-    }
-    std::string hw = st->current->hwaccel();
-    if (!hw.empty()) ImGui::TextDisabled(T("Decodificação por hardware: %s"), hw.c_str());
-  }
-  audioRouteUi(app, *l);
-  int blend = int(l->blend);
-  if (ImGui::Combo(T("Blend"), &blend, TZ("Normal\0Adição\0Multiplicar\0Tela (screen)\0"
-                                    "Matte alpha (máscara da layer de baixo)\0Matte alpha invertido\0"
-                                    "Matte luma (claro mostra)\0Matte luma invertido\0"))) {
-    l->blend = BlendMode(blend);
-    app.edited();
-  }
 
-  if (ImGui::CollapsingHeader(T("Transformação"), ImGuiTreeNodeFlags_DefaultOpen)) {
-    float pos[2] = {l->transform.position.x, l->transform.position.y};
-    if (ImGui::DragFloat2(T("Posição (px)"), pos, 1.0f)) {
-      l->transform.position = {pos[0], pos[1]};
+  // Sections like Millumin's: Layer, Mapping, Effects, Masks, Current Media.
+  if (ImGui::CollapsingHeader(T("Layer##sec"), ImGuiTreeNodeFlags_DefaultOpen)) {
+    int blend = int(l->blend);
+    if (ImGui::Combo(T("Blend"), &blend, TZ("Normal\0Adição\0Multiplicar\0Tela (screen)\0"
+                                      "Matte alpha (máscara da layer de baixo)\0Matte alpha invertido\0"
+                                      "Matte luma (claro mostra)\0Matte luma invertido\0"))) {
+      l->blend = BlendMode(blend);
       app.edited();
     }
-    if (ImGui::DragFloat(T("Escala"), &l->transform.scale, 0.005f, 0.01f, 20)) app.edited();
-    if (ImGui::DragFloat(T("Rotação (°)"), &l->transform.rotation, 0.25f, -360, 360)) app.edited();
-    if (ImGui::Button(T("Zerar transformação"))) {
-      l->transform = {};
-      app.edited();
-    }
-    helpMarker(T("A transformação move todas as fatias juntas. Útil para animar via OSC "
-               "sem perder o mapeamento."));
-  }
 
-  if (ImGui::CollapsingHeader(T("Cor / efeitos"), ImGuiTreeNodeFlags_DefaultOpen)) {
-    if (ImGui::SliderFloat(T("Brilho"), &l->fx.brightness, -1, 1)) app.edited();
-    if (ImGui::SliderFloat(T("Contraste"), &l->fx.contrast, 0, 2)) app.edited();
-    if (ImGui::SliderFloat(T("Saturação"), &l->fx.saturation, 0, 2)) app.edited();
-    if (ImGui::SliderFloat(T("Matiz (°)"), &l->fx.hue, -180, 180)) app.edited();
-    if (ImGui::Checkbox(T("Inverter"), &l->fx.invert)) app.edited();
-    if (colorEdit(T("Tinta"), l->fx.tint)) app.edited();
-    if (ImGui::Button(T("Zerar efeitos"))) {
-      l->fx = {};
-      app.edited();
+    if (ImGui::SliderFloat(T("Opacidade"), &l->opacity, 0, 1)) app.edited();
+      float pos[2] = {l->transform.position.x, l->transform.position.y};
+      if (ImGui::DragFloat2(T("Posição (px)"), pos, 1.0f)) {
+        l->transform.position = {pos[0], pos[1]};
+        app.edited();
+      }
+      if (ImGui::DragFloat(T("Escala"), &l->transform.scale, 0.005f, 0.01f, 20)) app.edited();
+      if (ImGui::DragFloat(T("Rotação (°)"), &l->transform.rotation, 0.25f, -360, 360)) app.edited();
+      if (ImGui::Button(T("Zerar transformação"))) {
+        l->transform = {};
+        app.edited();
+      }
+      helpMarker(T("A transformação move todas as fatias juntas. Útil para animar via OSC "
+                 "sem perder o mapeamento."));
+
+    ImGui::Separator();
+    if (ImGui::SliderFloat(T("Volume"), &l->volume, 0, 2, "%.2f")) app.edited();
+    ImGui::SameLine();
+    if (ImGui::Checkbox(T("Mudo"), &l->mute)) app.edited();
+    if (const LayerState *st = app.engine.layerState(l->id); st && st->current) {
+      if (st->current->hasAudio()) {
+        ImGui::ProgressBar(std::min(1.0f, st->current->audioPeak()), {-1, 6}, "");
+      } else if (st->current->speed != 1.0f) {
+        ImGui::TextDisabled("%s", T("Áudio desligado: velocidade diferente de 1x"));
+      }
+      std::string hw = st->current->hwaccel();
+      if (!hw.empty()) ImGui::TextDisabled(T("Decodificação por hardware: %s"), hw.c_str());
     }
+    audioRouteUi(app, *l);
   }
   if (isMatte(l->blend))
     ImGui::TextColored({1.0f, 0.77f, 0.0f, 1}, "%s", T("Matte: esta layer não aparece; ela recorta a layer logo abaixo."));
 
-  if (ImGui::CollapsingHeader(T("Efeitos (shaders ISF)"), ImGuiTreeNodeFlags_DefaultOpen)) effectsUi(app, *l);
+  if (ImGui::CollapsingHeader(T("Mapping##sec"), ImGuiTreeNodeFlags_DefaultOpen)) mappingSection(app, *l, CW, CH);
 
-  if (ImGui::CollapsingHeader(T("Fatias (slices) / mapping"), ImGuiTreeNodeFlags_DefaultOpen)) {
+  if (ImGui::CollapsingHeader(T("Efeitos##sec"), ImGuiTreeNodeFlags_DefaultOpen)) {
+    if (ImGui::TreeNodeEx(T("Ajuste de cor"), ImGuiTreeNodeFlags_DefaultOpen)) {
+      if (ImGui::SliderFloat(T("Brilho"), &l->fx.brightness, -1, 1)) app.edited();
+      if (ImGui::SliderFloat(T("Contraste"), &l->fx.contrast, 0, 2)) app.edited();
+      if (ImGui::SliderFloat(T("Saturação"), &l->fx.saturation, 0, 2)) app.edited();
+      if (ImGui::SliderFloat(T("Matiz (°)"), &l->fx.hue, -180, 180)) app.edited();
+      if (ImGui::Checkbox(T("Inverter"), &l->fx.invert)) app.edited();
+      if (colorEdit(T("Tinta"), l->fx.tint)) app.edited();
+      if (ImGui::Button(T("Zerar efeitos"))) {
+        l->fx = {};
+        app.edited();
+      }
+      ImGui::TreePop();
+    }
+    effectsUi(app, *l);
+  }
+
+  if (ImGui::CollapsingHeader(T("Máscaras"), ImGuiTreeNodeFlags_DefaultOpen)) {
+    ImGui::TextWrapped("%s", T("Ferramenta Máscara (K): clique no workspace para adicionar pontos."));
+    maskList(app, l->masks, app.sel.mask, app.sel.maskPoint, {1, 1}, {CW, CH}, false);
+  }
+
+  if (ImGui::CollapsingHeader(T("Mídia atual"), ImGuiTreeNodeFlags_DefaultOpen)) {
+    const LayerState *st = app.engine.layerState(l->id);
+    const MediaItem *m = st && st->current ? p.media(st->current->mediaId()) : nullptr;
+    if (!m) {
+      ImGui::TextDisabled("%s", T("Nada no ar nesta layer."));
+    } else {
+      ImGui::Text(T("Nome: %s"), m->name.c_str());
+      ImGui::Text(T("Tipo: %s"), mediaTypeLabel(m->type));
+      if (st->currentTex) ImGui::Text(T("Resolução: %d × %d"), st->currentTex->width(), st->currentTex->height());
+      if (double d = st->current->duration(); d > 0) ImGui::Text(T("Duração: %.1f s"), d);
+      if (ImGui::Button(T("Editar mídia"))) {
+        app.sel.mediaId = m->id;
+        app.sel.inspector = Inspector::Media;
+      }
+    }
+  }
+  ImGui::PopID();
+}
+
+// Mapping section (Millumin's): the slices, warping on/off with its division,
+// the shared surface and a small preview of where the slice lands on the canvas.
+void Ui::mappingSection(App &app, Layer &layer, float CW, float CH) {
+  Project &p = app.engine.project;
+  Layer *l = &layer;
     ImGui::TextWrapped("%s", T("Cada fatia recorta uma parte da mídia e a projeta numa superfície. "
                        "Use as ferramentas Perspectiva (M) e Malha (G) no workspace."));
     int &si = app.sel.slice;
@@ -2656,13 +2841,27 @@ void Ui::layerInspector(App &app) {
           app.edited();
         }
       }
-      int grid[2] = {s.warp.meshCols, s.warp.meshRows};
-      if (ImGui::InputInt2(T("Malha (col × lin)"), grid)) {
-        s.warp.resampleMesh(grid[0], grid[1]); // keeps the current warp
+      // Warping: a mesh over the slice. Division = cells (Millumin's "division").
+      bool warping = s.warp.meshCols > 2 || s.warp.meshRows > 2 || !s.warp.meshIsIdentity();
+      if (ImGui::Checkbox(T("Deformação (warping)"), &warping)) {
+        if (warping) s.warp.resampleMesh(3, 3);
+        else s.warp.resetMesh(2, 2);
         app.edited();
       }
-      helpMarker(T("Mudar a divisão mantém a deformação atual. No workspace (ferramenta Malha), "
-                 "duplo clique adiciona uma linha e uma coluna de pontos passando pelo clique."));
+      if (warping) {
+        int div[2] = {s.warp.meshCols - 1, s.warp.meshRows - 1};
+        if (ImGui::InputInt2(T("Divisão"), div)) {
+          s.warp.resampleMesh(std::clamp(div[0], 1, 32) + 1, std::clamp(div[1], 1, 32) + 1); // keeps the current warp
+          app.edited();
+        }
+        helpMarker(T("Mudar a divisão mantém a deformação atual. No workspace (ferramenta Malha, G), "
+                     "arraste os pontos; duplo clique adiciona uma linha e uma coluna de pontos."));
+        if (ImGui::Button(T("Zerar deformação"))) {
+          s.warp.resetMesh(s.warp.meshCols, s.warp.meshRows);
+          app.edited();
+        }
+      }
+      slicePreview(s, CW, CH);
       if (ImGui::Button(T("Malha de entrada..."))) openInputMesh(l->id, si, -1);
       ImGui::SameLine();
       ImGui::TextDisabled("%s", s.warp.uvIsIdentity() ? T("(regular)") : T("(ajustada)"));
@@ -2685,19 +2884,7 @@ void Ui::layerInspector(App &app) {
         s.warp.setRect({0, 0}, {CW, CH});
         app.edited();
       }
-      ImGui::SameLine();
-      if (ImGui::Button(T("Zerar malha"))) {
-        s.warp.resetMesh(s.warp.meshCols, s.warp.meshRows);
-        app.edited();
-      }
     }
-  }
-
-  if (ImGui::CollapsingHeader(T("Máscaras"), ImGuiTreeNodeFlags_DefaultOpen)) {
-    ImGui::TextWrapped("%s", T("Ferramenta Máscara (K): clique no workspace para adicionar pontos."));
-    maskList(app, l->masks, app.sel.mask, app.sel.maskPoint, {1, 1}, {CW, CH}, false);
-  }
-  ImGui::PopID();
 }
 
 void Ui::cellInspector(App &app) {

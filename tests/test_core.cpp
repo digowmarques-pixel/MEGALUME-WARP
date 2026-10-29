@@ -379,6 +379,20 @@ static void testBlendLayout() {
   b = computeBlendLayout(g);
   CHECK(b.canvasW == 3 * 1920 - 500 && b.projectors[1].srcX == 1720 && b.projectors[2].srcX == 1720 + 1620);
   CHECK(std::fabs(b.projectors[1].left * 1920 - 200) < 0.01f && std::fabs(b.projectors[1].right * 1920 - 300) < 0.01f);
+  // Outer soft edges (the border of the whole picture), saved with the project.
+  g.edgeLeft = 192; g.edgeRight = 96; g.edgeTop = 108; g.edgeBottom = 0;
+  b = computeBlendLayout(g);
+  CHECK(std::fabs(b.projectors[0].left - 0.1f) < 1e-5f && std::fabs(b.projectors[2].right - 0.05f) < 1e-5f);
+  CHECK(std::fabs(b.projectors[1].top - 0.1f) < 1e-5f && b.projectors[1].bottom == 0);
+  CHECK(std::fabs(b.projectors[1].left * 1920 - 200) < 0.01f); // inner seams unchanged
+  {
+    Project ep = Project::makeDefault();
+    ep.outputLayout = g;
+    Project back;
+    std::string err;
+    CHECK(deserializeProject(serializeProject(ep, ""), "", back, &err));
+    CHECK(back.outputLayout.edgeLeft == 192 && back.outputLayout.edgeRight == 96 && back.outputLayout.edgeTop == 108);
+  }
   // The curve is complementary: two projectors always add to one.
   for (float t = 0; t <= 1.0f; t += 0.05f)
     for (float pw : {1.0f, 2.0f, 3.5f}) CHECK(std::fabs(blendCurve(t, pw) + blendCurve(1 - t, pw) - 1) < 1e-5f);

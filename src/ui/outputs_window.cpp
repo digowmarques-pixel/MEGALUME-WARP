@@ -124,12 +124,31 @@ void Ui::outputsWindow(App &app) {
     // Grid of projector cards with soft-edge fields on the seams.
     auto mons = OutputManager::monitors();
     ImVec2 avail = ImGui::GetContentRegionAvail();
+    // Outer soft edges around the grid (left, right, top, bottom), like Millumin.
+    const float marginX = 110, marginY = 40;
     float gapW = 90, gapH = 34;
-    float cardW = std::min(300.0f, (avail.x - gapW * float(L.cols - 1)) / float(L.cols));
-    float cardH = std::min(cardW * 0.62f, (avail.y - gapH * float(L.rows - 1) - 20) / float(L.rows));
+    float cardW = std::min(300.0f, (avail.x - 2 * marginX - gapW * float(L.cols - 1)) / float(L.cols));
+    float cardH = std::min(cardW * 0.62f, (avail.y - 2 * marginY - gapH * float(L.rows - 1) - 20) / float(L.rows));
     cardW = std::max(cardW, 150.0f);
     cardH = std::max(cardH, 110.0f);
     ImVec2 origin = ImGui::GetCursorScreenPos();
+    origin = {origin.x + marginX, origin.y + marginY};
+    {
+      float gridW = float(L.cols) * cardW + float(L.cols - 1) * gapW;
+      float gridH = float(L.rows) * cardH + float(L.rows - 1) * gapH;
+      auto outer = [&](const char *id, int &v, int hi, ImVec2 at) {
+        ImGui::SetCursorScreenPos(at);
+        ImGui::TextDisabled("%s", T("soft edge"));
+        ImGui::SetCursorScreenPos({at.x, at.y + 18});
+        if (pxField(id, v, hi)) apply();
+        ImGui::SetItemTooltip("%s", T("Borda externa: a imagem escurece até o preto nesta largura "
+                                      "(para emendar com um projetor de outro computador)."));
+      };
+      outer("eL", L.edgeLeft, L.projW * 9 / 10, {origin.x - marginX + 10, origin.y + gridH * 0.5f - 20});
+      outer("eR", L.edgeRight, L.projW * 9 / 10, {origin.x + gridW + 12, origin.y + gridH * 0.5f + (L.rows > 1 ? 30.0f : -20.0f)});
+      outer("eT", L.edgeTop, L.projH * 9 / 10, {origin.x + gridW * 0.5f - 35, origin.y - marginY});
+      outer("eB", L.edgeBottom, L.projH * 9 / 10, {origin.x + gridW * 0.5f - 35 + (L.cols > 1 ? 0.0f : 0.0f), origin.y + gridH + 2});
+    }
     ImDrawList *dl = ImGui::GetWindowDrawList();
     BlendLayout lay = computeBlendLayout(L);
     for (int r = 0; r < L.rows; ++r)
@@ -204,7 +223,7 @@ void Ui::outputsWindow(App &app) {
           if (pxField(id, L.gapsY[size_t(r)], L.projH * 9 / 10)) apply();
         }
       }
-    ImGui::SetCursorScreenPos({origin.x, origin.y + float(L.rows) * (cardH + gapH)});
+    ImGui::SetCursorScreenPos({origin.x - marginX, origin.y + float(L.rows) * (cardH + gapH) + marginY});
     ImGui::Dummy({1, 1});
     ImGui::TextDisabled("%s", T("O soft edge entre dois projetores é a largura (em px) em que eles se sobrepõem. "
                         "Use o padrão Grade para alinhar e Branco para conferir a emenda."));

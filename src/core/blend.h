@@ -13,6 +13,9 @@ struct BlendLayoutParams {
   // Optional per-seam overlaps in pixels (cols-1 / rows-1 entries). When set
   // they win over overlapX / overlapY, like Millumin's soft edge fields.
   std::vector<int> gapsX, gapsY;
+  // Soft edge on the outer border (px): the picture fades to black there, e.g.
+  // to blend with a projector of another computer.
+  int edgeLeft = 0, edgeRight = 0, edgeTop = 0, edgeBottom = 0;
   // Pixel overlap of seam i (between column i and i+1 / row i and i+1).
   int gapX(int i) const;
   int gapY(int i) const;

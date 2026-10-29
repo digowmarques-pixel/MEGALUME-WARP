@@ -95,6 +95,18 @@ Ordem pensada para **videomapping** e **instalações interativas**.
 - *Seek* preciso de vídeo e áudio (também por OSC: `/lumen/layer/<l>/time`)
 - Testes de integração no CI (`scripts/test-integration.sh`)
 
+## ✅ v0.10.3 (mais parecido com o Millumin)
+- **Propriedades da layer em seções**: Layer, Mapping, Efeitos, Máscaras e Mídia atual
+- **Mapping**: liga/desliga a deformação (*warping*) com a divisão da malha e uma prévia
+  de onde a fatia cai no canvas
+- **Menu de efeitos** em seções: Cor, Padrão, Especial e Vários (por categoria, com os
+  efeitos baixados)
+- **Saídas**: soft edge também nas bordas externas (escurece até o preto, para emendar
+  com o projetor de outro computador)
+- **Menus** como os do Millumin: Lista (layers: subir, descer, solo), Quadro (colunas:
+  anterior, próxima, duplicar, remover vazias, nova timeline), Saídas (padrão de teste em
+  todas, controles na saída, identificar) e Janela (painéis)
+
 ## ✅ v0.10.2
 - Clique na célula **só seleciona** (para editar); vai ao ar pelo ▶ da coluna, GO ou
   botão direito → *Disparar só esta célula*

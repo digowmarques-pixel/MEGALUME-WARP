@@ -13,7 +13,7 @@ um Arduino e o NDI Tools.
 
 ## 0. Instalação e diagnóstico
 
-- [ ] 0.1 Instale com `Lumen-0.10.2-setup.exe` (ou descompacte o .zip). O atalho
+- [ ] 0.1 Instale com `Lumen-0.10.3-setup.exe` (ou descompacte o .zip). O atalho
       aparece no Menu Iniciar, e arquivos `.lumen` abrem com o Lumen.
 - [ ] 0.2 Menu Iniciar → *Lumen (console de diagnóstico)*. O relatório abre no Bloco
       de Notas (também fica em `%APPDATA%\Lumen\diagnostico.txt`).
@@ -170,6 +170,15 @@ um Arduino e o NDI Tools.
 - [ ] 12.3 ⏸ pausa imagem e som; ▶ continua do mesmo ponto, com o som em sincronia e sem estalo.
 - [ ] 12.4 Esc com vídeo tocando: nada para. Com um menu aberto, Esc só fecha o menu.
 - [ ] 12.5 Aba *Projeto*: abre normalmente; mudar a resolução e apertar Enter aplica.
+
+## 13. Interface estilo Millumin (v0.10.3)
+
+- [ ] 13.1 Propriedades de uma layer: seções Layer, Mapping, Efeitos, Máscaras e Mídia atual.
+      Em Mapping, ligar *Deformação (warping)* mostra a malha; a prévia acompanha.
+- [ ] 13.2 *+ Efeito*: seções Cor, Padrão, Especial e Vários.
+- [ ] 13.3 *Saídas...* com 1×1: soft edge nos quatro lados; 200 px à esquerda escurece a
+      borda esquerda do projetor até o preto.
+- [ ] 13.4 Menus Lista, Quadro, Saídas e Janela: cada item faz o que diz.
 
 ## Como relatar
 

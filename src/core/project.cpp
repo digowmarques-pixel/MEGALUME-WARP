@@ -845,7 +845,8 @@ std::string serializeProject(const Project &p, const std::string &baseDir) {
   {
     const BlendLayoutParams &b = p.outputLayout;
     j["outputLayout"] = {{"cols", b.cols}, {"rows", b.rows}, {"size", {b.projW, b.projH}},
-                         {"gapsX", b.gapsX}, {"gapsY", b.gapsY}};
+                         {"gapsX", b.gapsX}, {"gapsY", b.gapsY},
+                         {"edges", {b.edgeLeft, b.edgeRight, b.edgeTop, b.edgeBottom}}};
   }
   j["dmx"] = {{"master", p.dmxMaster}, {"devices", json::array()}, {"leds", json::array()}};
   for (auto &d : p.dmxDevices)
@@ -1069,6 +1070,11 @@ bool deserializeProject(const std::string &text, const std::string &baseDir, Pro
       if (b.contains("size")) { p.outputLayout.projW = b["size"][0]; p.outputLayout.projH = b["size"][1]; }
       for (auto &g : b.value("gapsX", json::array())) p.outputLayout.gapsX.push_back(g.get<int>());
       for (auto &g : b.value("gapsY", json::array())) p.outputLayout.gapsY.push_back(g.get<int>());
+      if (b.contains("edges") && b["edges"].is_array() && b["edges"].size() == 4) {
+        BlendLayoutParams &o = p.outputLayout;
+        int *e[] = {&o.edgeLeft, &o.edgeRight, &o.edgeTop, &o.edgeBottom};
+        for (size_t k = 0; k < 4; ++k) *e[k] = std::clamp(b["edges"][k].is_number() ? b["edges"][k].get<int>() : 0, 0, 16384);
+      }
     } else if (!p.outputs.empty()) {
       p.outputLayout.projW = int(p.outputs.front().srcW);
       p.outputLayout.projH = int(p.outputs.front().srcH);

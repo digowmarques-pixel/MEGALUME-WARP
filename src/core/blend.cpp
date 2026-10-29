@@ -39,10 +39,11 @@ BlendLayout computeBlendLayout(const BlendLayoutParams &p) {
       b.srcY = float(y0[size_t(r)]);
       b.srcW = float(w);
       b.srcH = float(h);
-      b.left = c > 0 ? float(p.gapX(c - 1)) / float(w) : 0;
-      b.right = c + 1 < cols ? float(p.gapX(c)) / float(w) : 0;
-      b.top = r > 0 ? float(p.gapY(r - 1)) / float(h) : 0;
-      b.bottom = r + 1 < rows ? float(p.gapY(r)) / float(h) : 0;
+      auto frac = [](int px, int size) { return float(std::clamp(px, 0, size * 9 / 10)) / float(size); };
+      b.left = frac(c > 0 ? p.gapX(c - 1) : p.edgeLeft, w);
+      b.right = frac(c + 1 < cols ? p.gapX(c) : p.edgeRight, w);
+      b.top = frac(r > 0 ? p.gapY(r - 1) : p.edgeTop, h);
+      b.bottom = frac(r + 1 < rows ? p.gapY(r) : p.edgeBottom, h);
       out.projectors.push_back(b);
     }
   return out;
