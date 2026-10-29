@@ -457,6 +457,7 @@ void Ui::draw(App &app) {
   if (!locked) {
     outputsWindow(app);
     inputMeshWindow(app);
+    sliceEditorWindow(app);
     panelWindows(app);
   }
   recoveryPopup(app);
@@ -1678,6 +1679,157 @@ void Ui::timePanel(App &app, const std::vector<TimeRow> &rows, float bodyTop, fl
   ImGui::EndChild();
 }
 
+// Slice editor (Millumin's): the layer's media with each slice's part of it.
+// Drag the corners / sides of the selected slice, or inside it to move it; the
+// free shape moves each corner on its own (the input side of the slice's mesh).
+void Ui::sliceEditorWindow(App &app) {
+  if (sliceEditorLayer_ < 0) return;
+  Project &p = app.engine.project;
+  Layer *l = p.layer(sliceEditorLayer_);
+  if (!l || l->slices.empty()) { sliceEditorLayer_ = -1; return; }
+  bool open = true;
+  ImGuiViewport *vp = ImGui::GetMainViewport();
+  ImGui::SetNextWindowPos({vp->WorkPos.x + vp->WorkSize.x * 0.5f, vp->WorkPos.y + vp->WorkSize.y * 0.45f}, ImGuiCond_FirstUseEver, {0.5f, 0.5f});
+  ImGui::SetNextWindowSize({720, 560}, ImGuiCond_FirstUseEver);
+  if (!ImGui::Begin((T("Editor de fatias — ") + l->name + "###sliceeditor").c_str(), &open, ImGuiWindowFlags_NoCollapse)) {
+    ImGui::End();
+    if (!open) sliceEditorLayer_ = -1;
+    return;
+  }
+  int &si = app.sel.slice;
+  si = std::clamp(si, 0, int(l->slices.size()) - 1);
+  Slice &s = l->slices[size_t(si)];
+  ImGui::TextDisabled("%s", T("Parte da mídia usada por cada fatia. Arraste os cantos, os lados ou o meio; clique numa fatia para escolhê-la."));
+
+  const Texture *tex = nullptr;
+  if (const LayerState *st = app.engine.layerState(l->id)) tex = st->currentTex;
+  ImVec2 avail = ImGui::GetContentRegionAvail();
+  avail.y -= ImGui::GetFrameHeightWithSpacing() * 1.6f;
+  float aspect = tex && !tex->empty() ? float(tex->width()) / float(std::max(1, tex->height())) : 16.0f / 9.0f;
+  float bw = std::max(10.0f, avail.x), bh = bw / aspect;
+  if (bh > avail.y) { bh = std::max(10.0f, avail.y); bw = bh * aspect; }
+  ImVec2 o = ImGui::GetCursorScreenPos();
+  o.x += std::max(0.0f, (avail.x - bw) * 0.5f);
+  ImGui::SetCursorScreenPos(o);
+  ImGui::InvisibleButton("##sliceed", {bw, bh});
+  ImDrawList *dl = ImGui::GetWindowDrawList();
+  dl->AddRectFilled(o, {o.x + bw, o.y + bh}, IM_COL32(20, 20, 22, 255));
+  if (tex && !tex->empty()) dl->AddImage(texId(*tex), o, {o.x + bw, o.y + bh});
+  else dl->AddText({o.x + 10, o.y + 10}, IM_COL32(200, 200, 200, 255), T("Dispare uma mídia nesta layer para ver a imagem."));
+  auto scr = [&](float u, float v) { return ImVec2{o.x + u * bw, o.y + v * bh}; };
+  // The other slices, dimmed.
+  for (size_t i = 0; i < l->slices.size(); ++i)
+    if (int(i) != si) {
+      const Slice &x = l->slices[i];
+      dl->AddRect(scr(x.u0, x.v0), scr(x.u1, x.v1), IM_COL32(255, 255, 255, 90));
+      dl->AddText({scr(x.u0, x.v0).x + 4, scr(x.u0, x.v0).y + 2}, IM_COL32(255, 255, 255, 120), x.name.c_str());
+    }
+  dl->AddRect(scr(s.u0, s.v0), scr(s.u1, s.v1), IM_COL32(255, 255, 255, 255), 0, 0, 1.5f);
+  ImGuiIO &io = ImGui::GetIO();
+  Vec2 mouse{(io.MousePos.x - o.x) / bw, (io.MousePos.y - o.y) / bh};
+  bool freeShape = !s.warp.uvMesh.empty();
+  // Handles: 0-3 corners, 4-7 sides (rectangle) / the mesh points (free shape).
+  static int drag = -1;
+  static Vec2 dragFrom;
+  static float from[4];
+  std::vector<ImVec2> handles;
+  float cu = (s.u0 + s.u1) * 0.5f, cv = (s.v0 + s.v1) * 0.5f;
+  auto inCrop = [&](Vec2 uv) { return scr(s.u0 + uv.x * (s.u1 - s.u0), s.v0 + uv.y * (s.v1 - s.v0)); };
+  if (freeShape) {
+    s.warp.ensureUvMesh();
+    for (int r = 0; r < s.warp.meshRows; ++r)
+      for (int c = 0; c < s.warp.meshCols; ++c) {
+        if (c + 1 < s.warp.meshCols) dl->AddLine(inCrop(s.warp.uvAt(c, r)), inCrop(s.warp.uvAt(c + 1, r)), IM_COL32(255, 196, 0, 255), 2);
+        if (r + 1 < s.warp.meshRows) dl->AddLine(inCrop(s.warp.uvAt(c, r)), inCrop(s.warp.uvAt(c, r + 1)), IM_COL32(255, 196, 0, 255), 2);
+      }
+    for (auto &uv : s.warp.uvMesh) handles.push_back(inCrop(uv));
+  } else {
+    handles = {scr(s.u0, s.v0), scr(s.u1, s.v0), scr(s.u1, s.v1), scr(s.u0, s.v1),
+               scr(cu, s.v0), scr(s.u1, cv), scr(cu, s.v1), scr(s.u0, cv)};
+  }
+  for (auto &h : handles) {
+    dl->AddRectFilled({h.x - 5, h.y - 5}, {h.x + 5, h.y + 5}, IM_COL32(30, 30, 32, 255));
+    dl->AddRect({h.x - 5, h.y - 5}, {h.x + 5, h.y + 5}, IM_COL32(255, 255, 255, 255));
+  }
+  if (ImGui::IsItemClicked()) {
+    drag = -1;
+    float best = 10;
+    for (size_t i = 0; i < handles.size(); ++i) {
+      float d = std::hypot(io.MousePos.x - handles[i].x, io.MousePos.y - handles[i].y);
+      if (d < best) { best = d; drag = int(i); }
+    }
+    bool inside = mouse.x >= std::min(s.u0, s.u1) && mouse.x <= std::max(s.u0, s.u1) &&
+                  mouse.y >= std::min(s.v0, s.v1) && mouse.y <= std::max(s.v0, s.v1);
+    if (drag < 0 && inside) drag = 100; // move the whole part
+    if (drag < 0) // another slice under the mouse: select it
+      for (size_t i = 0; i < l->slices.size(); ++i) {
+        const Slice &x = l->slices[i];
+        if (mouse.x >= std::min(x.u0, x.u1) && mouse.x <= std::max(x.u0, x.u1) && mouse.y >= std::min(x.v0, x.v1) &&
+            mouse.y <= std::max(x.v0, x.v1)) { si = int(i); break; }
+      }
+    dragFrom = mouse;
+    from[0] = s.u0; from[1] = s.v0; from[2] = s.u1; from[3] = s.v1;
+  }
+  if (!ImGui::IsMouseDown(ImGuiMouseButton_Left)) drag = -1;
+  if (drag >= 0 && ImGui::IsItemActive() && (io.MouseDelta.x != 0 || io.MouseDelta.y != 0)) {
+    auto cl = [](float v) { return std::clamp(v, 0.0f, 1.0f); };
+    if (drag == 100) {
+      float du = mouse.x - dragFrom.x, dv = mouse.y - dragFrom.y;
+      du = std::clamp(du, -std::min(from[0], from[2]), 1 - std::max(from[0], from[2]));
+      dv = std::clamp(dv, -std::min(from[1], from[3]), 1 - std::max(from[1], from[3]));
+      s.u0 = from[0] + du; s.v0 = from[1] + dv; s.u1 = from[2] + du; s.v1 = from[3] + dv;
+    } else if (freeShape) {
+      if (drag < int(s.warp.uvMesh.size()))
+        s.warp.uvMesh[size_t(drag)] = {cl((mouse.x - s.u0) / std::max(1e-4f, s.u1 - s.u0)),
+                                       cl((mouse.y - s.v0) / std::max(1e-4f, s.v1 - s.v0))};
+    } else {
+      float u = cl(mouse.x), v = cl(mouse.y);
+      if (drag == 0 || drag == 3 || drag == 7) s.u0 = u;
+      if (drag == 1 || drag == 2 || drag == 5) s.u1 = u;
+      if (drag == 0 || drag == 1 || drag == 4) s.v0 = v;
+      if (drag == 2 || drag == 3 || drag == 6) s.v1 = v;
+    }
+    app.edited();
+  }
+
+  // Bottom bar: shape, the slice, + Fatia.
+  ImGui::AlignTextToFramePadding();
+  ImGui::TextDisabled("%s", T("forma"));
+  ImGui::SameLine();
+  auto shapeButton = [&](const char *label, bool on) {
+    if (on) pushPrimary();
+    bool clicked = ImGui::Button(label, {0, 0});
+    if (on) popPrimary();
+    return clicked;
+  };
+  if (shapeButton(T("\xe2\x96\xa0 Retângulo"), !freeShape)) { s.warp.uvMesh.clear(); app.edited(); } // ■
+  ImGui::SameLine(0, 2);
+  if (shapeButton(T("\xe2\x97\x86 Livre (4 cantos)"), freeShape)) { s.warp.ensureUvMesh(); app.edited(); } // ◆
+  ImGui::SetItemTooltip("%s", T("Cada canto da parte da mídia anda sozinho (ex.: pegar uma fachada em perspectiva)."));
+  ImGui::SameLine(0, 20);
+  ImGui::SetNextItemWidth(160);
+  if (ImGui::BeginCombo("##slicepick", s.name.c_str())) {
+    for (size_t i = 0; i < l->slices.size(); ++i)
+      if (ImGui::Selectable(l->slices[i].name.c_str(), int(i) == si)) si = int(i);
+    ImGui::EndCombo();
+  }
+  ImGui::SameLine();
+  if (ImGui::Button(T("+ Fatia"))) {
+    float CW = float(p.canvasWidth(l->canvasId)), CH = float(p.canvasHeight(l->canvasId));
+    Slice n;
+    n.name = T("Fatia ") + std::to_string(l->slices.size() + 1);
+    n.u0 = 0.25f; n.v0 = 0.25f; n.u1 = 0.75f; n.v1 = 0.75f;
+    n.warp.setRect({CW * 0.35f, CH * 0.35f}, {CW * 0.3f, CH * 0.3f});
+    l->slices.push_back(n);
+    si = int(l->slices.size()) - 1;
+    app.edited();
+  }
+  ImGui::SameLine();
+  if (ImGui::Button(T("Mídia inteira"))) { s.u0 = 0; s.v0 = 0; s.u1 = 1; s.v1 = 1; s.warp.uvMesh.clear(); app.edited(); }
+  ImGui::End();
+  if (!open) sliceEditorLayer_ = -1;
+}
+
 void Ui::panelWindows(App &app) {
   struct W { const char *title; void (Ui::*draw)(App &); };
   const W wins[] = {{T("Propriedades das saídas###pw_out"), &Ui::outputInspector},
@@ -1734,47 +1886,45 @@ void Ui::inspector(App &app) {
 // output masks (unit = output size in px, points stored 0..1).
 void Ui::maskList(App &app, std::vector<Mask> &masks, int &sel, int &selPoint, Vec2 unit, Vec2 area,
                   bool outputSpace) {
+  // Like Millumin's Masks section: a list (name + show / hide per mask) with
+  // [+] [•••] [−] under it. Applied from top to bottom.
   int remove = -1, move = -1, dir = 0;
-  for (size_t i = 0; i < masks.size(); ++i) {
-    Mask &m = masks[i];
-    ImGui::PushID(int(i) + 9100);
-    if (ImGui::Checkbox("##en", &m.enabled)) app.edited();
-    ImGui::SameLine();
-    bool valid = m.points.size() >= 3;
-    if (!valid) ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.77f, 0.0f, 1)); // like Millumin: orange = no shape yet
-    char label[160];
-    std::snprintf(label, sizeof(label), "%s  %s%s", m.name.c_str(), m.subtract ? T("(esconde)") : T("(mostra)"),
-                  m.inverted ? T(" inv.") : "");
-    if (ImGui::Selectable(label, sel == int(i))) { sel = int(i); selPoint = -1; }
-    if (!valid) ImGui::PopStyleColor();
-    if (ImGui::BeginPopupContextItem()) {
-      if (ImGui::MenuItem(T("Subir"), nullptr, false, i > 0)) { move = int(i); dir = -1; }
-      if (ImGui::MenuItem(T("Descer"), nullptr, false, i + 1 < masks.size())) { move = int(i); dir = 1; }
-      if (ImGui::MenuItem(T("Duplicar"))) {
-        Mask c = m;
-        c.name += T(" cópia");
-        masks.insert(masks.begin() + int(i) + 1, c);
-        app.edited();
-        ImGui::EndPopup();
-        ImGui::PopID();
-        break;
-      }
-      if (ImGui::MenuItem(T("Remover"))) remove = int(i);
-      ImGui::EndPopup();
+  float rowH = ImGui::GetFrameHeight() + 4;
+  float listH = rowH * float(std::clamp(int(masks.size()), 4, 8)) + 8;
+  ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.11f, 0.11f, 0.12f, 1));
+  ImGui::BeginChild("##masklist", {-1, listH}, ImGuiChildFlags_Borders);
+  ImGuiTableFlags tf = ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp;
+  if (ImGui::BeginTable("##masks", 3, tf)) {
+    ImGui::TableSetupColumn("##en", ImGuiTableColumnFlags_WidthFixed, ImGui::GetFrameHeight());
+    ImGui::TableSetupColumn("##name", ImGuiTableColumnFlags_WidthStretch);
+    ImGui::TableSetupColumn("##mode", ImGuiTableColumnFlags_WidthFixed, 110);
+    for (size_t i = 0; i < masks.size(); ++i) {
+      Mask &m = masks[i];
+      ImGui::PushID(int(i) + 9100);
+      ImGui::TableNextRow(0, rowH);
+      ImGui::TableSetColumnIndex(0);
+      if (ImGui::Checkbox("##en", &m.enabled)) app.edited();
+      ImGui::SetItemTooltip("%s", T("Ligada"));
+      ImGui::TableSetColumnIndex(1);
+      bool valid = m.points.size() >= 3;
+      // Orange: no shape yet (like Millumin); draw it with the Mask tool (K).
+      if (!valid) ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.6f, 0.15f, 1));
+      ImGui::AlignTextToFramePadding();
+      std::string label = m.name + (m.inverted ? T("  (invertida)") : "");
+      if (ImGui::Selectable(label.c_str(), sel == int(i), ImGuiSelectableFlags_AllowOverlap)) { sel = int(i); selPoint = -1; }
+      if (!valid) ImGui::PopStyleColor();
+      if (!valid) ImGui::SetItemTooltip("%s", T("Sem forma ainda: com a ferramenta Máscara (K), clique no workspace."));
+      ImGui::TableSetColumnIndex(2);
+      ImGui::SetNextItemWidth(-1);
+      int mode = m.subtract ? 1 : 0;
+      if (ImGui::Combo("##mode", &mode, TZ("mostrar\0esconder\0"))) { m.subtract = mode == 1; app.edited(); }
+      ImGui::PopID();
     }
-    ImGui::PopID();
+    ImGui::EndTable();
   }
-  if (remove >= 0) {
-    masks.erase(masks.begin() + remove);
-    sel = -1;
-    app.edited();
-  }
-  if (move >= 0) {
-    std::swap(masks[size_t(move)], masks[size_t(move + dir)]);
-    sel = move + dir;
-    app.edited();
-  }
-  ImGui::TextDisabled("%s", T("Aplicadas de cima para baixo (botão direito: subir / descer)."));
+  if (masks.empty()) ImGui::TextDisabled("%s", T("Nenhuma máscara. Use + para criar."));
+  ImGui::EndChild();
+  ImGui::PopStyleColor();
 
   auto add = [&](Mask m) {
     m.name = T("Máscara ") + std::to_string(masks.size() + 1);
@@ -1785,82 +1935,110 @@ void Ui::maskList(App &app, std::vector<Mask> &masks, int &sel, int &selPoint, V
     workspace.tool = Tool::Mask;
     app.edited();
   };
-  if (ImGui::Button(T("+ Máscara"))) add(Mask{});
-  ImGui::SameLine();
-  if (ImGui::Button(T("Forma..."))) ImGui::OpenPopup("##shape");
-  if (ImGui::BeginPopup("##shape")) {
+  bool hasSel = sel >= 0 && sel < int(masks.size());
+  if (ImGui::Button(" + ")) ImGui::OpenPopup("##addmask");
+  ImGui::SetItemTooltip("%s", T("Nova máscara"));
+  if (ImGui::BeginPopup("##addmask")) {
     // Centred, a third of the area (canvas or output).
     Vec2 c{area.x * 0.5f, area.y * 0.5f};
     float r = std::min(area.x * unit.x, area.y * unit.y) / 6.0f; // pixels
     float rx = r / unit.x, ry = r / unit.y;
     Mask m;
-    if (ImGui::MenuItem(T("Quadrado"))) {
+    if (ImGui::MenuItem(T("\xe2\x96\xa0  Máscara quadrada"))) { // ■
       m.points = {{c.x - rx, c.y - ry}, {c.x + rx, c.y - ry}, {c.x + rx, c.y + ry}, {c.x - rx, c.y + ry}};
       add(m);
     }
-    if (ImGui::MenuItem(T("Círculo"))) {
+    if (ImGui::MenuItem(T("\xe2\x97\x8f  Máscara redonda"))) { // ●
       const float k = 0.5522847f;
       m.points = {{c.x + rx, c.y}, {c.x, c.y + ry}, {c.x - rx, c.y}, {c.x, c.y - ry}};
       m.tanIn = {{0, -ry * k}, {rx * k, 0}, {0, ry * k}, {-rx * k, 0}};
       m.tanOut = {{0, ry * k}, {-rx * k, 0}, {0, -ry * k}, {rx * k, 0}};
       add(m);
     }
-    if (ImGui::MenuItem(T("Triângulo"))) {
+    if (ImGui::MenuItem(T("\xe2\x96\xb2  Máscara triangular"))) { // ▲
       m.points = {{c.x, c.y - ry}, {c.x + rx, c.y + ry}, {c.x - rx, c.y + ry}};
       add(m);
     }
+    ImGui::Separator();
+    if (ImGui::MenuItem(T("Máscara vazia (desenhar)"))) add(Mask{});
     ImGui::EndPopup();
   }
   ImGui::SameLine();
-  if (ImGui::Button(T("Importar SVG"))) {
-    auto files = platform::openFileDialog("Importar máscaras (SVG)", "SVG|*.svg|Todos|*.*", false);
-    std::string text, err;
-    if (!files.empty() && platform::readFile(files[0], text)) {
-      auto imported = masksFromSvg(text, area.x * unit.x, area.y * unit.y, &err);
-      for (auto &m : imported) {
-        for (auto &v : m.points) v = {v.x / unit.x, v.y / unit.y};
-        for (auto &v : m.tanIn) v = {v.x / unit.x, v.y / unit.y};
-        for (auto &v : m.tanOut) v = {v.x / unit.x, v.y / unit.y};
-        if (outputSpace) m.subtract = true;
-        masks.push_back(m);
-      }
-      if (!imported.empty()) {
-        sel = int(masks.size()) - 1;
-        app.edited();
-        app.status(std::to_string(imported.size()) + T(" máscara(s) importada(s) do SVG"));
-      } else {
-        app.status(T("SVG: ") + err, true);
+  float mid = ImGui::GetContentRegionAvail().x * 0.5f;
+  ImGui::SetCursorPosX(ImGui::GetCursorPosX() + std::max(0.0f, mid - 40));
+  if (ImGui::Button(" \xe2\x80\xa2\xe2\x80\xa2\xe2\x80\xa2 ")) ImGui::OpenPopup("##maskmore"); // •••
+  ImGui::SetItemTooltip("%s", T("Mais: ordem, duplicar, SVG"));
+  if (ImGui::BeginPopup("##maskmore")) {
+    if (ImGui::MenuItem(T("Subir"), nullptr, false, hasSel && sel > 0)) { move = sel; dir = -1; }
+    if (ImGui::MenuItem(T("Descer"), nullptr, false, hasSel && sel + 1 < int(masks.size()))) { move = sel; dir = 1; }
+    if (ImGui::MenuItem(T("Duplicar"), nullptr, false, hasSel)) {
+      Mask c = masks[size_t(sel)];
+      c.name += T(" cópia");
+      masks.insert(masks.begin() + sel + 1, c);
+      sel += 1;
+      app.edited();
+    }
+    ImGui::Separator();
+    if (ImGui::MenuItem(T("Importar SVG..."))) {
+      auto files = platform::openFileDialog("Importar máscaras (SVG)", "SVG|*.svg|Todos|*.*", false);
+      std::string text, err;
+      if (!files.empty() && platform::readFile(files[0], text)) {
+        auto imported = masksFromSvg(text, area.x * unit.x, area.y * unit.y, &err);
+        for (auto &m : imported) {
+          for (auto &v : m.points) v = {v.x / unit.x, v.y / unit.y};
+          for (auto &v : m.tanIn) v = {v.x / unit.x, v.y / unit.y};
+          for (auto &v : m.tanOut) v = {v.x / unit.x, v.y / unit.y};
+          if (outputSpace) m.subtract = true;
+          masks.push_back(m);
+        }
+        if (!imported.empty()) {
+          sel = int(masks.size()) - 1;
+          app.edited();
+          app.status(std::to_string(imported.size()) + T(" máscara(s) importada(s) do SVG"));
+        } else {
+          app.status(T("SVG: ") + err, true);
+        }
       }
     }
-  }
-  ImGui::SameLine();
-  ImGui::BeginDisabled(masks.empty());
-  if (ImGui::Button(T("Exportar SVG"))) {
-    std::string path = platform::saveFileDialog(T("Exportar máscaras (SVG)"), T("SVG|*.svg"), "mascaras.svg");
-    if (!path.empty()) {
-      std::vector<Mask> scaled = masks;
-      for (auto &m : scaled) {
-        for (auto &v : m.points) v = {v.x * unit.x, v.y * unit.y};
-        for (auto &v : m.tanIn) v = {v.x * unit.x, v.y * unit.y};
-        for (auto &v : m.tanOut) v = {v.x * unit.x, v.y * unit.y};
+    ImGui::SetItemTooltip("%s", T("SVG: desenhe as formas no Illustrator / Inkscape sobre uma foto do cenário no tamanho "
+                                  "do canvas (ou do projetor) e importe. Caminhos, polígonos, retângulos, círculos e "
+                                  "curvas viram máscaras."));
+    if (ImGui::MenuItem(T("Exportar SVG..."), nullptr, false, !masks.empty())) {
+      std::string path = platform::saveFileDialog(T("Exportar máscaras (SVG)"), T("SVG|*.svg"), "mascaras.svg");
+      if (!path.empty()) {
+        std::vector<Mask> scaled = masks;
+        for (auto &m : scaled) {
+          for (auto &v : m.points) v = {v.x * unit.x, v.y * unit.y};
+          for (auto &v : m.tanIn) v = {v.x * unit.x, v.y * unit.y};
+          for (auto &v : m.tanOut) v = {v.x * unit.x, v.y * unit.y};
+        }
+        if (platform::writeFile(path, masksToSvg(scaled, area.x * unit.x, area.y * unit.y))) app.status(T("Máscaras exportadas: ") + path);
+        else app.status(T("Não foi possível salvar ") + path, true);
       }
-      if (platform::writeFile(path, masksToSvg(scaled, area.x * unit.x, area.y * unit.y))) app.status(T("Máscaras exportadas: ") + path);
-      else app.status(T("Não foi possível salvar ") + path, true);
     }
+    ImGui::EndPopup();
   }
+  ImGui::SameLine(ImGui::GetWindowContentRegionMax().x - ImGui::CalcTextSize(" - ").x - ImGui::GetStyle().FramePadding.x * 2);
+  ImGui::BeginDisabled(!hasSel);
+  if (ImGui::Button(" - ")) remove = sel;
   ImGui::EndDisabled();
-  helpMarker(T("SVG: desenhe as formas no Illustrator / Inkscape sobre uma foto do cenário no tamanho "
-             "do canvas (ou do projetor) e importe. Caminhos, polígonos, retângulos, círculos e "
-             "curvas viram máscaras."));
+  ImGui::SetItemTooltip("%s", T("Remover a máscara selecionada"));
+  if (remove >= 0) {
+    masks.erase(masks.begin() + remove);
+    sel = -1;
+    app.edited();
+  }
+  if (move >= 0) {
+    std::swap(masks[size_t(move)], masks[size_t(move + dir)]);
+    sel = move + dir;
+    app.edited();
+  }
 
   if (sel < 0 || sel >= int(masks.size())) return;
   Mask &m = masks[size_t(sel)];
   ImGui::SeparatorText(m.name.c_str());
   ImGui::PushID("maskprops");
   if (inputText(T("Nome"), m.name)) app.edited();
-  int mode = m.subtract ? 1 : 0;
-  if (ImGui::Combo(T("Modo"), &mode, TZ("Mostrar pixels\0Esconder pixels\0"))) { m.subtract = mode == 1; app.edited(); }
-  ImGui::SameLine();
   if (ImGui::Checkbox(T("Invertida"), &m.inverted)) app.edited();
   helpMarker(T("Invertida: age fora da forma em vez de dentro."));
   if (ImGui::SliderFloat(T("Opacidade"), &m.opacity, 0, 1)) app.edited();
@@ -2778,7 +2956,6 @@ void Ui::layerInspector(App &app) {
   }
 
   if (ImGui::CollapsingHeader(T("Máscaras"), ImGuiTreeNodeFlags_DefaultOpen)) {
-    ImGui::TextWrapped("%s", T("Ferramenta Máscara (K): clique no workspace para adicionar pontos."));
     maskList(app, l->masks, app.sel.mask, app.sel.maskPoint, {1, 1}, {CW, CH}, false);
   }
 
@@ -2806,6 +2983,10 @@ void Ui::layerInspector(App &app) {
 void Ui::mappingSection(App &app, Layer &layer, float CW, float CH) {
   Project &p = app.engine.project;
   Layer *l = &layer;
+  // Like Millumin's Mapping section: the slice editor first.
+  float bw = std::min(220.0f, ImGui::GetContentRegionAvail().x);
+  ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (ImGui::GetContentRegionAvail().x - bw) * 0.5f);
+  if (ImGui::Button(T("Editor de fatias..."), {bw, 0})) sliceEditorLayer_ = l->id;
     ImGui::TextWrapped("%s", T("Cada fatia recorta uma parte da mídia e a projeta numa superfície. "
                        "Use as ferramentas Perspectiva (M) e Malha (G) no workspace."));
     int &si = app.sel.slice;

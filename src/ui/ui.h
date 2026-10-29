@@ -97,6 +97,8 @@ private:
   void blobUi(App &app, Layer &l);
   void openInputMesh(int layerId, int slice, int outputId);
   void inputMeshWindow(App &app);
+  void sliceEditorWindow(App &app);
+  int sliceEditorLayer_ = -1; // layer whose slice editor is open
   struct InputMeshEdit { bool open = false; int layerId = -1, slice = 0, outputId = -1, point = -1; } inputMesh_;
   void maskList(App &app, std::vector<Mask> &masks, int &sel, int &selPoint, Vec2 unit, Vec2 area,
                 bool outputSpace);

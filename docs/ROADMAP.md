@@ -95,6 +95,12 @@ Ordem pensada para **videomapping** e **instalações interativas**.
 - *Seek* preciso de vídeo e áudio (também por OSC: `/lumen/layer/<l>/time`)
 - Testes de integração no CI (`scripts/test-integration.sh`)
 
+## ✅ v0.10.6
+- **Máscaras** como no Millumin: lista com mostrar / esconder em cada uma e os botões
+  + (quadrada, redonda, triangular, vazia), ••• (ordem, duplicar, SVG) e −
+- **Editor de fatias** (Mapping → *Editor de fatias...*): a mídia com a parte de cada
+  fatia; arraste cantos, lados ou o meio; forma retângulo ou livre (4 cantos); + Fatia
+
 ## ✅ v0.10.5
 - Propriedades só com Layer, Célula e Mídia; **Saídas, Interação, Projeto e LED viram
   janelas** (menu *Janela*)
