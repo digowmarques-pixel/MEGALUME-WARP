@@ -232,6 +232,7 @@ struct Timeline {
 
 struct Column {
   int id = 0;
+  int board = 0;         // dashboard it belongs to (Project::boards)
   std::string name;
   std::string notes;     // cue notes for the operator
   TransitionType transitionType = TransitionType::Crossfade;
@@ -471,6 +472,10 @@ struct Project {
   std::vector<MediaItem> library;
   std::vector<Layer> layers; // index 0 is the front-most layer
   std::vector<Column> columns;
+  // Several dashboards ("boards" in Millumin): each column belongs to one.
+  // GO / back / auto-GO move within the board of the cue on air.
+  std::vector<std::string> boards{"Dashboard"};
+  int currentBoard = 0; // shown in the Dashboard panel
   std::vector<OutputConfig> outputs;
   std::vector<InputMapping> mappings;
   std::vector<DmxDevice> dmxDevices;

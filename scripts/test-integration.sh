@@ -178,6 +178,20 @@ out = run({"format": "lumen", "version": 1, "canvas": {"width": 320, "height": 1
 t = [float(l.split("t=")[1].split()[0]) for l in out.splitlines() if "layer L1: t=" in l]
 check("pausa de 2 s: o tempo do clipe parou e voltou", bool(t) and 3.0 < t[0] < 5.6, t)
 check("pausa: o som volta a comandar a imagem", "(paces)" in out)
+# Two dashboards: GO goes to the next column of the same dashboard (skips the other one's).
+def go_later():
+    pad = lambda b: b + b"\0" * (4 - len(b) % 4)
+    time.sleep(2.5)
+    socket.socket(socket.AF_INET, socket.SOCK_DGRAM).sendto(pad(b"/lumen/go") + pad(b","), ("127.0.0.1", 18352))
+threading.Thread(target=go_later, daemon=True).start()
+solid = {"id": 1, "name": "s", "type": 2, "generator": 1, "color1": [1, 1, 1, 1]}
+out = run({"format": "lumen", "version": 1, "canvas": {"width": 320, "height": 180}, "osc": {"enabled": True, "port": 18352},
+           "library": [solid], "layers": [{"id": 1, "name": "L1"}], "boards": ["Show", "Ensaio"],
+           "columns": [{"id": 5, "name": "A", "transition": 0, "cells": [{"layer": 1, "media": 1}]},
+                       {"id": 6, "name": "B", "transition": 0, "board": 1, "cells": [{"layer": 1, "media": 1}]},
+                       {"id": 7, "name": "C", "transition": 0, "cells": [{"layer": 1, "media": 1}]}]},
+          ["--launch", "1", "--quit-after", "4.5"], "boards")
+check("dois dashboards: GO pula a coluna do outro dashboard", "[test] column=3" in out, [l for l in out.splitlines() if "column=" in l])
 sys.exit(0 if ok else 1)
 EOF2
 python3 review.py "$LUMEN" "$WORK" || fail=1

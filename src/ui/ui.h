@@ -124,6 +124,7 @@ private:
   int calibrating_ = -1; // mapping whose input range is being learnt
   float calMin_ = 0, calMax_ = 0;
   ImFont *bigFont_ = nullptr;
+  bool resetLayout_ = false; // Janela > Restaurar layout dos painéis
   int bottomTab_ = 0;     // 0 dashboard, 1 timeline
   bool forceBottom_ = false;
   int timelineSel_ = -1;  // timeline shown in the editor

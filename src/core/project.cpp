@@ -976,6 +976,7 @@ std::string serializeProject(const Project &p, const std::string &baseDir) {
       jc["autoGo"] = {{"wait", c.autoGo}, {"afterTransition", c.autoGoAfterTransition}, {"target", c.autoGoTarget}};
     if (c.color[0] > 0 || c.color[1] > 0 || c.color[2] > 0) jc["color"] = {c.color[0], c.color[1], c.color[2]};
     if (c.timelineId >= 0) jc["timeline"] = c.timelineId;
+    if (c.board != 0) jc["board"] = c.board;
     if (!c.transitionShader.empty()) jc["transitionShader"] = shaderToJson(c.transitionShader, baseDir);
     if (c.manualTransition) jc["manualTransition"] = true;
     if (c.stingerMediaId >= 0) jc["stinger"] = {{"media", c.stingerMediaId}, {"cut", c.stingerCut}};
@@ -989,6 +990,8 @@ std::string serializeProject(const Project &p, const std::string &baseDir) {
                                {"end", int(cell.endMode)}, {"speed", cell.speed}});
     j["columns"].push_back(jc);
   }
+  j["boards"] = p.boards;
+  j["currentBoard"] = p.currentBoard;
 
   for (auto &o : p.outputs) {
     j["outputs"].push_back(
@@ -1315,6 +1318,13 @@ bool deserializeProject(const std::string &text, const std::string &baseDir, Pro
       p.layers.push_back(l);
     }
 
+    if (j.contains("boards") && j["boards"].is_array()) {
+      p.boards.clear();
+      for (auto &b : j["boards"])
+        if (b.is_string()) p.boards.push_back(b.get<std::string>());
+    }
+    if (p.boards.empty()) p.boards = {"Dashboard"};
+    p.currentBoard = std::clamp(j.value("currentBoard", 0), 0, int(p.boards.size()) - 1);
     for (auto &jc : j.value("columns", json::array())) {
       Column c;
       c.id = jc.value("id", 0);
@@ -1333,6 +1343,7 @@ bool deserializeProject(const std::string &text, const std::string &baseDir, Pro
       if (jc.contains("color"))
         for (int k = 0; k < 3; ++k) c.color[k] = jc["color"][size_t(k)];
       c.timelineId = jc.value("timeline", -1);
+      c.board = std::clamp(jc.value("board", 0), 0, int(p.boards.size()) - 1);
       if (jc.contains("transitionShader")) c.transitionShader = shaderFromJson(jc["transitionShader"].get<std::string>(), baseDir);
       c.manualTransition = jc.value("manualTransition", false);
       if (jc.contains("stinger")) {

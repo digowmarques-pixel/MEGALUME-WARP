@@ -80,8 +80,6 @@ double App::statusAge() const { return glfwGetTime() - statusTime_; }
 static Project starterProject() {
   Project p = Project::makeDefault();
   int cardId = p.addGenerator(GeneratorKind::TestCard).id;
-  p.addGenerator(GeneratorKind::Grid);
-  p.addGenerator(GeneratorKind::Plasma);
   Cell c;
   c.mediaId = cardId;
   p.columns[0].cells[p.layers[0].id] = c;

@@ -215,6 +215,8 @@
 {"início %.2f s", "start %.2f s"},
 {"Timecode (em segundos) em que esta timeline está no tempo 0.", "Timecode (in seconds) at which this timeline is at time 0."},
 {"Pausar", "Pause"},
+{"Restaurar layout dos painéis", "Reset panel layout"},
+{"Os painéis se movem arrastando a aba (título) para cima, para baixo ou para os lados de outro painel. Isto os põe de volta no lugar original.", "Panels move by dragging their tab (title) to the top, bottom or sides of another panel. This puts them back where they were."},
 {"Monitores virtuais###virtualmon", "Virtual monitors###virtualmon"},
 {"Saídas sem tela em monitores virtuais", "Outputs without a display in virtual monitors"},
 {"Ligado: as saídas sem tela escolhida aparecem juntas na janela \"Monitores virtuais\" do Lumen. Desligado: cada uma abre uma janela própria.", "On: outputs with no display chosen appear together in Lumen's \"Virtual monitors\" window. Off: each one opens its own window."},

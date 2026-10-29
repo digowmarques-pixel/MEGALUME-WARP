@@ -685,8 +685,13 @@ void Engine::updateAutoGo() {
   autoGoFired_ = true;
   const Column &c = project.columns[size_t(activeColumn_)];
   if (c.autoGoTarget > 0) launchColumn(c.autoGoTarget - 1);
-  else if (activeColumn_ + 1 < int(project.columns.size())) launchColumn(activeColumn_ + 1);
-  else launchColumn(0); // end of the show: an installation loops back to the start
+  else if (int next = columnInBoard(activeColumn_, 1); next >= 0) launchColumn(next);
+  else { // end of the show: an installation loops back to the start (of its board)
+    int first = 0;
+    for (int j = 0; j < int(project.columns.size()); ++j)
+      if (project.columns[size_t(j)].board == c.board) { first = j; break; }
+    launchColumn(first);
+  }
 }
 
 void Engine::updateSchedule() {
@@ -719,16 +724,28 @@ void Engine::updateSchedule() {
   }
 }
 
+int Engine::columnInBoard(int from, int dir) const {
+  int n = int(project.columns.size());
+  if (from >= n) return -1;
+  int board = from >= 0 ? project.columns[size_t(from)].board : project.currentBoard;
+  if (from < 0 && dir < 0) return -1;
+  for (int j = from < 0 ? 0 : from + dir; j >= 0 && j < n; j += dir)
+    if (project.columns[size_t(j)].board == board) return j;
+  return -1;
+}
+
 void Engine::go() {
   // During a stinger the cue is already the pending one: GO goes past it.
   int from = pendingColumn_ >= 0 ? pendingColumn_ : activeColumn_;
-  // On the last cue GO does nothing (relaunching it would run its commands again).
-  if (from + 1 < int(project.columns.size())) launchColumn(from + 1);
+  // On the last cue of the board GO does nothing (relaunching it would run its commands again).
+  int next = columnInBoard(from, 1);
+  if (next >= 0) launchColumn(next);
 }
 
 void Engine::back() {
   int from = pendingColumn_ >= 0 ? pendingColumn_ : activeColumn_;
-  if (from > 0) launchColumn(from - 1);
+  int prev = from >= 0 ? columnInBoard(from, -1) : -1;
+  if (prev >= 0) launchColumn(prev);
 }
 
 void Engine::launchCell(int columnIndex, int layerId) {
@@ -1040,7 +1057,8 @@ void Engine::update(double dt) {
     if (it->second.endMode == EndMode::Stop) stopLayer(id, columnTransition(activeColumn_));
     else if (it->second.endMode == EndMode::NextColumn) next = true;
   }
-  if (next && !following() && activeColumn_ + 1 < int(project.columns.size())) launchColumn(activeColumn_ + 1);
+  if (next && !following())
+    if (int n = columnInBoard(activeColumn_, 1); n >= 0) launchColumn(n);
   // Stinger playback.
   stingerTex_ = nullptr;
   if (stinger_) {

@@ -252,7 +252,13 @@ void Ui::setup() {
   // Windows move by their title bar only: a click near an editor's handle
   // (slice editor, input mesh) must not drag the whole window.
   io.ConfigWindowsMoveFromTitleBarOnly = true;
-  io.IniFilename = nullptr; // fixed layout, nothing to persist
+  // Panels dock: drag one by its tab to the top / bottom / side of another.
+  io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
+  // Where the panels were docked (and floating windows), kept between sessions.
+  static std::string iniPath = platform::toUtf8(platform::toPath(platform::settingsDir()) / "layout.ini");
+  std::error_code ec;
+  std::filesystem::create_directories(platform::toPath(platform::settingsDir()), ec);
+  io.IniFilename = iniPath.c_str();
 
   // Prefer a proper system UI font; fall back to the built-in one.
   const char *fonts[] = {"C:/Windows/Fonts/segoeui.ttf",
@@ -399,49 +405,67 @@ void Ui::draw(App &app) {
   toolbar(app);
   ImGui::End();
 
-  ImGui::SetNextWindowPos({x0 + g, bodyY + g});
-  ImGui::SetNextWindowSize({libraryW - g, bodyH - g});
+  // The panels dock into this area: drag a panel by its tab to the top, bottom or a
+  // side of another (Janela > Restaurar layout puts them back).
   const bool locked = app.showLocked;
-  ImGui::Begin(T("Biblioteca"), nullptr, fixed);
+  ImGui::SetNextWindowPos({x0 + g, bodyY + g});
+  ImGui::SetNextWindowSize({W - 2 * g, bodyH - g});
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {0, 0});
+  ImGui::Begin("##dockhost", nullptr, fixed | ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoDocking |
+                                          ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoScrollbar);
+  ImGui::PopStyleVar();
+  ImGuiID dockId = ImGui::GetID("##lumendock");
+  ImGuiDockNode *node = ImGui::DockBuilderGetNode(dockId);
+  if (resetLayout_ || !node || node->IsLeafNode()) { // first run (no saved layout) or asked to
+    resetLayout_ = false;
+    ImGui::DockBuilderRemoveNode(dockId);
+    ImGui::DockBuilderAddNode(dockId, ImGuiDockNodeFlags_DockSpace);
+    ImGui::DockBuilderSetNodeSize(dockId, {W - 2 * g, bodyH - g});
+    ImGuiID center = dockId;
+    ImGuiID left = ImGui::DockBuilderSplitNode(center, ImGuiDir_Left, libraryW / W, nullptr, &center);
+    ImGuiID right = ImGui::DockBuilderSplitNode(center, ImGuiDir_Right, inspectorW / (W - libraryW), nullptr, &center);
+    ImGuiID bottom = ImGui::DockBuilderSplitNode(center, ImGuiDir_Down, dashH / bodyH, nullptr, &center);
+    ImGui::DockBuilderDockWindow("###lib", left);
+    ImGui::DockBuilderDockWindow("###props", right);
+    ImGui::DockBuilderDockWindow("###ws", center);
+    ImGui::DockBuilderDockWindow("###dash", bottom);
+    ImGui::DockBuilderDockWindow("###tl", bottom);
+    ImGui::DockBuilderFinish(dockId);
+  }
+  ImGui::DockSpace(dockId, {0, 0}, ImGuiDockNodeFlags_None);
+  ImGui::End();
+  (void)centerW;
+
+  const ImGuiWindowFlags panel = ImGuiWindowFlags_NoCollapse;
+  ImGui::Begin((std::string(T("Biblioteca")) + "###lib").c_str(), nullptr, panel);
   ImGui::BeginDisabled(locked);
   library(app);
   ImGui::EndDisabled();
   ImGui::End();
 
-  ImGui::SetNextWindowPos({x0 + libraryW + g, bodyY + g});
-  ImGui::SetNextWindowSize({centerW - g, bodyH - dashH - g});
   ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {4, 4});
-  ImGui::Begin(T("Workspace"), nullptr, fixed | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+  ImGui::Begin((std::string(T("Workspace")) + "###ws").c_str(), nullptr,
+               panel | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
   ImGui::BeginDisabled(locked);
   workspace.draw(app, ImGui::GetContentRegionAvail());
   ImGui::EndDisabled();
   ImGui::End();
   ImGui::PopStyleVar();
 
-  ImGui::SetNextWindowPos({x0 + libraryW + g, bodyY + bodyH - dashH + g});
-  ImGui::SetNextWindowSize({centerW - g, dashH - g});
-  ImGui::Begin("##bottom", nullptr, fixed | ImGuiWindowFlags_NoTitleBar);
-  if (ImGui::BeginTabBar("##bottomtabs")) {
-    if (ImGui::BeginTabItem(T("Dashboard"), nullptr, bottomTab_ == 0 && forceBottom_ ? ImGuiTabItemFlags_SetSelected : 0)) {
-      if (!forceBottom_) bottomTab_ = 0;
-      dashboard(app);
-      ImGui::EndTabItem();
-    }
-    if (ImGui::BeginTabItem(T("Timeline"), nullptr, bottomTab_ == 1 && forceBottom_ ? ImGuiTabItemFlags_SetSelected : 0)) {
-      if (!forceBottom_) bottomTab_ = 1;
-      ImGui::BeginDisabled(locked);
-      timelineEditor(app);
-      ImGui::EndDisabled();
-      ImGui::EndTabItem();
-    }
-    ImGui::EndTabBar();
-  }
-  forceBottom_ = false;
+  // Dashboard and Timeline: two panels, tabs of the same place by default.
+  if (forceBottom_ && bottomTab_ == 0) ImGui::SetNextWindowFocus();
+  if (ImGui::Begin((std::string(T("Dashboard")) + "###dash").c_str(), nullptr, panel)) dashboard(app);
   ImGui::End();
+  if (forceBottom_ && bottomTab_ == 1) ImGui::SetNextWindowFocus();
+  if (ImGui::Begin((std::string(T("Timeline")) + "###tl").c_str(), nullptr, panel)) {
+    ImGui::BeginDisabled(locked);
+    timelineEditor(app);
+    ImGui::EndDisabled();
+  }
+  ImGui::End();
+  forceBottom_ = false;
 
-  ImGui::SetNextWindowPos({x0 + W - inspectorW + g, bodyY + g});
-  ImGui::SetNextWindowSize({inspectorW - 2 * g, bodyH - g});
-  ImGui::Begin(T("Propriedades"), nullptr, fixed);
+  ImGui::Begin((std::string(T("Propriedades")) + "###props").c_str(), nullptr, panel);
   ImGui::BeginDisabled(locked);
   inspector(app);
   ImGui::EndDisabled();
@@ -612,7 +636,7 @@ void Ui::menuBar(App &app) {
     ImGui::Separator();
     ImGui::BeginDisabled(!edit);
     if (ImGui::MenuItem(T("Nova coluna"))) {
-      p.addColumn();
+      p.addColumn().board = p.currentBoard;
       app.edited();
     }
     int c = app.sel.cellColumn;
@@ -682,6 +706,10 @@ void Ui::menuBar(App &app) {
   }
   // Panels (Millumin's "Window").
   if (ImGui::BeginMenu(T("Janela"))) {
+    if (ImGui::MenuItem(T("Restaurar layout dos painéis"))) resetLayout_ = true;
+    ImGui::SetItemTooltip("%s", T("Os painéis se movem arrastando a aba (título) para cima, para baixo ou para os "
+                                  "lados de outro painel. Isto os põe de volta no lugar original."));
+    ImGui::Separator();
     if (ImGui::MenuItem(T("Dashboard"))) { bottomTab_ = 0; forceBottom_ = true; }
     if (ImGui::MenuItem(T("Timeline"))) { bottomTab_ = 1; forceBottom_ = true; }
     if (ImGui::MenuItem(T("Saídas..."), nullptr, false, edit)) openOutputs();
@@ -1035,6 +1063,62 @@ void Ui::dashboard(App &app) {
   Project &p = e.project;
   const bool locked = app.showLocked; // show mode: launching only, no editing
 
+  // Dashboard (board) selector, like Millumin's: the list, + to create, − to remove.
+  p.currentBoard = std::clamp(p.currentBoard, 0, std::max(0, int(p.boards.size()) - 1));
+  if (p.boards.empty()) p.boards = {"Dashboard"};
+  {
+    std::string label = "\xe2\x96\xa6  " + p.boards[size_t(p.currentBoard)] + "  \xe2\x96\xbe###boardsel"; // ▦ ▾
+    if (ImGui::Button(label.c_str())) ImGui::OpenPopup("##boards");
+    ImGui::SetItemTooltip("%s", T("Dashboards (quadros): cada um com as suas colunas. GO segue dentro do dashboard da coluna no ar."));
+    if (ImGui::BeginPopup("##boards")) {
+      ImGui::TextDisabled("%s", T("Dashboards"));
+      int removeBoard = -1;
+      for (size_t b = 0; b < p.boards.size(); ++b) {
+        ImGui::PushID(int(b));
+        if (ImGui::Selectable(p.boards[b].c_str(), int(b) == p.currentBoard, ImGuiSelectableFlags_DontClosePopups, {220, 0})) {
+          p.currentBoard = int(b);
+          app.edited();
+        }
+        ImGui::PopID();
+      }
+      ImGui::Separator();
+      ImGui::BeginDisabled(locked);
+      ImGui::SetNextItemWidth(220);
+      if (inputText(T("Nome##board"), p.boards[size_t(p.currentBoard)])) app.edited();
+      if (ImGui::Button(" + ")) {
+        p.boards.push_back(T("Dashboard ") + std::to_string(p.boards.size() + 1));
+        p.currentBoard = int(p.boards.size()) - 1;
+        for (int k = 0; k < 4; ++k) p.addColumn().board = p.currentBoard;
+        app.edited();
+      }
+      ImGui::SetItemTooltip("%s", T("Novo dashboard"));
+      ImGui::SameLine();
+      ImGui::BeginDisabled(p.boards.size() <= 1);
+      if (ImGui::Button(" - ")) ImGui::OpenPopup("##rmboard");
+      ImGui::EndDisabled();
+      ImGui::SetItemTooltip("%s", T("Remover este dashboard (e as suas colunas)"));
+      if (ImGui::BeginPopup("##rmboard")) {
+        ImGui::Text(T("Remover \"%s\" e as suas colunas?"), p.boards[size_t(p.currentBoard)].c_str());
+        if (ImGui::Button(T("Remover"))) { removeBoard = p.currentBoard; ImGui::CloseCurrentPopup(); }
+        ImGui::SameLine();
+        if (ImGui::Button(T("Cancelar"))) ImGui::CloseCurrentPopup();
+        ImGui::EndPopup();
+      }
+      ImGui::EndDisabled();
+      if (removeBoard >= 0 && p.boards.size() > 1) {
+        p.columns.erase(std::remove_if(p.columns.begin(), p.columns.end(),
+                                       [&](const Column &c) { return c.board == removeBoard; }), p.columns.end());
+        for (auto &c : p.columns)
+          if (c.board > removeBoard) --c.board;
+        p.boards.erase(p.boards.begin() + removeBoard);
+        p.currentBoard = std::max(0, removeBoard - 1);
+        app.sel.cellColumn = -1;
+        app.edited();
+      }
+      ImGui::EndPopup();
+    }
+  }
+  ImGui::SameLine();
   ImGui::BeginDisabled(locked);
   if (ImGui::Button(T("+ Layer"))) {
     Layer &l = p.addLayer("", workspace.viewCanvas);
@@ -1045,7 +1129,7 @@ void Ui::dashboard(App &app) {
   ImGui::SameLine();
   ImGui::BeginDisabled(int(p.columns.size()) >= kMaxDashColumns);
   if (ImGui::Button(T("+ Coluna"))) {
-    p.addColumn();
+    p.addColumn().board = p.currentBoard;
     app.edited();
   }
   ImGui::EndDisabled();
@@ -1060,7 +1144,10 @@ void Ui::dashboard(App &app) {
   const float cellW = zw[std::clamp(dashZoom_, 0, 2)], cellH = zh[std::clamp(dashZoom_, 0, 2)], nameW = 150;
   // A table holds at most 511 columns (ImGui aborts past that): the name and stop
   // columns plus the first 509 show columns. More can exist (OSC, file) and still run.
-  int ncols = std::min(int(p.columns.size()), kMaxDashColumns);
+  std::vector<int> vis; // the columns of the dashboard shown (indices in p.columns)
+  for (int k = 0; k < int(p.columns.size()) && int(vis.size()) < kMaxDashColumns; ++k)
+    if (p.columns[size_t(k)].board == p.currentBoard) vis.push_back(k);
+  int ncols = int(vis.size());
   ImGuiTableFlags flags = ImGuiTableFlags_ScrollX | ImGuiTableFlags_ScrollY |
                           ImGuiTableFlags_BordersInner | ImGuiTableFlags_RowBg;
   // Tempo panel on the right (like Millumin's Time), when there is room for it.
@@ -1073,8 +1160,8 @@ void Ui::dashboard(App &app) {
   std::vector<TimeRow> timeRows;
   ImGui::TableSetupScrollFreeze(1, 1);
   ImGui::TableSetupColumn("##layers", ImGuiTableColumnFlags_WidthFixed, nameW);
-  for (int c = 0; c < ncols; ++c)
-    ImGui::TableSetupColumn(p.columns[size_t(c)].name.c_str(), ImGuiTableColumnFlags_WidthFixed, cellW);
+  for (int ci = 0; ci < ncols; ++ci)
+    ImGui::TableSetupColumn(p.columns[size_t(vis[size_t(ci)])].name.c_str(), ImGuiTableColumnFlags_WidthFixed, cellW);
   ImGui::TableSetupColumn("##stop", ImGuiTableColumnFlags_WidthFixed, 40);
 
   // Header row: one launch button per column.
@@ -1082,14 +1169,15 @@ void Ui::dashboard(App &app) {
   ImGui::TableSetColumnIndex(0);
   ImGui::TextDisabled("%s", T("Layers \\ Cues"));
   int removeColumn = -1, moveColumn = -1, moveDir = 0;
-  for (int c = 0; c < ncols; ++c) {
-    ImGui::TableSetColumnIndex(c + 1);
+  for (int ci = 0; ci < ncols; ++ci) {
+    int c = vis[size_t(ci)];
+    ImGui::TableSetColumnIndex(ci + 1);
     ImGui::PushID(p.columns[size_t(c)].id);
     Column &colRef = p.columns[size_t(c)];
     bool active = e.activeColumn() == c;
     if (active) pushPrimary();
     char label[96];
-    std::snprintf(label, sizeof(label), T("%02d  \xe2\x96\xb6  %s"), c + 1, colRef.name.c_str()); // ▶
+    std::snprintf(label, sizeof(label), T("%02d  \xe2\x96\xb6  %s"), ci + 1, colRef.name.c_str()); // ▶
     if (ImGui::Button(label, {cellW - 4, 0})) e.launchColumn(c);
     if (active) popPrimary();
     if (colRef.color[0] > 0 || colRef.color[1] > 0 || colRef.color[2] > 0) {
@@ -1208,7 +1296,7 @@ void Ui::dashboard(App &app) {
           if (ImGui::Checkbox(T("Contar depois da transição"), &colRef.autoGoAfterTransition)) app.edited();
           ImGui::SetNextItemWidth(160);
           if (ImGui::InputInt(T("Coluna (0 = próxima)"), &colRef.autoGoTarget)) {
-            colRef.autoGoTarget = std::clamp(colRef.autoGoTarget, 0, ncols);
+            colRef.autoGoTarget = std::clamp(colRef.autoGoTarget, 0, int(p.columns.size()));
             app.edited();
           }
         }
@@ -1327,8 +1415,14 @@ void Ui::dashboard(App &app) {
       }
       ImGui::SeparatorText(T("Organizar"));
       if (ImGui::ColorEdit3(T("Cor"), colRef.color, ImGuiColorEditFlags_NoInputs)) app.edited();
-      if (ImGui::MenuItem(T("Mover para a esquerda"), nullptr, false, c > 0)) { moveColumn = c; moveDir = -1; }
-      if (ImGui::MenuItem(T("Mover para a direita"), nullptr, false, c + 1 < ncols)) { moveColumn = c; moveDir = 1; }
+      // moveDir: distance to the neighbour of the same dashboard.
+      if (ImGui::MenuItem(T("Mover para a esquerda"), nullptr, false, ci > 0)) { moveColumn = c; moveDir = vis[size_t(ci - 1)] - c; }
+      if (ImGui::MenuItem(T("Mover para a direita"), nullptr, false, ci + 1 < ncols)) { moveColumn = c; moveDir = vis[size_t(ci + 1)] - c; }
+      if (p.boards.size() > 1 && ImGui::BeginMenu(T("Mover para o dashboard"))) {
+        for (size_t b = 0; b < p.boards.size(); ++b)
+          if (int(b) != colRef.board && ImGui::MenuItem(p.boards[b].c_str())) { colRef.board = int(b); app.edited(); }
+        ImGui::EndMenu();
+      }
       ImGui::SeparatorText(T("Ações OSC ao disparar"));
       {
         std::string text;
@@ -1394,8 +1488,9 @@ void Ui::dashboard(App &app) {
     if (ImGui::SliderFloat("##op", &l.opacity, 0, 1, "%.2f")) app.edited();
     const LayerState *st = e.layerState(l.id);
 
-    for (int c = 0; c < ncols; ++c) {
-      ImGui::TableSetColumnIndex(c + 1);
+    for (int ci = 0; ci < ncols; ++ci) {
+      int c = vis[size_t(ci)];
+      ImGui::TableSetColumnIndex(ci + 1);
       Column &col = p.columns[size_t(c)];
       ImGui::PushID(col.id);
       auto it = col.cells.find(l.id);

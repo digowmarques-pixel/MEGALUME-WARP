@@ -395,6 +395,24 @@ static void testBlendLayout() {
       }
     CHECK(worst < 0.05f);
   }
+  {
+    // Several dashboards: the columns keep their board, a bad index is clamped.
+    Project bp = Project::makeDefault();
+    bp.boards = {"Show", "Ensaio"};
+    bp.currentBoard = 1;
+    bp.columns[2].board = 1;
+    Project back;
+    std::string err;
+    CHECK(deserializeProject(serializeProject(bp, ""), "", back, &err));
+    CHECK(back.boards.size() == 2 && back.boards[1] == "Ensaio" && back.currentBoard == 1);
+    CHECK(back.columns[2].board == 1 && back.columns[0].board == 0);
+    std::string text = serializeProject(bp, "");
+    size_t at = text.find("\"board\"");
+    CHECK(at != std::string::npos);
+    if (at != std::string::npos) text[text.find('1', at)] = '7'; // a board that does not exist
+    Project bad;
+    CHECK(deserializeProject(text, "", bad, &err) && bad.columns[2].board == 1);
+  }
   // Outer soft edges (the border of the whole picture), saved with the project.
   g.edgeLeft = 192; g.edgeRight = 96; g.edgeTop = 108; g.edgeBottom = 0;
   b = computeBlendLayout(g);

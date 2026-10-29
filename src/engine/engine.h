@@ -95,6 +95,9 @@ public:
 
   // Show control.
   void launchColumn(int index);
+  // Next / previous column of the same dashboard (board) as `from`; from < 0:
+  // the first column of the board shown. -1 when there is none.
+  int columnInBoard(int from, int dir) const;
   void go();   // next column
   void back(); // previous column
   void launchCell(int columnIndex, int layerId);

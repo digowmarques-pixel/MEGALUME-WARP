@@ -47,6 +47,23 @@ void handle(ImDrawList *dl, ImVec2 p, ImU32 col, bool selected, bool round = fal
 
 } // namespace
 
+// Rows and columns of a mesh warp, following its curves (sampled through the warp).
+static void drawMeshGrid(ImDrawList *dl, const Warp &w, const std::function<ImVec2(Vec2)> &toScreen, ImU32 col) {
+  const int n = 8; // segments per cell
+  for (int r = 0; r < w.meshRows; ++r) {
+    float v = float(r) / float(w.meshRows - 1);
+    int steps = (w.meshCols - 1) * n;
+    for (int k = 0; k < steps; ++k)
+      dl->AddLine(toScreen(w.map(float(k) / float(steps), v)), toScreen(w.map(float(k + 1) / float(steps), v)), col, 1.2f);
+  }
+  for (int c = 0; c < w.meshCols; ++c) {
+    float u = float(c) / float(w.meshCols - 1);
+    int steps = (w.meshRows - 1) * n;
+    for (int k = 0; k < steps; ++k)
+      dl->AddLine(toScreen(w.map(u, float(k) / float(steps))), toScreen(w.map(u, float(k + 1) / float(steps))), col, 1.2f);
+  }
+}
+
 bool Workspace::editMask(Mask &m, int &point, const std::function<ImVec2(Vec2)> &toScreen, Vec2 mouse,
                          float ppu, ImDrawList *dl, ImU32 col, int base) {
   ImGuiIO &io = ImGui::GetIO();
@@ -423,15 +440,8 @@ void Workspace::drawCanvasOverlay(App &app, ImDrawList *dl, ImVec2 origin, float
     }
     case Tool::Mesh: {
       Warp &w = slice.warp;
-      // Grid lines through the control points.
-      for (int r = 0; r < w.meshRows; ++r)
-        for (int c = 0; c + 1 < w.meshCols; ++c)
-          dl->AddLine(toScreen(transformedWarp(*sel, slice).meshPointDest(c, r)),
-                      toScreen(transformedWarp(*sel, slice).meshPointDest(c + 1, r)), IM_COL32(255, 196, 0, 90));
-      for (int c = 0; c < w.meshCols; ++c)
-        for (int r = 0; r + 1 < w.meshRows; ++r)
-          dl->AddLine(toScreen(transformedWarp(*sel, slice).meshPointDest(c, r)),
-                      toScreen(transformedWarp(*sel, slice).meshPointDest(c, r + 1)), IM_COL32(255, 196, 0, 90));
+      // Grid lines through the control points, along the warp's curves.
+      drawMeshGrid(dl, transformedWarp(*sel, slice), toScreen, IM_COL32(255, 196, 0, 150));
       for (int r = 0; r < w.meshRows; ++r)
         for (int c = 0; c < w.meshCols; ++c)
           handle(dl, toScreen(tw.meshPointDest(c, r)), IM_COL32(255, 196, 0, 255),
@@ -638,6 +648,7 @@ void Workspace::drawOutputOverlay(App &app, ImDrawList *dl, ImVec2 origin, ImVec
   }
 
   if (tool == Tool::Mesh) {
+    drawMeshGrid(dl, w, toScreen, IM_COL32(90, 160, 255, 170));
     for (int r = 0; r < w.meshRows; ++r)
       for (int c = 0; c < w.meshCols; ++c)
         handle(dl, toScreen(w.meshPointDest(c, r)), IM_COL32(90, 160, 255, 255),

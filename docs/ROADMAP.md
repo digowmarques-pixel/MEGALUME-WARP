@@ -95,6 +95,15 @@ Ordem pensada para **videomapping** e **instalações interativas**.
 - *Seek* preciso de vídeo e áudio (também por OSC: `/lumen/layer/<l>/time`)
 - Testes de integração no CI (`scripts/test-integration.sh`)
 
+## ✅ v0.10.11
+- **Painéis móveis**: arraste qualquer painel (Biblioteca, Workspace, Dashboard, Timeline,
+  Propriedades) pela aba para cima, para baixo ou para os lados; o layout fica salvo
+  (*Janela → Restaurar layout dos painéis* volta ao original)
+- **Vários dashboards** (boards do Millumin): seletor no Dashboard com +, − e nome; cada
+  coluna pertence a um; GO / auto-GO andam dentro do dashboard da coluna no ar
+- Linhas da malha (warping) desenhadas nas saídas e nas layers
+- Projeto novo começa só com o Test card na biblioteca
+
 ## ✅ v0.10.10
 - **Som com velocidade ≠ 1**: o áudio acompanha de 0,25x a 4x (como fita: o tom muda) e
   continua comandando a imagem; antes ficava mudo
