@@ -95,6 +95,17 @@ Ordem pensada para **videomapping** e **instalações interativas**.
 - *Seek* preciso de vídeo e áudio (também por OSC: `/lumen/layer/<l>/time`)
 - Testes de integração no CI (`scripts/test-integration.sh`)
 
+## ✅ v0.10.9
+- **Monitores virtuais**: saídas sem tela aparecem juntas numa janela do Lumen em vez de
+  abrir uma janela cada (*Saídas → Saídas sem tela em monitores virtuais*)
+- Máscaras: botão **Adicionar pontos** — desligado, clicar não cria ponto por acidente
+- Velocidade da célula mudada com o vídeo tocando vale na hora
+
+## ✅ v0.10.8
+- Editor de fatias, forma livre: mover um canto corta a imagem nessa forma também no
+  canvas (sem esticar), como no Millumin; a malha de entrada de 4 cantos é em perspectiva
+- Janelas só se movem pela barra de título (clicar perto de uma alça não arrasta a janela)
+
 ## ✅ v0.10.7
 - As seções das propriedades da layer começam fechadas
 

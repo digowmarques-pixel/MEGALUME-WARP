@@ -39,6 +39,7 @@ struct LayerState {
   TransitionType type = TransitionType::Crossfade;
   int columnId = -1;       // column the current content came from
   EndMode endMode = EndMode::Loop;
+  float cellSpeed = -1;    // the cell's speed last applied (a change in the cell applies at once)
   bool manual = false;     // transition progress follows the transition fader
   bool composed = false;   // shader transition or crossfade: currentTex holds both contents
   std::string transitionShader;

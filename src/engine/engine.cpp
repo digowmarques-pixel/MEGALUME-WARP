@@ -205,6 +205,7 @@ void Engine::startTransition(int layerId, const Cell *cell, float duration, int 
     // Same media continues in the next cue: keep it running (no restart, no fade).
     st.current->loop = cell->loop;
     st.current->speed = cell->speed;
+    st.cellSpeed = cell->speed;
     st.columnId = columnId;
     st.endMode = cell->endMode;
     st.endHandled = false; // the new cue's end mode applies (even if it already ended)
@@ -228,6 +229,7 @@ void Engine::startTransition(int layerId, const Cell *cell, float duration, int 
   st.fadingOut = !media;
   st.columnId = media ? columnId : -1;
   st.endMode = cell ? cell->endMode : EndMode::Loop;
+  st.cellSpeed = cell ? cell->speed : -1;
   st.endHandled = false;
 }
 
@@ -1003,6 +1005,10 @@ void Engine::update(double dt) {
           if (d > 0 && pb.time() >= d) pb.seek(std::fmod(pb.time(), d));
         }
         pb.loop = cell->second.loop;
+        if (cell->second.speed != st.cellSpeed) { // edited in the cell: the playing media follows
+          pb.speed = cell->second.speed;            // (OSC /speed still changes only the playback)
+          st.cellSpeed = cell->second.speed;
+        }
         if (st.endMode != cell->second.endMode) {
           st.endMode = cell->second.endMode;
           st.endHandled = false;

@@ -111,6 +111,8 @@ bool Workspace::editMask(Mask &m, int &point, const std::function<ImVec2(Vec2)> 
       dragging_ = true;
       dragKind_ = base + 1;
       dragLast_ = mouse;
+    } else if (!maskAddPoints && n >= 3) {
+      point = -1; // "Adicionar pontos" off: a click away from the points only deselects
     } else {
       // Insert on the closest edge if the click is near one, else append.
       int at = int(n);
@@ -468,7 +470,7 @@ void Workspace::drawCanvasOverlay(App &app, ImDrawList *dl, ImVec2 origin, float
     }
     case Tool::Mask: {
       if (app.sel.mask < 0 || app.sel.mask >= int(sel->masks.size())) {
-        if (clicked) { // first click creates a mask
+        if (clicked && maskAddPoints) { // first click creates a mask
           Mask m;
           m.name = T("Máscara ") + std::to_string(sel->masks.size() + 1);
           sel->masks.push_back(m);
@@ -618,7 +620,7 @@ void Workspace::drawOutputOverlay(App &app, ImDrawList *dl, ImVec2 origin, ImVec
 
   if (tool == Tool::Mask) {
     if (app.sel.outMask < 0 || app.sel.outMask >= int(o->masks.size())) {
-      if (!clicked) return;
+      if (!clicked || !maskAddPoints) return;
       Mask m;
       m.name = T("Máscara ") + std::to_string(o->masks.size() + 1);
       m.subtract = true;
@@ -630,7 +632,8 @@ void Workspace::drawOutputOverlay(App &app, ImDrawList *dl, ImVec2 origin, ImVec
     if (editMask(m, app.sel.outMaskPoint, toScreen, mn, std::max(1.0f, size.x), dl, IM_COL32(255, 120, 120, 255), 30))
       app.edited();
     dl->AddText({origin.x + 8, origin.y + 8}, IM_COL32(255, 255, 255, 220),
-                T("Máscara da saída: clique adiciona ponto, arraste move, botão direito apaga, Alt+clique faz curva."));
+                maskAddPoints ? T("Máscara da saída: clique adiciona ponto, arraste move, botão direito apaga, Alt+clique faz curva.")
+                              : T("Máscara da saída: arraste os pontos; ligue \"Adicionar pontos\" para criar novos."));
     return;
   }
 

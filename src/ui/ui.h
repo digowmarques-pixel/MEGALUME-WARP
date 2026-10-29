@@ -7,6 +7,8 @@
 #include "ui/i18n.h"
 
 #include <functional>
+#include <map>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -26,6 +28,10 @@ public:
   void draw(App &app, ImVec2 size);
   Tool tool = Tool::Select;
   bool showLed = false; // LED mapping tools shown (Janela > LED mapping)
+  // Masks: a click adds a point only when this is on (button in the Masks
+  // section); off, clicks select and drag points. A mask with fewer than 3
+  // points always takes new ones (it has no shape yet).
+  static inline bool maskAddPoints = false;
   int viewOutputId = -1; // -1: canvas view, otherwise preview of that output
   int viewCanvas = 0;    // canvas shown when viewOutputId < 0
   bool fitRequested = false;
@@ -98,6 +104,8 @@ private:
   void openInputMesh(int layerId, int slice, int outputId);
   void inputMeshWindow(App &app);
   void sliceEditorWindow(App &app);
+  void virtualMonitorsWindow(App &app);
+  std::map<int, std::unique_ptr<Framebuffer>> virtualFbs_; // by output id
   int sliceEditorLayer_ = -1; // layer whose slice editor is open
   struct InputMeshEdit { bool open = false; int layerId = -1, slice = 0, outputId = -1, point = -1; } inputMesh_;
   void maskList(App &app, std::vector<Mask> &masks, int &sel, int &selPoint, Vec2 unit, Vec2 area,

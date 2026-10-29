@@ -182,10 +182,11 @@ void Ui::outputsWindow(App &app) {
         // Display chooser.
         ImGui::SetCursorScreenPos({a.x + 12, a.y + cardH - 40});
         ImGui::SetNextItemWidth(cardW - 24);
-        std::string cur = o.monitor < 0 ? T("(janela)") : T("Tela ") + std::to_string(o.monitor + 1);
+        const char *noDisplay = app.outputs.virtualMonitors ? T("(monitor virtual)") : T("(janela)");
+        std::string cur = o.monitor < 0 ? noDisplay : T("Tela ") + std::to_string(o.monitor + 1);
         if (o.monitor >= 0 && o.monitor < int(mons.size())) cur += " · " + mons[size_t(o.monitor)].name;
         if (ImGui::BeginCombo("##disp", cur.c_str())) {
-          if (ImGui::Selectable(T("(janela)"), o.monitor < 0)) { o.monitor = -1; app.edited(); }
+          if (ImGui::Selectable(noDisplay, o.monitor < 0)) { o.monitor = -1; app.edited(); }
           for (size_t i = 0; i < mons.size(); ++i) {
             char label[200];
             std::snprintf(label, sizeof(label), T("Tela %zu · %s (%d×%d)"), i + 1, mons[i].name.c_str(), mons[i].w, mons[i].h);

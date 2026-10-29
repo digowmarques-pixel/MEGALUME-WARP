@@ -379,6 +379,22 @@ static void testBlendLayout() {
   b = computeBlendLayout(g);
   CHECK(b.canvasW == 3 * 1920 - 500 && b.projectors[1].srcX == 1720 && b.projectors[2].srcX == 1720 + 1620);
   CHECK(std::fabs(b.projectors[1].left * 1920 - 200) < 0.01f && std::fabs(b.projectors[1].right * 1920 - 300) < 0.01f);
+  {
+    // A slice cut as a free quad (slice editor): the canvas corners follow the media
+    // corners by the same mapping, so the picture lands without bending.
+    Warp w;
+    w.resetMesh(2, 2);
+    w.uvMesh = {{0, 0}, {0.7f, 0.3f}, {0, 1}, {1, 1}}; // row-major: TL TR BL BR
+    auto A = [](Vec2 uv) { return Vec2{uv.x * 1280, uv.y * 720}; };
+    w.corners = {A(w.uvMesh[0]), A(w.uvMesh[1]), A(w.uvMesh[3]), A(w.uvMesh[2])};
+    float worst = 0;
+    for (float s = 0; s <= 1.001f; s += 0.125f)
+      for (float t = 0; t <= 1.001f; t += 0.125f) {
+        Vec2 a = w.map(s, t), b = A(w.uvMap(s, t));
+        worst = std::max(worst, std::hypot(a.x - b.x, a.y - b.y));
+      }
+    CHECK(worst < 0.05f);
+  }
   // Outer soft edges (the border of the whole picture), saved with the project.
   g.edgeLeft = 192; g.edgeRight = 96; g.edgeTop = 108; g.edgeBottom = 0;
   b = computeBlendLayout(g);

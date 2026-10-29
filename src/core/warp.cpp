@@ -114,6 +114,18 @@ Vec2 Warp::meshInterp(float u, float v) const { return gridInterp(mesh, meshCols
 
 Vec2 Warp::uvMap(float u, float v) const {
   if (uvMesh.size() != size_t(meshCols * meshRows)) return {u, v};
+  if (meshCols == 2 && meshRows == 2) {
+    // Four corners: perspective, like the output side. A part of the media cut as a
+    // free quad (slice editor) then lands on the canvas without bending, and a
+    // facade taken in perspective comes out straight.
+    std::array<Vec2, 4> q{uvMesh[0], uvMesh[1], uvMesh[3], uvMesh[2]}; // TL TR BR BL
+    Mat3 h = Mat3::squareToQuad(q);
+    bool valid = true;
+    const float sq[4][2] = {{0, 0}, {1, 0}, {1, 1}, {0, 1}};
+    for (auto &c : sq)
+      if (h.m[6] * c[0] + h.m[7] * c[1] + h.m[8] < 0.02f) valid = false;
+    if (valid) return h.apply({std::clamp(u, 0.f, 1.f), std::clamp(v, 0.f, 1.f)});
+  }
   return gridInterp(uvMesh, meshCols, meshRows, u, v);
 }
 

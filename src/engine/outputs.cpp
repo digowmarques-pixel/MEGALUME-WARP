@@ -361,7 +361,7 @@ void OutputManager::sync(Project &p) {
   // Close windows whose output was removed or disabled.
   for (auto it = windows_.begin(); it != windows_.end();) {
     OutputConfig *o = p.output((*it)->outputId);
-    if (!o || !o->enabled || o->windowless) {
+    if (!o || !o->enabled || o->windowless || (virtualMonitors && !onDisplay(*o, mons))) {
       destroy(**it);
       it = windows_.erase(it);
     } else {
@@ -371,6 +371,7 @@ void OutputManager::sync(Project &p) {
 
   for (auto &o : p.outputs) {
     if (!o.enabled || o.windowless) continue;
+    if (virtualMonitors && !onDisplay(o, mons)) continue; // shown in the virtual monitors
     auto it = std::find_if(windows_.begin(), windows_.end(),
                            [&](auto &w) { return w->outputId == o.id; });
     Window *w = it == windows_.end() ? nullptr : it->get();

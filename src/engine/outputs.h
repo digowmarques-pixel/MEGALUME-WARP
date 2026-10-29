@@ -50,6 +50,12 @@ public:
                      double time, bool blackout);
 
   static std::vector<MonitorInfo> monitors();
+  // Outputs without a display are shown inside Lumen (the "Monitores virtuais"
+  // window) instead of each opening a window of its own.
+  bool virtualMonitors = true;
+  static bool onDisplay(const OutputConfig &o, const std::vector<MonitorInfo> &mons) {
+    return o.monitor >= 0 && o.monitor < int(mons.size());
+  }
   int openCount() const { return int(windows_.size()); }
   bool windowFor(int outputId) const;
   std::vector<GLFWwindow *> handles() const;

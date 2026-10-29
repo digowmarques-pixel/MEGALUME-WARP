@@ -249,6 +249,9 @@ void Ui::setup() {
   ImGuiIO &io = ImGui::GetIO();
   // No keyboard navigation: Space must always mean GO, never "press focused button".
   io.ConfigFlags &= ~ImGuiConfigFlags_NavEnableKeyboard;
+  // Windows move by their title bar only: a click near an editor's handle
+  // (slice editor, input mesh) must not drag the whole window.
+  io.ConfigWindowsMoveFromTitleBarOnly = true;
   io.IniFilename = nullptr; // fixed layout, nothing to persist
 
   // Prefer a proper system UI font; fall back to the built-in one.
@@ -458,6 +461,7 @@ void Ui::draw(App &app) {
     outputsWindow(app);
     inputMeshWindow(app);
     sliceEditorWindow(app);
+    virtualMonitorsWindow(app);
     panelWindows(app);
   }
   recoveryPopup(app);
@@ -487,7 +491,7 @@ void Ui::draw(App &app) {
       ImGui::BulletText("%s", T("G: malha (mesh warp)   K: máscara"));
       ImGui::BulletText("%s", T("Tab: próximo canto/ponto   Setas: ajuste fino (Shift = 10px)"));
       ImGui::BulletText("%s", T("Roda do mouse: zoom   Botão do meio / Alt+arrastar: mover a vista"));
-      ImGui::BulletText("%s", T("F: enquadrar   Máscara: clique adiciona ponto, botão direito apaga"));
+      ImGui::BulletText("%s", T("F: enquadrar   Máscara: com \"Adicionar pontos\" ligado, clique cria ponto; botão direito apaga"));
       ImGui::SeparatorText(T("Projeto"));
       ImGui::BulletText("%s", T("Ctrl+N novo, Ctrl+O abrir, Ctrl+S salvar, Ctrl+Shift+S salvar como"));
       ImGui::BulletText("%s", T("Ctrl+Z desfazer, Ctrl+Y / Ctrl+Shift+Z refazer, Ctrl+I importar"));
@@ -656,6 +660,10 @@ void Ui::menuBar(App &app) {
       ImGui::EndMenu();
     }
     ImGui::MenuItem(T("Mostrar controles na saída"), T("Ctrl+Shift+D"), &app.showOutputControls);
+    if (ImGui::MenuItem(T("Saídas sem tela em monitores virtuais"), nullptr, &app.outputs.virtualMonitors))
+      setMachineSetting("virtualMonitors", app.outputs.virtualMonitors ? 1 : 0);
+    ImGui::SetItemTooltip("%s", T("Ligado: as saídas sem tela escolhida aparecem juntas na janela \"Monitores virtuais\" "
+                                  "do Lumen. Desligado: cada uma abre uma janela própria."));
     if (ImGui::MenuItem(T("Identificar saídas"))) app.outputs.identify();
     ImGui::Separator();
     if (ImGui::MenuItem(T("Adicionar saída"), nullptr, false, edit)) {
@@ -1708,10 +1716,14 @@ void Ui::sliceEditorWindow(App &app) {
   float aspect = tex && !tex->empty() ? float(tex->width()) / float(std::max(1, tex->height())) : 16.0f / 9.0f;
   float bw = std::max(10.0f, avail.x), bh = bw / aspect;
   if (bh > avail.y) { bh = std::max(10.0f, avail.y); bw = bh * aspect; }
+  const float pad = 12; // handles sit on the border: their whole grab area is inside the item
+  bw = std::max(10.0f, bw - 2 * pad);
+  bh = std::max(10.0f, bh - 2 * pad);
   ImVec2 o = ImGui::GetCursorScreenPos();
   o.x += std::max(0.0f, (avail.x - bw) * 0.5f);
-  ImGui::SetCursorScreenPos(o);
-  ImGui::InvisibleButton("##sliceed", {bw, bh});
+  o.y += pad;
+  ImGui::SetCursorScreenPos({o.x - pad, o.y - pad});
+  ImGui::InvisibleButton("##sliceed", {bw + 2 * pad, bh + 2 * pad});
   ImDrawList *dl = ImGui::GetWindowDrawList();
   dl->AddRectFilled(o, {o.x + bw, o.y + bh}, IM_COL32(20, 20, 22, 255));
   if (tex && !tex->empty()) dl->AddImage(texId(*tex), o, {o.x + bw, o.y + bh});
@@ -1779,9 +1791,28 @@ void Ui::sliceEditorWindow(App &app) {
       dv = std::clamp(dv, -std::min(from[1], from[3]), 1 - std::max(from[1], from[3]));
       s.u0 = from[0] + du; s.v0 = from[1] + dv; s.u1 = from[2] + du; s.v1 = from[3] + dv;
     } else if (freeShape) {
-      if (drag < int(s.warp.uvMesh.size()))
-        s.warp.uvMesh[size_t(drag)] = {cl((mouse.x - s.u0) / std::max(1e-4f, s.u1 - s.u0)),
-                                       cl((mouse.y - s.v0) / std::max(1e-4f, s.v1 - s.v0))};
+      if (drag < int(s.warp.uvMesh.size())) {
+        Vec2 uv{cl((mouse.x - s.u0) / std::max(1e-4f, s.u1 - s.u0)), cl((mouse.y - s.v0) / std::max(1e-4f, s.v1 - s.v0))};
+        // Like Millumin: the slice is cut to this shape, the picture is not stretched. With
+        // only the 4 corners, the matching canvas corner moves too, by the same mapping
+        // as the other three (so the media inside keeps its proportions).
+        if (s.warp.meshCols == 2 && s.warp.meshRows == 2 && s.surfaceId < 0) {
+          static const int toCorner[4] = {0, 1, 3, 2}; // uv grid (row-major) -> corners (TL TR BR BL)
+          int k = drag, o3[3], n = 0;
+          for (int i = 0; i < 4; ++i)
+            if (i != k) o3[n++] = i;
+          Vec2 a = s.warp.uvMesh[size_t(o3[0])], b = s.warp.uvMesh[size_t(o3[1])], c = s.warp.uvMesh[size_t(o3[2])];
+          Vec2 pa = s.warp.corners[size_t(toCorner[o3[0]])], pb = s.warp.corners[size_t(toCorner[o3[1]])],
+               pc = s.warp.corners[size_t(toCorner[o3[2]])];
+          Vec2 e1 = b - a, e2 = c - a, q = uv - a;
+          float det = e1.x * e2.y - e1.y * e2.x;
+          if (std::fabs(det) > 1e-6f) {
+            float sa = (q.x * e2.y - q.y * e2.x) / det, sb = (e1.x * q.y - e1.y * q.x) / det;
+            s.warp.corners[size_t(toCorner[k])] = pa + (pb - pa) * sa + (pc - pa) * sb;
+          }
+        }
+        s.warp.uvMesh[size_t(drag)] = uv;
+      }
     } else {
       float u = cl(mouse.x), v = cl(mouse.y);
       if (drag == 0 || drag == 3 || drag == 7) s.u0 = u;
@@ -1828,6 +1859,64 @@ void Ui::sliceEditorWindow(App &app) {
   if (ImGui::Button(T("Mídia inteira"))) { s.u0 = 0; s.v0 = 0; s.u1 = 1; s.v1 = 1; s.warp.uvMesh.clear(); app.edited(); }
   ImGui::End();
   if (!open) sliceEditorLayer_ = -1;
+}
+
+// Outputs without a display (Saídas: "monitor virtual"), all in one window
+// instead of a window each. Opened with the outputs (Ctrl+P).
+void Ui::virtualMonitorsWindow(App &app) {
+  static bool loaded = false;
+  if (!loaded) {
+    app.outputs.virtualMonitors = machineSettingInt("virtualMonitors", 1) != 0;
+    loaded = true;
+  }
+  Project &p = app.engine.project;
+  auto mons = OutputManager::monitors();
+  std::vector<int> shown; // output indices
+  if (app.outputsOpen && app.outputs.virtualMonitors)
+    for (size_t i = 0; i < p.outputs.size(); ++i) {
+      const OutputConfig &o = p.outputs[i];
+      if (o.enabled && !o.windowless && !OutputManager::onDisplay(o, mons)) shown.push_back(int(i));
+    }
+  for (auto it = virtualFbs_.begin(); it != virtualFbs_.end();) { // outputs gone: free their previews
+    bool used = std::any_of(shown.begin(), shown.end(), [&](int i) { return p.outputs[size_t(i)].id == it->first; });
+    it = used ? std::next(it) : virtualFbs_.erase(it);
+  }
+  if (shown.empty()) return;
+  ImGuiViewport *vp = ImGui::GetMainViewport();
+  ImGui::SetNextWindowPos({vp->WorkPos.x + vp->WorkSize.x * 0.5f, vp->WorkPos.y + vp->WorkSize.y * 0.5f}, ImGuiCond_FirstUseEver, {0.5f, 0.5f});
+  ImGui::SetNextWindowSize({vp->WorkSize.x * 0.6f, vp->WorkSize.y * 0.45f}, ImGuiCond_FirstUseEver);
+  bool open = true;
+  if (ImGui::Begin(T("Monitores virtuais###virtualmon"), &open, ImGuiWindowFlags_NoCollapse)) {
+    // A grid that fits the window: as many columns as keep the tiles largest.
+    ImVec2 avail = ImGui::GetContentRegionAvail();
+    int n = int(shown.size()), cols = 1;
+    float best = 0;
+    for (int c = 1; c <= n; ++c) {
+      int rows = (n + c - 1) / c;
+      float tw = (avail.x - 8.0f * float(c - 1)) / float(c), th = (avail.y - 22.0f * float(rows)) / float(rows);
+      float w = std::min(tw, th * 16.0f / 9.0f);
+      if (w > best) { best = w; cols = c; }
+    }
+    int k = 0;
+    for (int idx : shown) {
+      const OutputConfig &o = p.outputs[size_t(idx)];
+      float aspect = o.srcW / std::max(1.0f, o.srcH);
+      float tw = std::max(32.0f, best), th = tw / std::max(0.1f, aspect);
+      auto &fb = virtualFbs_[o.id];
+      if (!fb) fb = std::make_unique<Framebuffer>();
+      fb->resize(std::clamp(int(tw), 16, 1920), std::clamp(int(th), 16, 1080));
+      app.outputs.renderPreview(p, o, idx, app.engine.canvasTexture(o.canvasId), *fb, app.engine.mesh, app.engine.time(),
+                                app.engine.blackout);
+      if (k % cols) ImGui::SameLine(0, 8);
+      ImGui::BeginGroup();
+      ImGui::TextDisabled("%d  %s", idx + 1, o.name.c_str());
+      ImGui::Image(ImTextureID(intptr_t(fb->texture().id())), {tw, th}, {0, 1}, {1, 0});
+      ImGui::EndGroup();
+      ++k;
+    }
+  }
+  ImGui::End();
+  if (!open) app.outputsOpen = false; // closing it closes the outputs, like Ctrl+P
 }
 
 void Ui::panelWindows(App &app) {
@@ -2023,6 +2112,17 @@ void Ui::maskList(App &app, std::vector<Mask> &masks, int &sel, int &selPoint, V
   if (ImGui::Button(" - ")) remove = sel;
   ImGui::EndDisabled();
   ImGui::SetItemTooltip("%s", T("Remover a máscara selecionada"));
+  // New points only on purpose: off, clicking near a mask never adds one by accident.
+  bool &addPts = Workspace::maskAddPoints;
+  const bool wasOn = addPts; // the click below flips it: push and pop on the same state
+  if (wasOn) pushPrimary();
+  if (ImGui::Button(wasOn ? T("+ Adicionar pontos: ligado") : T("+ Adicionar pontos: desligado"), {-1, 0})) {
+    addPts = !addPts;
+    if (addPts) workspace.tool = Tool::Mask;
+  }
+  if (wasOn) popPrimary();
+  ImGui::SetItemTooltip("%s", T("Ligado: com a ferramenta Máscara (K), cada clique no workspace cria um ponto (perto de "
+                                "uma borda, ele entra nela). Desligado: os cliques só selecionam e arrastam os pontos."));
   if (remove >= 0) {
     masks.erase(masks.begin() + remove);
     sel = -1;
@@ -3453,9 +3553,10 @@ void Ui::outputInspector(App &app) {
              "até a emenda sumir. Preto: ajuste o nível de preto."));
 
   auto mons = OutputManager::monitors();
-  std::string current = o->monitor < 0 ? T("Janela (teste)") : T("Monitor ") + std::to_string(o->monitor + 1);
+  const char *noDisplay = app.outputs.virtualMonitors ? T("Monitor virtual") : T("Janela (teste)");
+  std::string current = o->monitor < 0 ? noDisplay : T("Monitor ") + std::to_string(o->monitor + 1);
   if (ImGui::BeginCombo(T("Destino"), current.c_str())) {
-    if (ImGui::Selectable(T("Janela (teste)"), o->monitor < 0)) { o->monitor = -1; app.edited(); }
+    if (ImGui::Selectable(noDisplay, o->monitor < 0)) { o->monitor = -1; app.edited(); }
     for (size_t i = 0; i < mons.size(); ++i) {
       char label[200];
       std::snprintf(label, sizeof(label), T("Monitor %zu: %s (%dx%d)"), i + 1, mons[i].name.c_str(), mons[i].w, mons[i].h);
