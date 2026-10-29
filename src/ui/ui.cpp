@@ -22,6 +22,7 @@
 #include <cmath>
 #include <cstdio>
 #include <filesystem>
+#include <array>
 #include <map>
 
 namespace lumen {
@@ -77,6 +78,26 @@ bool inputTextMultiline(const char *label, std::string &s, ImVec2 size) {
     s = buf;
     return true;
   }
+  return false;
+}
+
+// Two numbers applied when the field is left (Enter, Tab or a click elsewhere),
+// not at each typed digit: a canvas resized per key reallocated at 1, 19, 192...
+// (ImGui's EnterReturnsTrue is not allowed on number fields: it aborts.)
+static bool inputInt2Deferred(const char *label, int v[2]) {
+  static std::map<ImGuiID, std::array<int, 2>> editing;
+  ImGuiID id = ImGui::GetID(label);
+  auto it = editing.find(id);
+  int buf[2] = {v[0], v[1]};
+  if (it != editing.end()) { buf[0] = it->second[0]; buf[1] = it->second[1]; }
+  if (ImGui::InputInt2(label, buf)) editing[id] = {buf[0], buf[1]};
+  if (ImGui::IsItemDeactivatedAfterEdit()) {
+    v[0] = buf[0];
+    v[1] = buf[1];
+    editing.erase(id);
+    return true;
+  }
+  if (!ImGui::IsItemActive()) editing.erase(id);
   return false;
 }
 
@@ -454,8 +475,9 @@ void Ui::draw(App &app) {
     if (ImGui::Begin(T("Atalhos e ajuda"), &showHelp_)) {
       ImGui::SeparatorText(T("Show"));
       ImGui::BulletText("%s", T("Espaço: GO (próxima coluna)   |   Shift+Espaço: coluna anterior"));
-      ImGui::BulletText("%s", T("Esc: parar tudo com fade   |   B: blackout"));
-      ImGui::BulletText("%s", T("Clique numa célula: dispara só aquela layer"));
+      ImGui::BulletText("%s", T("Esc: fecha menus (nunca para o show)   |   B: blackout"));
+      ImGui::BulletText("%s", T("Clique numa célula: só seleciona (não vai para o ar)"));
+      ImGui::BulletText("%s", T("Botão direito na célula: Disparar só esta célula"));
       ImGui::SeparatorText(T("Workspace / mapping"));
       ImGui::BulletText("%s", T("V: selecionar/mover   M: perspectiva (4 cantos)"));
       ImGui::BulletText("%s", T("G: malha (mesh warp)   K: máscara"));
@@ -634,7 +656,7 @@ void Ui::toolbar(App &app) {
   ImGui::SetItemTooltip("%s", T("Coluna anterior (Shift+Espaço)"));
   ImGui::SameLine();
   if (ImGui::Button(T("Parar"), {60, 30})) e.stopAll();
-  ImGui::SetItemTooltip("%s", T("Para tudo com fade (Esc)"));
+  ImGui::SetItemTooltip("%s", T("Para tudo com fade"));
   ImGui::EndDisabled();
   ImGui::SameLine();
   // Push and pop must follow the same value: the click changes e.blackout.
@@ -902,7 +924,7 @@ void Ui::dashboard(App &app) {
   ImGui::EndDisabled();
   ImGui::EndDisabled();
   ImGui::SameLine();
-  ImGui::TextDisabled("%s", T("Arraste mídias para as células. Clique numa célula para disparar."));
+  ImGui::TextDisabled("%s", T("Arraste mídias para as células. Clique seleciona; o \xe2\x96\xb6 da coluna ou Espaço põe no ar."));
   ImGui::SameLine(std::max(ImGui::GetCursorPosX() + 10, ImGui::GetWindowWidth() - 150));
   ImGui::SetNextItemWidth(130);
   ImGui::Combo("##zoom", &dashZoom_, TZ("pequeno\0médio\0grande\0"));
@@ -914,7 +936,12 @@ void Ui::dashboard(App &app) {
   int ncols = std::min(int(p.columns.size()), kMaxDashColumns);
   ImGuiTableFlags flags = ImGuiTableFlags_ScrollX | ImGuiTableFlags_ScrollY |
                           ImGuiTableFlags_BordersInner | ImGuiTableFlags_RowBg;
-  if (!ImGui::BeginTable("##dash", ncols + 2, flags)) return;
+  // Tempo panel on the right (like Millumin's Time), when there is room for it.
+  const float timeW = 260;
+  const bool withTime = ImGui::GetContentRegionAvail().x > timeW + 320;
+  if (!ImGui::BeginTable("##dash", ncols + 2, flags, {withTime ? ImGui::GetContentRegionAvail().x - timeW - 6 : 0, 0}))
+    return;
+  std::vector<TimeRow> timeRows;
   ImGui::TableSetupScrollFreeze(1, 1);
   ImGui::TableSetupColumn("##layers", ImGuiTableColumnFlags_WidthFixed, nameW);
   for (int c = 0; c < ncols; ++c)
@@ -1200,13 +1227,17 @@ void Ui::dashboard(App &app) {
   // Stop column: stops everything, and per layer below.
   ImGui::TableSetColumnIndex(ncols + 1);
   if (ImGui::Button("\xe2\x96\xa0##stopall", {32, 0})) e.stopAll(); // ■
-  ImGui::SetItemTooltip("%s", T("Parar tudo (Esc)"));
+  ImGui::SetItemTooltip("%s", T("Parar tudo"));
 
   int removeLayer = -1, moveLayer = -1, moveLayerDir = 0;
   for (size_t li = 0; li < p.layers.size(); ++li) {
     Layer &l = p.layers[li];
     ImGui::TableNextRow(0, cellH);
     ImGui::TableSetColumnIndex(0);
+    if (ImGuiTable *t = ImGui::GetCurrentTable()) { // the previous row ends where this one starts
+      if (!timeRows.empty()) timeRows.back().y2 = t->RowPosY1;
+      timeRows.push_back({l.id, t->RowPosY1, t->RowPosY1 + cellH});
+    }
     ImGui::PushID(l.id);
     bool selected = app.sel.layerId == l.id;
     if (ImGui::Checkbox("##vis", &l.visible)) app.edited();
@@ -1246,12 +1277,13 @@ void Ui::dashboard(App &app) {
       ImVec2 size{cellW - 6, cellH - 6};
       ImGui::InvisibleButton("##cell", size);
       bool hovered = ImGui::IsItemHovered();
+      // A click only selects (to edit the cell); it goes on air with the column's
+      // play, GO, or "Disparar só esta célula".
       if (ImGui::IsItemClicked(ImGuiMouseButton_Left)) {
         app.sel.cellColumn = c;
         app.sel.cellLayer = l.id;
         app.sel.layerId = l.id;
         if (m) app.sel.inspector = Inspector::Cell;
-        e.launchCell(c, l.id);
       }
       if (cell && !locked && ImGui::BeginDragDropSource()) {
         int payload[2] = {c, l.id};
@@ -1278,22 +1310,25 @@ void Ui::dashboard(App &app) {
         }
         ImGui::EndDragDropTarget();
       }
-      if (cell && !locked && ImGui::BeginPopupContextItem("##cellctx")) {
-        ImGui::TextDisabled("%s", T("No fim da mídia"));
-        for (int em = 0; em < int(EndMode::COUNT); ++em) {
-          const char *names[] = {T("Loop"), T("Congelar no último quadro"), T("Parar"),
-                                        T("Disparar a próxima coluna")};
-          if (ImGui::MenuItem(names[em], nullptr, int(cell->endMode) == em)) {
-            cell->setEndMode(EndMode(em));
+      if (cell && ImGui::BeginPopupContextItem("##cellctx")) {
+        if (ImGui::MenuItem(T("\xe2\x96\xb6 Disparar só esta célula"))) e.launchCell(c, l.id); // ▶
+        if (!locked) {
+          ImGui::SeparatorText(T("No fim da mídia"));
+          for (int em = 0; em < int(EndMode::COUNT); ++em) {
+            const char *names[] = {T("Loop"), T("Congelar no último quadro"), T("Parar"),
+                                          T("Disparar a próxima coluna")};
+            if (ImGui::MenuItem(names[em], nullptr, int(cell->endMode) == em)) {
+              cell->setEndMode(EndMode(em));
+              app.edited();
+            }
+          }
+          ImGui::Separator();
+          if (ImGui::MenuItem(T("Limpar célula"))) {
+            col.cells.erase(l.id);
+            cell = nullptr;
+            m = nullptr;
             app.edited();
           }
-        }
-        ImGui::Separator();
-        if (ImGui::MenuItem(T("Limpar célula"))) {
-          col.cells.erase(l.id);
-          cell = nullptr;
-          m = nullptr;
-          app.edited();
         }
         ImGui::EndPopup();
       }
@@ -1328,8 +1363,11 @@ void Ui::dashboard(App &app) {
           float t = float(std::fmod(st->current->time(), dur) / dur);
           dl->AddRectFilled({pos.x + 3, br.y - 3}, {pos.x + 3 + (size.x - 6) * t, br.y - 1}, kPlayingU32);
         }
-      } else if (app.sel.cellColumn == c && app.sel.cellLayer == l.id) {
-        dl->AddRect(pos, br, IM_COL32(235, 235, 235, 200), 7, 0, 1.5f);
+      }
+      // Selected: white, inside the on-air frame when the cell is also playing.
+      if (app.sel.cellColumn == c && app.sel.cellLayer == l.id) {
+        float in = playing ? 4.0f : 0.0f;
+        dl->AddRect({pos.x + in, pos.y + in}, {br.x - in, br.y - in}, IM_COL32(245, 245, 245, 235), 7 - in * 0.5f, 0, 2.0f);
       }
       ImGui::PopID();
     }
@@ -1340,7 +1378,20 @@ void Ui::dashboard(App &app) {
     }
     ImGui::PopID();
   }
+  float bodyTop = 0, bodyBottom = 0;
+  ImGuiWindow *tableWindow = nullptr;
+  if (ImGuiTable *t = ImGui::GetCurrentTable()) {
+    if (!timeRows.empty()) timeRows.back().y2 = std::max(t->RowPosY2, timeRows.back().y1 + cellH);
+    bodyTop = t->BgClipRect.Min.y; // below the frozen header row
+    bodyBottom = t->BgClipRect.Max.y;
+    tableWindow = t->InnerWindow;
+  }
   ImGui::EndTable();
+  if (withTime) {
+    float h = ImGui::GetItemRectSize().y;
+    ImGui::SameLine(0, 6);
+    timePanel(app, timeRows, bodyTop, bodyBottom, h, tableWindow, cellH);
+  }
 
   if (removeColumn >= 0) {
     p.columns.erase(p.columns.begin() + removeColumn);
@@ -1359,6 +1410,114 @@ void Ui::dashboard(App &app) {
     std::swap(p.layers[size_t(moveLayer)], p.layers[size_t(moveLayer + moveLayerDir)]);
     app.edited();
   }
+}
+
+static std::string clockText(double s, bool negative) {
+  long long n = (long long)(negative ? std::ceil(s - 1e-6) : std::floor(s));
+  n = std::max(0LL, n);
+  char b[32];
+  if (n >= 3600) std::snprintf(b, sizeof(b), "%s%lld:%02lld:%02lld", negative ? "-" : "", n / 3600, n / 60 % 60, n % 60);
+  else std::snprintf(b, sizeof(b), "%s%02lld:%02lld", negative ? "-" : "", n / 60, n % 60);
+  return b;
+}
+
+void Ui::timePanel(App &app, const std::vector<TimeRow> &rows, float bodyTop, float bodyBottom, float height,
+                   ImGuiWindow *tableWindow, float rowStep) {
+  Engine &e = app.engine;
+  Project &p = e.project;
+  ImGui::BeginChild("##time", {ImGui::GetContentRegionAvail().x, height}, ImGuiChildFlags_Borders,
+                    ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+  ImDrawList *dl = ImGui::GetWindowDrawList();
+  ImVec2 wmin = ImGui::GetWindowPos();
+  float wmax = wmin.x + ImGui::GetWindowWidth();
+  // Header: title and what the clocks show (also a click on any clock).
+  ImGui::TextUnformatted(T("Tempo"));
+  ImGui::SameLine();
+  const char *counters[] = {T("sem contador##tm"), T("decorrido##tm"), T("restante##tm")};
+  if (ImGui::SmallButton(counters[std::clamp(timeCounter_, 0, 2)])) ImGui::OpenPopup("##counter");
+  ImGui::SetItemTooltip("%s", T("Mostrar o tempo que falta ou o que já passou (clique num relógio também troca)"));
+  if (ImGui::BeginPopup("##counter")) {
+    for (int i = 0; i < 3; ++i)
+      if (ImGui::RadioButton(counters[i], timeCounter_ == i)) { timeCounter_ = i; ImGui::CloseCurrentPopup(); }
+    ImGui::EndPopup();
+  }
+  // The wheel scrolls the dashboard rows, which these follow.
+  if (tableWindow && ImGui::IsWindowHovered() && ImGui::GetIO().MouseWheel != 0)
+    ImGui::SetScrollY(tableWindow, tableWindow->Scroll.y - ImGui::GetIO().MouseWheel * rowStep);
+
+  if (bodyBottom > bodyTop) ImGui::PushClipRect({wmin.x, bodyTop}, {wmax, bodyBottom}, true);
+  for (const TimeRow &r : rows) {
+    if (r.y2 < bodyTop || r.y1 > bodyBottom) continue;
+    const LayerState *st = e.layerState(r.layerId);
+    if (!st || !st->current || st->fadingOut) continue;
+    Playback &pb = *st->current;
+    const MediaItem *m = p.media(pb.mediaId());
+    ImGui::PushID(r.layerId);
+    float h = r.y2 - r.y1, x0 = wmin.x + 6, x1 = wmax - 6;
+    bool live = !pb.seekable();
+    double dur = pb.duration(), t = pb.time();
+    double pos = dur > 0 ? (pb.loop ? std::fmod(t, dur) : std::min(t, dur)) : t;
+    double left = dur > 0 ? (dur - pos) / std::max(0.01, double(pb.speed)) : -1;
+    // Pause / play (not for live inputs).
+    const float bs = 26;
+    float by = r.y1 + (h - bs) * 0.5f;
+    if (!live) {
+      ImGui::SetCursorScreenPos({x1 - bs, by});
+      if (ImGui::InvisibleButton("##pause", {bs, bs})) e.pauseLayer(r.layerId, !pb.paused);
+      bool hov = ImGui::IsItemHovered();
+      ImGui::SetItemTooltip("%s", pb.paused ? T("Continuar") : T("Pausar"));
+      ImVec2 a{x1 - bs, by}, b{x1, by + bs};
+      dl->AddRectFilled(a, b, hov ? IM_COL32(70, 70, 75, 255) : IM_COL32(48, 48, 52, 255), 5);
+      ImU32 ic = pb.paused ? kAccentU32 : IM_COL32(235, 235, 235, 255);
+      if (pb.paused) { // ▶
+        dl->AddTriangleFilled({a.x + 9, a.y + 7}, {a.x + 9, b.y - 7}, {b.x - 7, a.y + bs * 0.5f}, ic);
+      } else { // ⏸
+        dl->AddRectFilled({a.x + 8, a.y + 7}, {a.x + 11.5f, b.y - 7}, ic);
+        dl->AddRectFilled({b.x - 11.5f, a.y + 7}, {b.x - 8, b.y - 7}, ic);
+      }
+    }
+    // Clock: time left (or elapsed); orange in the last 10 s, grey when paused.
+    const float cw = timeCounter_ == 0 ? 0.0f : 84.0f, ch = std::min(30.0f, h - 8);
+    float cx = x1 - bs - 6 - cw, cy = r.y1 + (h - ch) * 0.5f;
+    std::string txt = live ? T("ao vivo") : (timeCounter_ == 2 && left >= 0 ? clockText(left, true) : clockText(pos, false));
+    ImU32 bg = kAccentU32, fg = IM_COL32(0, 0, 0, 255);
+    if (live) { bg = IM_COL32(48, 48, 52, 255); fg = IM_COL32(200, 200, 200, 255); }
+    else if (pb.paused) { bg = IM_COL32(70, 70, 75, 255); fg = IM_COL32(255, 255, 255, 255); }
+    else if (left >= 0 && left < 10 && !pb.loop) bg = IM_COL32(240, 100, 30, 255);
+    if (cw > 0) {
+      dl->AddRectFilled({cx, cy}, {cx + cw, cy + ch}, bg, 5);
+      ImFont *f = bigFont_ ? bigFont_ : ImGui::GetFont();
+      float fs = bigFont_ ? bigFont_->FontSize : ImGui::GetFontSize();
+      ImVec2 ts = f->CalcTextSizeA(fs, FLT_MAX, 0, txt.c_str());
+      dl->AddText(f, fs, {cx + (cw - ts.x) * 0.5f, cy + (ch - ts.y) * 0.5f}, fg, txt.c_str());
+      if (!live) {
+        ImGui::SetCursorScreenPos({cx, cy});
+        if (ImGui::InvisibleButton("##clock", {cw, ch})) timeCounter_ = timeCounter_ == 2 ? 1 : 2;
+        if (ImGui::IsItemHovered() && dur > 0)
+          ImGui::SetTooltip(T("%s de %s  (clique: restante / decorrido)"), clockText(pos, false).c_str(), clockText(dur, false).c_str());
+      }
+    }
+    // Thumbnail, name and progress.
+    float th = std::min(h - 12, 40.0f), tw = th * 16.0f / 9.0f, ty = r.y1 + (h - th) * 0.5f;
+    if (m) {
+      const Texture *thumb = e.cache.thumbnail(*m, e.generators, e.mesh);
+      if (thumb && !thumb->empty()) dl->AddImageRounded(texId(*thumb), {x0, ty}, {x0 + tw, ty + th}, {0, 0}, {1, 1}, IM_COL32_WHITE, 3);
+    }
+    float nx = x0 + tw + 6, nw = cx - 6 - nx;
+    if (nw > 10) {
+      dl->PushClipRect({nx, r.y1}, {nx + nw, r.y2}, true);
+      dl->AddText({nx, ty}, IM_COL32(225, 225, 225, 255), m ? m->name.c_str() : "");
+      dl->PopClipRect();
+      if (dur > 0) {
+        float yb = ty + th - 4, f01 = float(std::clamp(pos / dur, 0.0, 1.0));
+        dl->AddRectFilled({nx, yb}, {nx + nw, yb + 3}, IM_COL32(60, 60, 64, 255), 1);
+        dl->AddRectFilled({nx, yb}, {nx + nw * f01, yb + 3}, pb.paused ? IM_COL32(150, 150, 150, 255) : kPlayingU32, 1);
+      }
+    }
+    ImGui::PopID();
+  }
+  if (bodyBottom > bodyTop) ImGui::PopClipRect();
+  ImGui::EndChild();
 }
 
 void Ui::inspector(App &app) {
@@ -2571,7 +2730,7 @@ void Ui::cellInspector(App &app) {
                "sozinho quando o vídeo acaba (auto-follow), bom para instalações."));
   }
   if (ImGui::DragFloat(T("Velocidade"), &cell.speed, 0.01f, 0, 8, T("%.2fx"))) app.edited();
-  if (ImGui::Button(T("Disparar"))) app.engine.launchCell(c, l->id);
+  if (ImGui::Button(T("\xe2\x96\xb6 Disparar só esta célula"))) app.engine.launchCell(c, l->id); // ▶
   ImGui::SameLine();
   if (ImGui::Button(T("Parar layer"))) app.engine.stopLayer(l->id);
   ImGui::SameLine();
@@ -3390,7 +3549,7 @@ void Ui::interactionInspector(App &app) {
   if (ImGui::Checkbox(T("Teclas como entrada (/key/<tecla>)"), &p.keyboardInput)) app.edited();
   helpMarker(T("Cada tecla vira /key/a, /key/1, /key/f1, /key/left... com valor 1 ao apertar e 0 ao "
              "soltar, também com as janelas de saída em foco. Use num mapeamento: ex. a tecla A "
-             "dispara a coluna 3. Espaço, Esc e B continuam com as funções do programa."));
+             "dispara a coluna 3. Espaço e B continuam com as funções do programa."));
 
   ImGui::SeparatorText(T("DMX de entrada (mesa de luz)"));
   {
@@ -3796,13 +3955,13 @@ void Ui::projectInspector(App &app) {
   ImGui::SeparatorText(T("Canvas principal"));
   if (inputText(T("Nome##cv0"), p.canvasName)) app.edited();
   int size[2] = {p.canvasW, p.canvasH};
-  if (ImGui::InputInt2(T("Resolução"), size, ImGuiInputTextFlags_EnterReturnsTrue)) {
+  if (inputInt2Deferred(T("Resolução"), size)) {
     p.canvasW = std::clamp(size[0], 16, 16384);
     p.canvasH = std::clamp(size[1], 16, 16384);
     app.edited();
   }
   helpMarker(T("Espaço de trabalho onde as layers são compostas. As saídas recortam regiões dele. "
-             "Pressione Enter para aplicar."));
+             "Aplica ao sair do campo (Enter)."));
   const char *presets[] = {"1280×720", "1920×1080", "2560×1440", T("3840×1080 (2 proj.)"), "3840×2160"};
   const int pw[] = {1280, 1920, 2560, 3840, 3840}, ph[] = {720, 1080, 1440, 1080, 2160};
   for (int i = 0; i < 5; ++i) {
@@ -3827,7 +3986,7 @@ void Ui::projectInspector(App &app) {
     ImGui::SameLine();
     int sz[2] = {c.width, c.height};
     ImGui::SetNextItemWidth(130);
-    if (ImGui::InputInt2("##size", sz, ImGuiInputTextFlags_EnterReturnsTrue)) {
+    if (inputInt2Deferred("##size", sz)) {
       c.width = std::clamp(sz[0], 16, 16384);
       c.height = std::clamp(sz[1], 16, 16384);
       app.edited();

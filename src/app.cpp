@@ -626,12 +626,10 @@ int App::run(const Options &opts) {
         status(showLocked ? T("Modo show: edição travada (Ctrl+Shift+L destrava)") : T("Edição liberada"));
       }
       if (!ctrl && ImGui::IsKeyPressed(ImGuiKey_Space, false)) shift ? engine.back() : engine.go();
-      // Esc closes an open menu (ImGui does it only with keyboard navigation
-      // on), and then it must not also stop the show.
-      if (!ctrl && ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
-        if (popupWasOpen_) ImGui::ClosePopupsExceptModals();
-        else engine.stopAll();
-      }
+      // Esc only closes an open menu (ImGui does it only with keyboard
+      // navigation on). It never stops the show: a key pressed to leave a menu
+      // or a field must not take the media off the air.
+      if (!ctrl && ImGui::IsKeyPressed(ImGuiKey_Escape, false) && popupWasOpen_) ImGui::ClosePopupsExceptModals();
       if (!ctrl && ImGui::IsKeyPressed(ImGuiKey_B, false)) engine.blackout = !engine.blackout;
       if (ctrl && ImGui::IsKeyPressed(ImGuiKey_S, false)) saveProject(shift);
       if (!showLocked && ctrl && ImGui::IsKeyPressed(ImGuiKey_O, false)) unlessUnsaved([this] { openDialog(); });

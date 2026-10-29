@@ -98,6 +98,10 @@ public:
   void back(); // previous column
   void launchCell(int columnIndex, int layerId);
   void stopLayer(int layerId, float fade = -1);
+  // Pause: the media on air in the layer holds its picture and sound (not for
+  // live inputs). Launching a cell plays again from the start.
+  void pauseLayer(int layerId, bool paused);
+  bool layerPaused(int layerId) const;
   void stopAll(float fade = -1);
   int activeColumn() const { return activeColumn_; }
   const LayerState *layerState(int layerId) const;

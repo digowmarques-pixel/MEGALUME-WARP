@@ -131,6 +131,7 @@ public:
   std::string hwaccel() const { return decoder_ ? decoder_->hwaccel() : std::string(); }
   float speed = 1;
   bool loop = true;
+  bool paused = false; // holds picture and sound where they are (files and generated media)
 
 private:
   int mediaId_;

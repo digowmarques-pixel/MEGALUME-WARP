@@ -205,6 +205,13 @@ bool Engine::setLayerProperty(Layer &l, const std::vector<std::string> &propIn, 
     }
     return true;
   }
+  // pause [1|0], play (resume), togglepause (Millumin: /layer:X/media/pause).
+  if (p0 == "pause" && prop.size() == 1) { pauseLayer(l.id, !hasArg || a0 > 0.5f); return true; }
+  if ((p0 == "play" || p0 == "resume") && prop.size() == 1) { pauseLayer(l.id, false); return true; }
+  if (p0 == "togglepause" && prop.size() == 1) { // a button's release (0) does not toggle back
+    if (!hasArg || a0 > 0.5f) pauseLayer(l.id, !layerPaused(l.id));
+    return true;
+  }
   if (p0 == "stop" || p0 == "stopmedia") { stopLayer(l.id, p0 == "stop" && hasArg ? a0 : -1); return true; }
   if (p0 == "restart") {
     auto it = states_.find(l.id);

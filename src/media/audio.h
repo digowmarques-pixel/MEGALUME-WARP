@@ -48,6 +48,9 @@ public:
   std::atomic<bool> active{true}; // false: consumes nothing, outputs nothing
   std::atomic<bool> bypassMaster{false}; // timecode: never scaled or cut by the master volume
   std::atomic<bool> retiring{false}, retired{false}; // removed: fades out, then dropped
+  // Paused: fades out over one buffer, then consumes nothing (the played clock
+  // stops) until released, when it fades back in from the same sample.
+  std::atomic<bool> hold{false};
   double playedSeconds() const { return double(played_.load()) / kAudioRate; }
   float peak() const { return peak_.load(); }
   bool starving() const { return starving_.load(); }

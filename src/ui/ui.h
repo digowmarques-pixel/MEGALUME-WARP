@@ -12,6 +12,8 @@
 
 #include <imgui.h>
 
+struct ImGuiWindow;
+
 namespace lumen {
 
 class App;
@@ -116,6 +118,11 @@ private:
   bool tlDragFlag_ = false;
   float tlDragMin_ = 0, tlDragMax_ = 1;
   int dashZoom_ = 1;      // 0 small, 1 medium, 2 large cells
+  int timeCounter_ = 2; // Tempo panel clocks: 0 none, 1 elapsed, 2 remaining (like Millumin)
+  // Tempo panel beside the dashboard: one row per layer, at the screen rows of the table.
+  struct TimeRow { int layerId; float y1, y2; };
+  void timePanel(App &app, const std::vector<TimeRow> &rows, float bodyTop, float bodyBottom, float height,
+                 ImGuiWindow *tableWindow, float rowStep);
   bool showDemo_ = false;
   bool showHelp_ = false;
   char filterText_[128] = "";

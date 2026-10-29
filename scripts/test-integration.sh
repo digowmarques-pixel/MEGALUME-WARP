@@ -162,6 +162,22 @@ time.sleep(0.6)
 u3 = [p for p in pk if p[:8] == b"Art-Net\0" and struct.unpack("<H", p[14:16])[0] == 3 and len(p) >= 518]
 both = [p for p in u3 if p[517] == 255 and p[18] == 255]
 check("comando dmx + fita LED no mesmo universo: os dois juntos, reenviados", len(both) >= 10, (len(u3), len(both)))
+# Pause by OSC for 2 s, then play: the clip time stops and the sound paces the picture again.
+def pause_later():
+    pad = lambda b: b + b"\0" * (4 - len(b) % 4)
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    time.sleep(2.5)
+    sock.sendto(pad(b"/lumen/layer/1/pause") + pad(b","), ("127.0.0.1", 18351))
+    time.sleep(2)
+    sock.sendto(pad(b"/lumen/layer/1/play") + pad(b","), ("127.0.0.1", 18351))
+threading.Thread(target=pause_later, daemon=True).start()
+out = run({"format": "lumen", "version": 1, "canvas": {"width": 320, "height": 180}, "osc": {"enabled": True, "port": 18351},
+           "library": [lib_av], "layers": [{"id": 1, "name": "L1"}], "columns": [{"id": 5, "name": "A", "transition": 0,
+           "cells": [{"layer": 1, "media": 1, "loop": True, "speed": 1}]}]},
+          ["--launch", "1", "--quit-after", "7"], "pause")
+t = [float(l.split("t=")[1].split()[0]) for l in out.splitlines() if "layer L1: t=" in l]
+check("pausa de 2 s: o tempo do clipe parou e voltou", bool(t) and 3.0 < t[0] < 5.6, t)
+check("pausa: o som volta a comandar a imagem", "(paces)" in out)
 sys.exit(0 if ok else 1)
 EOF2
 python3 review.py "$LUMEN" "$WORK" || fail=1

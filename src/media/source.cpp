@@ -414,6 +414,11 @@ void Playback::watchAudio(double dt) {
       audioOff_ = AudioOff::Speed;
       return;
     }
+    if (paused) { // held on purpose: the clock stops, which is not a stalled card
+      lastPlayed_ = -1;
+      stallFor_ = 0;
+      return;
+    }
     if (audioDecoder_->finished() && voice_->starving()) { // the sound track ended (or never started)
       audioClock_ = false;
       audioOff_ = AudioOff::Ended;
@@ -457,17 +462,17 @@ double Playback::duration() const {
 const Texture *Playback::update(double dt, const MediaItem &m, MediaContext &ctx) {
   switch (type_) {
   case MediaType::Image:
-    if (started_) clock_ += dt * double(speed);
+    if (started_) clock_ += dt * (paused ? 0.0 : double(speed));
     started_ = true;
     return ctx.cache.still(m);
   case MediaType::Generator:
-    if (started_) clock_ += dt * double(speed);
+    if (started_) clock_ += dt * (paused ? 0.0 : double(speed));
     started_ = true;
     if (!genFb_) genFb_ = std::make_unique<Framebuffer>();
     ctx.generators.render(m, clock_, *genFb_, ctx.mesh);
     return &genFb_->texture();
   case MediaType::Shader: {
-    if (started_) clock_ += dt * double(speed);
+    if (started_) clock_ += dt * (paused ? 0.0 : double(speed));
     started_ = true;
     if (!isf_) isf_ = std::make_unique<IsfRenderer>();
     if (!isf_->sync(m.path)) return nullptr;
@@ -480,7 +485,7 @@ const Texture *Playback::update(double dt, const MediaItem &m, MediaContext &ctx
     return &genFb_->texture();
   }
   case MediaType::Canvas: {
-    if (started_) clock_ += dt * double(speed);
+    if (started_) clock_ += dt * (paused ? 0.0 : double(speed));
     started_ = true;
     const Texture *src = ctx.canvasTexture ? ctx.canvasTexture(m.canvasRef) : nullptr;
     if (!src || src->empty()) return nullptr;
@@ -489,7 +494,7 @@ const Texture *Playback::update(double dt, const MediaItem &m, MediaContext &ctx
     return &genFb_->texture();
   }
   case MediaType::Text: {
-    if (started_) clock_ += dt * double(speed);
+    if (started_) clock_ += dt * (paused ? 0.0 : double(speed));
     started_ = true;
     if (!text_) text_ = std::make_unique<TextRenderer>();
     return text_->render(m);
@@ -506,11 +511,14 @@ const Texture *Playback::update(double dt, const MediaItem &m, MediaContext &ctx
     if (!decoder_) return nullptr;
     decoder_->setLoop(loop);
     if (audioDecoder_) audioDecoder_->setLoop(loop);
-    if (voice_) watchAudio(dt);
+    if (voice_) {
+      voice_->hold = paused;
+      watchAudio(dt);
+    }
     if (audioClock_) {
       clock_ = std::max(clock_, voice_->playedSeconds());
     } else {
-      if (started_) clock_ += dt * double(speed);
+      if (started_) clock_ += dt * (paused ? 0.0 : double(speed));
       started_ = true;
     }
     if (decoder_->fetch(clock_, frame_, !hasFrame_)) {

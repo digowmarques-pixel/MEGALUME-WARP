@@ -7,7 +7,7 @@ Millumin, feito para **Windows** (também compila no Linux).
 
 | Área | Recursos |
 |---|---|
-| **Show** | Dashboard em colunas (cues) × layers, GO pela barra de espaço, crossfade por coluna, disparo de célula individual, blackout, master |
+| **Show** | Dashboard em colunas (cues) × layers, GO pela barra de espaço, crossfade por coluna, clique na célula só seleciona (vai ao ar pelo ▶ da coluna ou GO), painel **Tempo** com tempo restante / decorrido e **pausa** por layer, blackout, master |
 | **Mídia** | Vídeo via FFmpeg (H.264, HEVC, ProRes, HAP, VP9, AV1...) em thread separada, imagens (PNG, JPG, TIFF, WebP...), geradores: test card, cor sólida, degradê, grade, plasma, listras |
 | **Áudio** | Som dos vídeos (WASAPI no Windows, **modo exclusivo** de baixa latência), **multicanal**: todos os canais da interface, cada layer num par de saídas ou numa **matriz** própria, arquivos 5.1/7.1 nativos ou mixados. Volume e mudo por layer, o fade do áudio acompanha o da imagem, medidores por canal. O relógio do áudio comanda o vídeo, então imagem e som não se perdem nem depois de horas em loop. Veja [docs/AUDIO.md](docs/AUDIO.md) |
 | **Ao vivo** | Câmeras e placas de captura (DirectShow), streams de rede (RTSP, SRT, UDP, HTTP) e **Spout** (receber de TouchDesigner, Resolume, OBS, Unreal...). Uma câmera usada por várias layers abre uma vez só. Reconecta sozinho se o sinal cair |
@@ -100,7 +100,7 @@ código compila para Windows: `./scripts/check-windows-mingw.sh`.
 O instalador (NSIS, também roda no Linux com `sudo apt install nsis`):
 
 ```bash
-cd installer && makensis -DVERSION=0.10.1 -DSRCDIR=../build-mingw/Lumen -DOUTFILE=../Lumen-0.10.1-setup.exe lumen.nsi
+cd installer && makensis -DVERSION=0.10.2 -DSRCDIR=../build-mingw/Lumen -DOUTFILE=../Lumen-0.10.2-setup.exe lumen.nsi
 ```
 
 ## Compilar no Linux (desenvolvimento)
@@ -148,7 +148,7 @@ cmake -S . -B build && cmake --build build -j
 | Tecla | Ação |
 |---|---|
 | Espaço / Shift+Espaço | GO (próxima coluna) / coluna anterior |
-| Esc | Para tudo com fade |
+| Esc | Fecha menus e janelas (nunca para o show; para parar use *Parar* ou ■) |
 | B | Blackout |
 | V / M / G / K / L | Ferramentas: selecionar, perspectiva, malha, máscara, LED |
 | Tab | Próximo canto / ponto |
@@ -160,7 +160,7 @@ cmake -S . -B build && cmake --build build -j
 | Ctrl+P | Abrir / fechar as janelas dos projetores |
 | Ctrl+Shift+P | Janela Saídas (layout dos projetores) |
 | Ctrl+Shift+D | Mostrar os cantos e a malha da saída no próprio projetor |
-| Ctrl+Shift+L | Modo show: trava a edição (GO, Esc, B e masters continuam) |
+| Ctrl+Shift+L | Modo show: trava a edição (GO, B e masters continuam) |
 
 ## Controle por OSC
 

@@ -13,7 +13,7 @@ um Arduino e o NDI Tools.
 
 ## 0. Instalação e diagnóstico
 
-- [ ] 0.1 Instale com `Lumen-0.10.1-setup.exe` (ou descompacte o .zip). O atalho
+- [ ] 0.1 Instale com `Lumen-0.10.2-setup.exe` (ou descompacte o .zip). O atalho
       aparece no Menu Iniciar, e arquivos `.lumen` abrem com o Lumen.
 - [ ] 0.2 Menu Iniciar → *Lumen (console de diagnóstico)*. O relatório abre no Bloco
       de Notas (também fica em `%APPDATA%\Lumen\diagnostico.txt`).
@@ -27,11 +27,11 @@ um Arduino e o NDI Tools.
 
 - [ ] 1.1 Arraste um vídeo H.264, um HAP e uma imagem PNG para a biblioteca. As
       miniaturas aparecem.
-- [ ] 1.2 Arraste o vídeo para uma célula e clique: toca com som, sem engasgar.
+- [ ] 1.2 Arraste o vídeo para uma célula e clique no ▶ da coluna: toca com som, sem engasgar.
       A barra de baixo mostra ~60 fps.
 - [ ] 1.3 *Projeto → Decodificação por hardware* ligada: um vídeo 4K H.264/HEVC
       toca liso. Em *Mídia* aparece "Decodificação por hardware: d3d11va".
-- [ ] 1.4 Espaço (GO), Shift+Espaço, Esc (para com fade), B (blackout).
+- [ ] 1.4 Espaço (GO), Shift+Espaço, B (blackout). Esc fecha um menu aberto e **não** para o vídeo.
 - [ ] 1.5 Transições: crossfade, corte, pelo preto e uma *Shader (ISF)* (ex.:
       T_Circulo) entre duas colunas.
 
@@ -104,7 +104,7 @@ um Arduino e o NDI Tools.
       as mídias são encontradas sozinhas. Renomeie uma mídia: ela fica vermelha
       na biblioteca e *Procurar mídias ausentes...* resolve.
 - [ ] 8.3 Modo show (Ctrl+Shift+L ou botão *Editar/SHOW*): não dá para editar, mas
-      GO, Esc, B e masters funcionam.
+      GO, B e masters funcionam.
 - [ ] 8.4 *Idioma / Language → English*: a interface muda para inglês; reabra o
       programa e continua em inglês.
 - [ ] 8.5 Desinstale pelo *Configurações → Aplicativos*: os projetos e mídias do
@@ -160,6 +160,16 @@ um Arduino e o NDI Tools.
 - [ ] 11.8 Interface com mais de 32 canais (ex.: Dante Virtual Soundcard, MADI): uma
       layer em *Saídas 33-34* sai nas saídas 33 e 34. Com *Canais* diferente do que a
       interface tem, o som sai nas saídas certas (não dobrado nem trocado).
+
+## 12. Dashboard e tempo (v0.10.2)
+
+- [ ] 12.1 Clicar numa célula só a seleciona (borda branca, aba *Célula*); nada vai ao ar.
+      O ▶ da coluna, Espaço ou botão direito → *Disparar só esta célula* põem no ar.
+- [ ] 12.2 Painel *Tempo* (à direita do dashboard): com um vídeo tocando, o relógio conta
+      o tempo restante; clicar nele mostra o decorrido. Nos últimos 10 s fica laranja.
+- [ ] 12.3 ⏸ pausa imagem e som; ▶ continua do mesmo ponto, com o som em sincronia e sem estalo.
+- [ ] 12.4 Esc com vídeo tocando: nada para. Com um menu aberto, Esc só fecha o menu.
+- [ ] 12.5 Aba *Projeto*: abre normalmente; mudar a resolução e apertar Enter aplica.
 
 ## Como relatar
 

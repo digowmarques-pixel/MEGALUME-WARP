@@ -95,6 +95,15 @@ Ordem pensada para **videomapping** e **instalações interativas**.
 - *Seek* preciso de vídeo e áudio (também por OSC: `/lumen/layer/<l>/time`)
 - Testes de integração no CI (`scripts/test-integration.sh`)
 
+## ✅ v0.10.2
+- Clique na célula **só seleciona** (para editar); vai ao ar pelo ▶ da coluna, GO ou
+  botão direito → *Disparar só esta célula*
+- Painel **Tempo** ao lado do dashboard: mídia no ar em cada layer, tempo restante ou
+  decorrido ou sem contador (clique no relógio troca), barra de progresso e **pausa** (imagem e som param e voltam
+  juntos, sem estalo; também por OSC e na máquina reserva)
+- **Esc** nunca para o show: só fecha menus
+- Corrigido: a aba *Projeto* fechava o programa (campo de resolução)
+
 ## ✅ v0.10.1 (revisão geral)
 Revisão de tudo o que foi feito da v0.1 à v0.10 (código lido por área, sanitizers,
 análise estática, testes de cenário e de interface). Corrigidos, entre outros:

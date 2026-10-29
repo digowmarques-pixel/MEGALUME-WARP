@@ -42,6 +42,9 @@ Layers são endereçadas pela **posição a partir do topo (1, 2, 3...)** ou pel
 | `/lumen/layer/<l>/launch` | `n` | Dispara a célula da coluna `n` nesta layer |
 | `/lumen/layer/<l>/stop` | `[fade]` | Para a layer |
 | `/lumen/layer/<l>/restart` | | Reinicia a mídia da layer |
+| `/lumen/layer/<l>/pause` | `[1/0]` | Pausa a mídia da layer (imagem e som param onde estão); `0` continua |
+| `/lumen/layer/<l>/play` | | Continua de onde pausou |
+| `/lumen/layer/<l>/togglepause` | | Pausa / continua (bom para um botão: o `0` de soltar é ignorado) |
 | `/lumen/layer/<l>/effect<n>/<param>` | valor(es) | Parâmetro do efeito ISF `n` (1 = o primeiro) |
 | `/lumen/layer/<l>/text` | `"texto"` | Troca o texto de uma mídia de texto |
 | `/lumen/layer/<l>/time` | `s` | Pula o vídeo da layer para o tempo (`/time/+ 5` avança 5 s) |

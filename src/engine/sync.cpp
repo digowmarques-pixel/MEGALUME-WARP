@@ -135,7 +135,10 @@ void Engine::syncSendState() {
       bool playing = st.current && !st.fadingOut;
       jl["m"] = playing ? st.current->mediaId() : -1;
       jl["col"] = st.columnId;
-      if (playing) jl["t"] = st.current->time();
+      if (playing) {
+        jl["t"] = st.current->time();
+        jl["p"] = st.current->paused;
+      }
     }
     layers.push_back(std::move(jl));
   }
@@ -238,6 +241,7 @@ void Engine::syncApply(const std::string &text) {
     if (media >= 0 && jl.contains("t") && st != states_.end() && st->second.current &&
         st->second.current->mediaId() == media && st->second.current->seekable()) {
       Playback &pb = *st->second.current;
+      pb.paused = jl.value("p", false);
       double target = jl.value("t", 0.0), t = pb.time(), diff = t - target;
       d.average = d.samples ? d.average * 0.8 + diff * 0.2 : diff;
       ++d.samples;

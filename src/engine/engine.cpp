@@ -746,6 +746,17 @@ void Engine::launchCell(int columnIndex, int layerId) {
   startTransition(layerId, &it->second, columnTransition(columnIndex), col.id, col.transitionType);
 }
 
+void Engine::pauseLayer(int layerId, bool paused) {
+  auto it = states_.find(layerId);
+  if (it == states_.end() || !it->second.current || !it->second.current->seekable()) return;
+  it->second.current->paused = paused;
+}
+
+bool Engine::layerPaused(int layerId) const {
+  auto it = states_.find(layerId);
+  return it != states_.end() && it->second.current && it->second.current->paused;
+}
+
 void Engine::stopLayer(int layerId, float fade) {
   if (localBlocked()) return; // on a backup only the main stops layers
   startTransition(layerId, nullptr, fade < 0 ? project.defaultTransition : fade, -1);

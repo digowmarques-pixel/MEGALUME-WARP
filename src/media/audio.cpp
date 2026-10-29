@@ -98,9 +98,16 @@ void AudioVoice::mixInto(float *out, size_t frames, int stride, int outChannels)
     routeOut_ = outChannels;
     routeSrc_ = src;
   }
+  bool held = hold.load();
+  if (held && currentGain_ == 0) { // paused, already faded out
+    peak_ = 0;
+    starving_ = false;
+    if (retiring) retired = true;
+    return;
+  }
   size_t n = std::min(frames, count_);
   starving_ = n < frames;
-  float target = retiring ? 0.0f : gain.load(); // a removed voice fades out: no click
+  float target = retiring || held ? 0.0f : gain.load(); // a removed or paused voice fades out: no click
   float g = currentGain_;
   // Linear ramp over the buffer avoids clicks when the gain changes.
   float step = frames ? (target - g) / float(frames) : 0.0f;
