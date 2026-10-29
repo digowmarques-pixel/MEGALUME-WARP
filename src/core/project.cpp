@@ -32,6 +32,14 @@ const char *endModeName(EndMode m) {
   static const char *n[] = {"Loop", "Freeze", "Stop", "Next column"};
   return n[int(m)];
 }
+std::array<float, 4> mediaFitRect(MediaFit f, int mw, int mh, int W, int H) {
+  if (f == MediaFit::Stretch || mw <= 0 || mh <= 0 || W <= 0 || H <= 0) return {0, 0, float(W), float(H)};
+  float sx = float(W) / float(mw), sy = float(H) / float(mh);
+  float s = f == MediaFit::Fit ? std::min(sx, sy) : std::max(sx, sy);
+  float w = float(mw) * s, h = float(mh) * s;
+  return {(float(W) - w) * 0.5f, (float(H) - h) * 0.5f, w, h};
+}
+
 const char *transformerName(Transformer t) {
   static const char *n[] = {"Linear", "Switch", "Toggle", "Accumulator"};
   return n[int(t)];
@@ -945,7 +953,7 @@ std::string serializeProject(const Project &p, const std::string &baseDir) {
 
   for (auto &l : p.layers) {
     json jl = {{"id", l.id}, {"name", l.name}, {"visible", l.visible}, {"opacity", l.opacity},
-               {"blend", int(l.blend)}, {"volume", l.volume}, {"mute", l.mute}};
+               {"blend", int(l.blend)}, {"fit", int(l.fit)}, {"volume", l.volume}, {"mute", l.mute}};
     if (l.canvasId != 0) jl["canvas"] = l.canvasId;
     if (l.audioOutput != 0) jl["audioOutput"] = l.audioOutput;
     if (!l.audioMatrix.empty()) {
@@ -1265,6 +1273,7 @@ bool deserializeProject(const std::string &text, const std::string &baseDir, Pro
       l.visible = jl.value("visible", true);
       l.opacity = jl.value("opacity", 1.0f);
       l.blend = enumFrom(jl, "blend", BlendMode::Normal, int(BlendMode::COUNT));
+      l.fit = enumFrom(jl, "fit", MediaFit::Fit, int(MediaFit::COUNT));
       l.volume = jl.value("volume", 1.0f);
       l.mute = jl.value("mute", false);
       l.audioOutput = std::max(0, jl.value("audioOutput", 0));

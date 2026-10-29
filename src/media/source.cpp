@@ -150,6 +150,22 @@ void Generators::crossfade(const Texture &a, const Texture &b, float t, Framebuf
   glActiveTexture(GL_TEXTURE0);
 }
 
+void Generators::place(const Texture &src, int W, int H, const std::array<float, 4> &r, Framebuffer &fb,
+                       DynamicMesh &mesh) {
+  fb.resize(W, H);
+  fb.bind();
+  glClearColor(0, 0, 0, 0);
+  glClear(GL_COLOR_BUFFER_BIT);
+  glDisable(GL_BLEND);
+  copy_.use();
+  copy_.set("uTarget", float(W), float(H));
+  copy_.set("uTex", 0);
+  src.bind(0);
+  // Same orientation as crossfade: the result keeps row 0 = top.
+  mesh.drawQuad(r[0], r[1], r[0] + r[2], r[1] + r[3], 0, 1, 1, 0);
+  Framebuffer::unbind();
+}
+
 void Generators::copyFlipped(const Texture &src, Framebuffer &fb, DynamicMesh &mesh) {
   fb.resize(src.width(), src.height());
   fb.bind();

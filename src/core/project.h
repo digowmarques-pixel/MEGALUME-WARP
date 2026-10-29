@@ -8,6 +8,7 @@
 #include "core/isf.h"
 #include "core/warp.h"
 
+#include <array>
 #include <map>
 #include <functional>
 #include <string>
@@ -80,6 +81,17 @@ struct CanvasConfig {
 };
 
 // Mattes: the layer is not drawn; it masks the layer just below it.
+// How a media whose proportion differs from the canvas is placed in the layer.
+// Values are stored: only append.
+enum class MediaFit {
+  Fit,     // whole image, proportion kept (transparent bars)
+  Fill,    // fills the canvas, proportion kept (edges cut)
+  Stretch, // fills the canvas, stretched
+  COUNT
+};
+// Rectangle (x, y, w, h in pixels of a W x H canvas) where a mw x mh image goes.
+std::array<float, 4> mediaFitRect(MediaFit f, int mw, int mh, int W, int H);
+
 enum class BlendMode { Normal, Add, Multiply, Screen, AlphaMatte, AlphaMatteInverted, LumaMatte, LumaMatteInverted, COUNT };
 inline bool isMatte(BlendMode b) { return b >= BlendMode::AlphaMatte && b < BlendMode::COUNT; }
 const char *blendName(BlendMode b);
@@ -150,6 +162,7 @@ struct Layer {
   int audioOutput = 0;                // first output channel (0 = outputs 1-2)
   std::vector<AudioPatch> audioMatrix; // custom routing; empty = automatic
   BlendMode blend = BlendMode::Normal;
+  MediaFit fit = MediaFit::Fit;
   LayerFx fx;
   LayerTransform transform;
   std::vector<Slice> slices;

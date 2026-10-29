@@ -5,6 +5,7 @@
 #include "ui/ui.h"
 
 #include <imgui.h>
+#include <imgui_internal.h>
 
 #include <algorithm>
 #include <cmath>
@@ -211,7 +212,9 @@ void Workspace::draw(App &app, ImVec2 size) {
       }
     ImGui::EndCombo();
   }
+  // Narrow panel: the button goes to the next line, the hint is cut with "...".
   ImGui::SameLine();
+  if (ImGui::GetContentRegionAvail().x < ImGui::CalcTextSize(T("Enquadrar (F)")).x + 60) ImGui::NewLine();
   if (ImGui::Button(T("Enquadrar (F)"))) refit = true;
   ImGui::SameLine();
   ImGui::TextDisabled("%.0f%%", zoom_ * 100);
@@ -221,7 +224,17 @@ void Workspace::draw(App &app, ImVec2 size) {
                          T("Arraste os pontos da malha para curvar a imagem · duplo clique adiciona linha e coluna"),
                          T("Clique adiciona ponto · arraste move · botão direito apaga · Alt+clique: curva · Shift+arraste: máscara inteira"),
                          T("LED: clique numa fita · arraste os cantos ou o meio para posicionar sobre a imagem")};
-  ImGui::TextDisabled("%s", hints[int(tool)]);
+  if (float hw = ImGui::GetContentRegionAvail().x; hw > 60) {
+    ImVec2 at = ImGui::GetCursorScreenPos();
+    ImGui::Dummy({hw, ImGui::GetTextLineHeight()});
+    ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+    ImGui::RenderTextEllipsis(ImGui::GetWindowDrawList(), at, {at.x + hw, at.y + ImGui::GetTextLineHeight()},
+                              at.x + hw, at.x + hw, hints[int(tool)], nullptr, nullptr);
+    ImGui::PopStyleColor();
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", hints[int(tool)]);
+  } else {
+    ImGui::NewLine();
+  }
   viewOut = viewOutputId >= 0 ? p.output(viewOutputId) : nullptr;
 
   ImVec2 avail = ImGui::GetContentRegionAvail();

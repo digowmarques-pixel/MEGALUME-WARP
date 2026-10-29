@@ -13,7 +13,7 @@ um Arduino e o NDI Tools.
 
 ## 0. Instalação e diagnóstico
 
-- [ ] 0.1 Instale com `Lumen-0.10.13-setup.exe` (ou descompacte o .zip). O atalho
+- [ ] 0.1 Instale com `Lumen-0.10.14-setup.exe` (ou descompacte o .zip). O atalho
       aparece no Menu Iniciar, e arquivos `.lumen` abrem com o Lumen.
 - [ ] 0.2 Menu Iniciar → *Lumen (console de diagnóstico)*. O relatório abre no Bloco
       de Notas (também fica em `%APPDATA%\Lumen\diagnostico.txt`).
@@ -204,9 +204,14 @@ um Arduino e o NDI Tools.
 - [ ] 13.19 Saídas → Mapping → Malha: as linhas da malha aparecem entre os pontos.
 - [ ] 13.20 Arrastar 2 vídeos do Explorer para uma célula: o 1º entra nela, o 2º na coluna
       seguinte; os dois aparecem na biblioteca.
-- [ ] 13.21 Cores: célula no ar, relógio e barra de tempo verdes (laranja nos últimos 10 s);
+- [ ] 13.21 Cores: célula no ar, relógio e barra de tempo verdes (vermelhos nos últimos 10 s, mesmo em loop);
       cantos/malha das fatias e saídas em ciano; máscaras em magenta; Parar e ■ em vermelho;
       cada seção das Propriedades com sua barrinha colorida.
+- [ ] 13.22 Arraste a borda da Biblioteca e do Dashboard para deixá-los estreitos: os botões
+      descem de linha e nada fica por cima de outro botão. Com a janela em 1366 px, a barra de
+      cima vira duas linhas.
+- [ ] 13.23 Ponha um vídeo em pé (1080×1920) num canvas 16:9: ele aparece inteiro, sem esticar,
+      com as laterais transparentes. Em Layer → Proporção, teste Preencher e Esticar.
 - [ ] 13.6 LED escondido: sem botão LED, sem aba LED; *Janela → LED mapping* mostra tudo de volta.
 
 ## Como relatar

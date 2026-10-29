@@ -961,21 +961,37 @@ void Engine::update(double dt) {
     }
     const Layer *layer = project.layer(it->first);
     float vol = layer && !layer->mute ? layer->volume : 0.0f;
-    auto tick = [&](std::unique_ptr<Playback> &pb, const Texture *&tex, float fade) {
+    auto tick = [&](std::unique_ptr<Playback> &pb, const Texture *&tex, float fade, int slot) {
       tex = nullptr;
-      if (!pb) return;
+      if (!pb) { fitFbs_.erase(slot); return; }
       const MediaItem *m = project.media(pb->mediaId());
       if (!m) { pb.reset(); return; } // media removed from the library
       // Sound follows the visual crossfade of the layer.
       pb->setGain(vol * fade);
       if (layer) pb->setRoute(layer->audioOutput, layer->audioMatrix);
       tex = pb->update(dt, *m, ctx);
+      // A media with another proportion than the canvas is placed in a canvas-sized
+      // image (fit / fill), so effects, transitions and mapping all see it right.
+      // Generators and shaders are drawn at any size: they always cover the canvas.
+      const bool procedural = m->type == MediaType::Generator || m->type == MediaType::Shader;
+      if (layer && tex && !tex->empty() && layer->fit != MediaFit::Stretch && !procedural) {
+        int W = project.canvasWidth(layer->canvasId), H = project.canvasHeight(layer->canvasId);
+        float ma = float(tex->width()) / float(tex->height()), ca = float(W) / float(std::max(1, H));
+        if (std::abs(ma / ca - 1) > 0.005f) {
+          auto &fb = fitFbs_[slot];
+          if (!fb) fb = std::make_unique<Framebuffer>();
+          generators.place(*tex, W, H, mediaFitRect(layer->fit, tex->width(), tex->height(), W, H), *fb, mesh);
+          tex = &fb->texture();
+          return;
+        }
+      }
+      fitFbs_.erase(slot);
     };
     // The sound always crossfades: `composed` (one picture holding both
     // contents) is about drawing, and is set again below for this frame.
     st.composed = false;
-    tick(st.current, st.currentTex, incomingOpacity(st));
-    tick(st.previous, st.previousTex, outgoingOpacity(st));
+    tick(st.current, st.currentTex, incomingOpacity(st), it->first * 2);
+    tick(st.previous, st.previousTex, outgoingOpacity(st), it->first * 2 + 1);
     if (layer && !layer->effects.empty()) {
       int id = it->first;
       BlobReport report;
@@ -1070,6 +1086,8 @@ void Engine::update(double dt) {
       stinger_->setGain(1);
     }
   }
+  for (auto it = fitFbs_.begin(); it != fitFbs_.end();) // layer gone
+    it = states_.count(it->first / 2) ? std::next(it) : fitFbs_.erase(it);
   for (auto it = crossfadeFbs_.begin(); it != crossfadeFbs_.end();) {
     auto st = states_.find(it->first);
     bool busy = st != states_.end() && st->second.type == TransitionType::Crossfade && st->second.fade < 1;

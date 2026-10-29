@@ -1004,6 +1004,25 @@ static bool hasPatch(const std::vector<lumen::AudioPatch> &r, int src, int dst) 
   return std::any_of(r.begin(), r.end(), [&](const lumen::AudioPatch &p) { return p.src == src && p.dst == dst; });
 }
 
+// A media with another proportion than the canvas keeps it (fit / fill), unless stretched.
+static void testMediaFit() {
+  auto r = mediaFitRect(MediaFit::Fit, 1080, 1920, 1920, 1080); // vertical video, 16:9 canvas
+  CHECK(std::fabs(r[3] - 1080) < 0.01f && std::fabs(r[2] - 607.5f) < 0.01f);
+  CHECK(std::fabs(r[0] - (1920 - 607.5f) / 2) < 0.01f && std::fabs(r[1]) < 0.01f);
+  r = mediaFitRect(MediaFit::Fill, 1080, 1920, 1920, 1080);
+  CHECK(std::fabs(r[2] - 1920) < 0.01f && std::fabs(r[3] - 3413.333f) < 0.01f && r[1] < 0);
+  r = mediaFitRect(MediaFit::Stretch, 1080, 1920, 1920, 1080);
+  CHECK(r[0] == 0 && r[1] == 0 && r[2] == 1920 && r[3] == 1080);
+  r = mediaFitRect(MediaFit::Fit, 1920, 1080, 1920, 1080); // same proportion: whole canvas
+  CHECK(std::fabs(r[2] - 1920) < 0.01f && std::fabs(r[3] - 1080) < 0.01f);
+  Project p = Project::makeDefault();
+  CHECK(p.layers[0].fit == MediaFit::Fit);
+  p.layers[0].fit = MediaFit::Stretch;
+  Project back;
+  std::string err;
+  CHECK(deserializeProject(serializeProject(p, ""), "", back, &err) && back.layers[0].fit == MediaFit::Stretch);
+}
+
 static void testAudioRoute() {
   using namespace lumen;
   // Stereo on a stereo card: L->1, R->2.
@@ -1049,6 +1068,7 @@ static void testAudioRoute() {
 
 int main() {
   testAudioRoute();
+  testMediaFit();
   testParallel();
   testInstaller();
   testI18n();

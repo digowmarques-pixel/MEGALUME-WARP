@@ -801,3 +801,8 @@
 {"Remover canvas?", "Remove canvas?"},
 {"um projeto não salvo", "an unsaved project"},
 {"%s desconectada: tentando de novo a cada segundo", "%s disconnected: retrying every second"},
+{"Proporção", "Aspect"},
+{"Encaixar (sem cortar)", "Fit (no crop)"},
+{"Preencher (corta as bordas)", "Fill (crops the edges)"},
+{"Esticar", "Stretch"},
+{"Mídia com proporção diferente do canvas (ex.: vídeo em pé): encaixar mostra a imagem inteira com sobras transparentes; preencher cobre o canvas cortando as bordas; esticar deforma para cobrir tudo.", "Media with another proportion than the canvas (e.g. a vertical video): fit shows the whole image with transparent bars; fill covers the canvas, cropping the edges; stretch distorts it to cover everything."},

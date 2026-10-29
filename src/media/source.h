@@ -10,6 +10,7 @@
 #include "render/gpu.h"
 #include "render/isf_renderer.h"
 
+#include <array>
 #include <functional>
 #include <map>
 #include <memory>
@@ -30,6 +31,9 @@ public:
   // `target`, sized like b. A real mix: the middle of a fade between two
   // opaque images is as bright as both, unlike two layers drawn one over the other.
   void crossfade(const Texture &a, const Texture &b, float t, Framebuffer &target, DynamicMesh &mesh);
+  // `src` (row 0 = top) placed at rect {x, y, w, h} of a W x H transparent image.
+  void place(const Texture &src, int W, int H, const std::array<float, 4> &rect, Framebuffer &target,
+             DynamicMesh &mesh);
 
 private:
   Shader shaders_[int(GeneratorKind::COUNT)];

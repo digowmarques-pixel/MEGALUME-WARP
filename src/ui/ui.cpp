@@ -408,7 +408,10 @@ void Ui::draw(App &app) {
   ImGuiViewport *vp = ImGui::GetMainViewport();
   menuBar(app);
 
-  const float toolbarH = 54, statusH = 28, g = 6; // g: gap between the panel cards
+  const float statusH = 28, g = 6; // g: gap between the panel cards
+  // Narrow window (or long labels): the toolbar wraps into two rows instead of being cut.
+  toolbarTwoRows_ = toolbarRowA_ + toolbarRowB_ > vp->WorkSize.x - 2 * g - 16;
+  const float toolbarH = toolbarTwoRows_ ? 92 : 54;
   const float libraryW = std::clamp(vp->WorkSize.x * 0.17f, 220.0f, 320.0f);
   const float inspectorW = std::clamp(vp->WorkSize.x * 0.24f, 320.0f, 440.0f);
   const float x0 = vp->WorkPos.x, y0 = vp->WorkPos.y;
@@ -871,6 +874,12 @@ void Ui::toolbar(App &app) {
                            : T("Travar a edição para o show (Ctrl+Shift+L). GO, parar, blackout e masters continuam."));
 
   ImGui::SameLine(0, 16);
+  toolbarRowA_ = ImGui::GetCursorPosX();
+  const float rowBx = toolbarTwoRows_ ? ImGui::GetStyle().WindowPadding.x : toolbarRowA_;
+  if (toolbarTwoRows_) {
+    ImGui::NewLine();
+    ImGui::SetCursorPosX(rowBx);
+  }
   ImGui::SetNextItemWidth(100);
   ImGui::SetCursorPosY(ImGui::GetCursorPosY() + 5);
   ImGui::SliderFloat(T("Master"), &e.masterOpacity, 0, 1, "%.2f");
@@ -917,12 +926,14 @@ void Ui::toolbar(App &app) {
     ImGui::TextColored(kAccent, T("No ar: %d · %s"), col + 1, e.project.columns[size_t(col)].name.c_str());
   else
     ImGui::TextDisabled("%s", T("Nada no ar"));
+  ImGui::SameLine(0, 0);
+  toolbarRowB_ = ImGui::GetCursorPosX() - rowBx;
 }
 
 void Ui::library(App &app) {
   Project &p = app.engine.project;
   if (ImGui::Button(T("Importar..."))) app.importDialog();
-  ImGui::SameLine();
+  wrapLine(labelW(T("+ Gerador")));
   if (ImGui::Button(T("+ Gerador"))) ImGui::OpenPopup("gen");
   if (ImGui::BeginPopup("gen")) {
     for (int k = 0; k < int(GeneratorKind::COUNT); ++k)
@@ -962,7 +973,7 @@ void Ui::library(App &app) {
     }
     ImGui::EndPopup();
   }
-  ImGui::SameLine();
+  wrapLine(labelW(T("+ Ao vivo")));
   if (ImGui::Button(T("+ Ao vivo"))) {
     captureDevices_ = listCaptureDevices();
     spoutSenders_ = spoutSenders();
@@ -1160,7 +1171,7 @@ void Ui::dashboard(App &app) {
       ImGui::EndPopup();
     }
   }
-  ImGui::SameLine();
+  wrapLine(labelW(T("+ Layer")));
   ImGui::BeginDisabled(locked);
   if (ImGui::Button(T("+ Layer"))) {
     Layer &l = p.addLayer("", workspace.viewCanvas);
@@ -1168,7 +1179,7 @@ void Ui::dashboard(App &app) {
     app.sel.slice = 0;
     app.edited();
   }
-  ImGui::SameLine();
+  wrapLine(labelW(T("+ Coluna")));
   ImGui::BeginDisabled(int(p.columns.size()) >= kMaxDashColumns);
   if (ImGui::Button(T("+ Coluna"))) {
     p.addColumn().board = p.currentBoard;
@@ -1176,10 +1187,25 @@ void Ui::dashboard(App &app) {
   }
   ImGui::EndDisabled();
   ImGui::EndDisabled();
+  // Hint in the room left before the zoom combo (cut with "..." when narrow), the
+  // combo on the right or on the next line: nothing overlaps.
   ImGui::SameLine();
-  ImGui::TextDisabled("%s", T("Arraste mídias (da biblioteca ou do Explorer) para as células. Clique seleciona; o \xe2\x96\xb6 da coluna ou Espaço põe no ar."));
-  ImGui::SameLine(std::max(ImGui::GetCursorPosX() + 10, ImGui::GetWindowWidth() - 150));
-  ImGui::SetNextItemWidth(130);
+  const float zoomW = 130, hintW = ImGui::GetContentRegionAvail().x - zoomW - 10;
+  if (hintW > 60) {
+    const char *hint = T("Arraste mídias (da biblioteca ou do Explorer) para as células. Clique seleciona; o \xe2\x96\xb6 da coluna ou Espaço põe no ar.");
+    ImVec2 a = ImGui::GetCursorScreenPos();
+    ImGui::Dummy({hintW, ImGui::GetFrameHeight()});
+    ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+    ImGui::RenderTextEllipsis(ImGui::GetWindowDrawList(), {a.x, a.y + ImGui::GetStyle().FramePadding.y},
+                              {a.x + hintW, a.y + ImGui::GetFrameHeight()}, a.x + hintW, a.x + hintW, hint, nullptr,
+                              nullptr);
+    ImGui::PopStyleColor();
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", hint);
+    ImGui::SameLine(ImGui::GetWindowContentRegionMax().x - zoomW);
+  } else {
+    wrapLine(zoomW);
+  }
+  ImGui::SetNextItemWidth(zoomW);
   ImGui::Combo("##zoom", &dashZoom_, TZ("pequeno\0médio\0grande\0"));
 
   const float zw[] = {86, 116, 160}, zh[] = {50, 74, 104};
@@ -1758,14 +1784,16 @@ void Ui::timePanel(App &app, const std::vector<TimeRow> &rows, float bodyTop, fl
         dl->AddRectFilled({b.x - 11.5f, a.y + 7}, {b.x - 8, b.y - 7}, ic);
       }
     }
-    // Clock: time left (or elapsed); orange in the last 10 s, grey when paused.
+    // Clock: time left (or elapsed); red in the last 10 s (also when looping: the clip
+    // is about to start again), grey when paused.
+    const bool ending = !live && !pb.paused && left >= 0 && left <= 10.0;
     const float cw = timeCounter_ == 0 ? 0.0f : 84.0f, ch = std::min(30.0f, top - 6);
     float cx = x1 - bs - 6 - cw, cy = r.y1 + (top - ch) * 0.5f;
     std::string txt = live ? T("ao vivo") : (timeCounter_ == 2 && left >= 0 ? clockText(left, true) : clockText(pos, false));
     ImU32 bg = pal::u32(pal::kGreen), fg = IM_COL32(0, 0, 0, 255); // playing: green
     if (live) { bg = IM_COL32(48, 48, 52, 255); fg = IM_COL32(200, 200, 200, 255); }
     else if (pb.paused) { bg = IM_COL32(70, 70, 75, 255); fg = IM_COL32(255, 255, 255, 255); }
-    else if (left >= 0 && left < 10 && !pb.loop) bg = pal::u32(pal::kOrange);
+    else if (ending) { bg = pal::u32(pal::kRed); fg = IM_COL32(255, 255, 255, 255); }
     if (cw > 0) {
       dl->AddRectFilled({cx, cy}, {cx + cw, cy + ch}, bg, 5);
       ImFont *f = bigFont_ ? bigFont_ : ImGui::GetFont();
@@ -1815,7 +1843,7 @@ void Ui::timePanel(App &app, const std::vector<TimeRow> &rows, float bodyTop, fl
         e.seekLayer(r.layerId, loops + std::min(at, dur - 0.001));
       }
       float f01 = float(std::clamp((act ? at : pos) / dur, 0.0, 1.0));
-      ImU32 fill = pb.paused ? IM_COL32(150, 150, 150, 255) : kPlayingU32;
+      ImU32 fill = pb.paused ? IM_COL32(150, 150, 150, 255) : ending ? pal::u32(pal::kRed) : kPlayingU32;
       dl->AddRectFilled({bx0, byy}, {bx1, byy + 6}, IM_COL32(60, 60, 64, 255), 3);
       dl->AddRectFilled({bx0, byy}, {bx0 + bw * f01, byy + 6}, fill, 3);
       if (hov || act) {
@@ -3144,6 +3172,14 @@ void Ui::layerInspector(App &app) {
       l->blend = BlendMode(blend);
       app.edited();
     }
+    int fit = int(l->fit);
+    if (ImGui::Combo(T("Proporção"), &fit, TZ("Encaixar (sem cortar)\0Preencher (corta as bordas)\0Esticar\0"))) {
+      l->fit = MediaFit(fit);
+      app.edited();
+    }
+    ImGui::SetItemTooltip("%s", T("Mídia com proporção diferente do canvas (ex.: vídeo em pé): encaixar mostra a imagem "
+                                  "inteira com sobras transparentes; preencher cobre o canvas cortando as bordas; "
+                                  "esticar deforma para cobrir tudo."));
 
     if (ImGui::SliderFloat(T("Opacidade"), &l->opacity, 0, 1)) app.edited();
       float pos[2] = {l->transform.position.x, l->transform.position.y};

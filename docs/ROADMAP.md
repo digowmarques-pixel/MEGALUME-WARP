@@ -95,12 +95,22 @@ Ordem pensada para **videomapping** e **instalações interativas**.
 - *Seek* preciso de vídeo e áudio (também por OSC: `/lumen/layer/<l>/time`)
 - Testes de integração no CI (`scripts/test-integration.sh`)
 
+## ✅ v0.10.14
+- Painéis estreitos não sobrepõem mais nada: os botões da Biblioteca, do Dashboard e do
+  Workspace descem para a linha de baixo, as dicas são cortadas com "..." (texto inteiro ao
+  passar o mouse) e a barra de cima vira duas linhas em telas pequenas (1366 px)
+- Mídia com proporção diferente do canvas (ex.: vídeo em pé 1080×1920) **não estica mais**:
+  é encaixada inteira com sobras transparentes. Opção por layer em Propriedades → Layer →
+  Proporção: Encaixar (padrão), Preencher (corta as bordas) ou Esticar
+- Relógio do painel Tempo e barra de tempo ficam **vermelhos nos últimos 10 s**, também com
+  o vídeo em loop
+
 ## ✅ v0.10.13
 - Nova paleta: fundo preto de verdade, painéis cinza bem escuro, menos bordas; o **amarelo**
   continua sendo a marca e o que você aciona. Uma cor por tipo de coisa, só em detalhes finos
   (faixa no título do painel, barra na seção, contornos): **verde** = o que está tocando
   (célula no ar, relógio, barra de tempo, medidores), **ciano** = mapping e saídas,
-  **magenta** = máscaras, **roxo** = efeitos e timeline, **laranja** = avisos e últimos 10 s,
+  **magenta** = máscaras, **roxo** = efeitos e timeline, **laranja** = avisos,
   **vermelho** = parar e blackout
 
 ## ✅ v0.10.12

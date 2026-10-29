@@ -280,6 +280,7 @@ private:
   std::map<int, std::unique_ptr<IsfRenderer>> transitionIsf_;
   std::map<int, std::unique_ptr<Framebuffer>> transitionIn_[2], transitionOut_;
   std::map<int, std::unique_ptr<Framebuffer>> crossfadeFbs_; // per layer, during a crossfade
+  std::map<int, std::unique_ptr<Framebuffer>> fitFbs_; // layer id * 2 (+1 outgoing): media in its proportion
   Texture clearTex_;
   std::unique_ptr<Playback> stinger_;
   const Texture *stingerTex_ = nullptr;

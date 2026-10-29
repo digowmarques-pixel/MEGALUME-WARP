@@ -139,6 +139,8 @@ private:
   bool tlDragFlag_ = false;
   float tlDragMin_ = 0, tlDragMax_ = 1;
   int dashZoom_ = 1;      // 0 small, 1 medium, 2 large cells
+  float toolbarRowA_ = 700, toolbarRowB_ = 800; // widths of the two halves of the toolbar (last frame)
+  bool toolbarTwoRows_ = false; // narrow window: the toolbar wraps into two rows
   float timeW_ = 380;   // Tempo panel width (drag its left edge); machine setting
   int timeCounter_ = 2; // Tempo panel clocks: 0 none, 1 elapsed, 2 remaining (like Millumin)
   // Tempo panel beside the dashboard: one row per layer, at the screen rows of the table.
