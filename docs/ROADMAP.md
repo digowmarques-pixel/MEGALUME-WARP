@@ -95,6 +95,13 @@ Ordem pensada para **videomapping** e **instalações interativas**.
 - *Seek* preciso de vídeo e áudio (também por OSC: `/lumen/layer/<l>/time`)
 - Testes de integração no CI (`scripts/test-integration.sh`)
 
+## ✅ v0.10.5
+- Propriedades só com Layer, Célula e Mídia; **Saídas, Interação, Projeto e LED viram
+  janelas** (menu *Janela*)
+- Painel **Tempo** mais largo (arraste a divisa) com **linha do tempo**: clique ou arraste
+  para levar o vídeo para frente ou para trás
+- Corrigido: mudar o *No fim* (ex.: Congelar) com o vídeo tocando agora vale na hora
+
 ## ✅ v0.10.4
 - Saídas → Slice: **warping** da fatia (os pontos andam sobre a imagem do canvas), como
   no Millumin

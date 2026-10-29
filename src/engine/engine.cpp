@@ -746,6 +746,13 @@ void Engine::launchCell(int columnIndex, int layerId) {
   startTransition(layerId, &it->second, columnTransition(columnIndex), col.id, col.transitionType);
 }
 
+void Engine::seekLayer(int layerId, double seconds) {
+  auto it = states_.find(layerId);
+  if (it == states_.end() || !it->second.current || !it->second.current->seekable()) return;
+  it->second.current->seek(std::max(0.0, seconds));
+  ++it->second.run; // a backup machine follows the jump
+}
+
 void Engine::pauseLayer(int layerId, bool paused) {
   auto it = states_.find(layerId);
   if (it == states_.end() || !it->second.current || !it->second.current->seekable()) return;
@@ -984,6 +991,24 @@ void Engine::update(double dt) {
       st.previousTex = nullptr;
       st.composed = true;
     }
+    // The cell's end mode, changed while its media plays, applies now (not only at the next launch).
+    if (st.current && !st.fadingOut && st.columnId >= 0)
+      for (auto &col : project.columns) {
+        if (col.id != st.columnId) continue;
+        auto cell = col.cells.find(it->first);
+        if (cell == col.cells.end() || cell->second.mediaId != st.current->mediaId()) break;
+        Playback &pb = *st.current;
+        if (pb.loop && !cell->second.loop) { // already in a later turn: stay in this one, play to its end
+          double d = pb.duration();
+          if (d > 0 && pb.time() >= d) pb.seek(std::fmod(pb.time(), d));
+        }
+        pb.loop = cell->second.loop;
+        if (st.endMode != cell->second.endMode) {
+          st.endMode = cell->second.endMode;
+          st.endHandled = false;
+        }
+        break;
+      }
     if (st.current && !st.fadingOut && !st.endHandled && st.endMode != EndMode::Loop &&
         st.endMode != EndMode::Freeze && st.current->finished()) {
       st.endHandled = true;

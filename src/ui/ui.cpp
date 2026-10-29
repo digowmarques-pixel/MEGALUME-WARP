@@ -244,6 +244,7 @@ const char *mediaTypeLabel(MediaType t) {
 } // namespace
 
 void Ui::setup() {
+  timeW_ = float(machineSettingInt("timePanelW", 380));
   workspace.showLed = machineSettingInt("showLed", 0) != 0;
   ImGuiIO &io = ImGui::GetIO();
   // No keyboard navigation: Space must always mean GO, never "press focused button".
@@ -456,6 +457,7 @@ void Ui::draw(App &app) {
   if (!locked) {
     outputsWindow(app);
     inputMeshWindow(app);
+    panelWindows(app);
   }
   recoveryPopup(app);
   if (showDiag_) {
@@ -674,18 +676,19 @@ void Ui::menuBar(App &app) {
     if (ImGui::MenuItem(T("Dashboard"))) { bottomTab_ = 0; forceBottom_ = true; }
     if (ImGui::MenuItem(T("Timeline"))) { bottomTab_ = 1; forceBottom_ = true; }
     if (ImGui::MenuItem(T("Saídas..."), nullptr, false, edit)) openOutputs();
+    ImGui::SeparatorText(T("Janelas"));
+    ImGui::MenuItem(T("Propriedades das saídas"), nullptr, &panelOpen_[0]);
+    ImGui::MenuItem(T("Interação (OSC, MIDI, DMX, serial)"), nullptr, &panelOpen_[1]);
+    ImGui::MenuItem(T("Projeto"), nullptr, &panelOpen_[2]);
+    if (workspace.showLed) ImGui::MenuItem(T("LED"), nullptr, &panelOpen_[3]);
     ImGui::SeparatorText(T("Propriedades"));
     struct P { const char *name; Inspector id; };
-    const P panels[] = {{T("Layer"), Inspector::Layer}, {T("Célula"), Inspector::Cell}, {T("Mídia"), Inspector::Media},
-                        {T("Saídas"), Inspector::Output}, {T("LED"), Inspector::Led},
-                        {T("Interação (OSC, MIDI, DMX, serial)"), Inspector::Interaction}, {T("Projeto"), Inspector::Project}};
+    const P panels[] = {{T("Layer"), Inspector::Layer}, {T("Célula"), Inspector::Cell}, {T("Mídia"), Inspector::Media}};
     for (auto &pn : panels)
-      if ((pn.id != Inspector::Led || workspace.showLed) && ImGui::MenuItem(pn.name, nullptr, app.sel.inspector == pn.id))
-        app.sel.inspector = pn.id;
+      if (ImGui::MenuItem(pn.name, nullptr, app.sel.inspector == pn.id)) app.sel.inspector = pn.id;
     ImGui::Separator();
     if (ImGui::MenuItem(T("LED mapping (fitas e matrizes)"), nullptr, &workspace.showLed)) {
       setMachineSetting("showLed", workspace.showLed ? 1 : 0);
-      if (!workspace.showLed && app.sel.inspector == Inspector::Led) app.sel.inspector = Inspector::Layer;
     }
     ImGui::SetItemTooltip("%s", T("Mostra a ferramenta LED, a aba LED e as fitas no workspace. As fitas do "
                                   "projeto continuam funcionando mesmo escondidas."));
@@ -1052,8 +1055,10 @@ void Ui::dashboard(App &app) {
   ImGuiTableFlags flags = ImGuiTableFlags_ScrollX | ImGuiTableFlags_ScrollY |
                           ImGuiTableFlags_BordersInner | ImGuiTableFlags_RowBg;
   // Tempo panel on the right (like Millumin's Time), when there is room for it.
-  const float timeW = 260;
-  const bool withTime = ImGui::GetContentRegionAvail().x > timeW + 320;
+  const float dashAvail = ImGui::GetContentRegionAvail().x;
+  const bool withTime = dashAvail > 220 + 320;
+  timeW_ = std::clamp(timeW_, 220.0f, std::max(220.0f, dashAvail - 320));
+  const float timeW = timeW_;
   if (!ImGui::BeginTable("##dash", ncols + 2, flags, {withTime ? ImGui::GetContentRegionAvail().x - timeW - 6 : 0, 0}))
     return;
   std::vector<TimeRow> timeRows;
@@ -1504,7 +1509,17 @@ void Ui::dashboard(App &app) {
   ImGui::EndTable();
   if (withTime) {
     float h = ImGui::GetItemRectSize().y;
-    ImGui::SameLine(0, 6);
+    // Splitter: drag to make the Tempo panel (and its timelines) wider.
+    ImGui::SameLine(0, 0);
+    ImGui::InvisibleButton("##tsplit", {6, h});
+    if (ImGui::IsItemHovered() || ImGui::IsItemActive()) {
+      ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
+      ImVec2 a = ImGui::GetItemRectMin();
+      ImGui::GetWindowDrawList()->AddRectFilled({a.x + 2, a.y}, {a.x + 4, a.y + h}, kAccentU32);
+    }
+    if (ImGui::IsItemActive()) timeW_ -= ImGui::GetIO().MouseDelta.x;
+    if (ImGui::IsItemDeactivated()) setMachineSetting("timePanelW", int(timeW_));
+    ImGui::SameLine(0, 0);
     timePanel(app, timeRows, bodyTop, bodyBottom, h, tableWindow, cellH);
   }
 
@@ -1574,8 +1589,9 @@ void Ui::timePanel(App &app, const std::vector<TimeRow> &rows, float bodyTop, fl
     double pos = dur > 0 ? (pb.loop ? std::fmod(t, dur) : std::min(t, dur)) : t;
     double left = dur > 0 ? (dur - pos) / std::max(0.01, double(pb.speed)) : -1;
     // Pause / play (not for live inputs).
-    const float bs = 26;
-    float by = r.y1 + (h - bs) * 0.5f;
+    const float bs = 26, barH = 16; // the timeline runs along the bottom of the row
+    float top = h - barH;           // clock, button and name above it
+    float by = r.y1 + (top - bs) * 0.5f;
     if (!live) {
       ImGui::SetCursorScreenPos({x1 - bs, by});
       if (ImGui::InvisibleButton("##pause", {bs, bs})) e.pauseLayer(r.layerId, !pb.paused);
@@ -1592,8 +1608,8 @@ void Ui::timePanel(App &app, const std::vector<TimeRow> &rows, float bodyTop, fl
       }
     }
     // Clock: time left (or elapsed); orange in the last 10 s, grey when paused.
-    const float cw = timeCounter_ == 0 ? 0.0f : 84.0f, ch = std::min(30.0f, h - 8);
-    float cx = x1 - bs - 6 - cw, cy = r.y1 + (h - ch) * 0.5f;
+    const float cw = timeCounter_ == 0 ? 0.0f : 84.0f, ch = std::min(30.0f, top - 6);
+    float cx = x1 - bs - 6 - cw, cy = r.y1 + (top - ch) * 0.5f;
     std::string txt = live ? T("ao vivo") : (timeCounter_ == 2 && left >= 0 ? clockText(left, true) : clockText(pos, false));
     ImU32 bg = kAccentU32, fg = IM_COL32(0, 0, 0, 255);
     if (live) { bg = IM_COL32(48, 48, 52, 255); fg = IM_COL32(200, 200, 200, 255); }
@@ -1613,7 +1629,7 @@ void Ui::timePanel(App &app, const std::vector<TimeRow> &rows, float bodyTop, fl
       }
     }
     // Thumbnail, name and progress.
-    float th = std::min(h - 12, 40.0f), tw = th * 16.0f / 9.0f, ty = r.y1 + (h - th) * 0.5f;
+    float th = std::min(top - 6, 40.0f), tw = th * 16.0f / 9.0f, ty = r.y1 + (top - th) * 0.5f;
     if (m) {
       const Texture *thumb = e.cache.thumbnail(*m, e.generators, e.mesh);
       if (thumb && !thumb->empty()) dl->AddImageRounded(texId(*thumb), {x0, ty}, {x0 + tw, ty + th}, {0, 0}, {1, 1}, IM_COL32_WHITE, 3);
@@ -1621,12 +1637,39 @@ void Ui::timePanel(App &app, const std::vector<TimeRow> &rows, float bodyTop, fl
     float nx = x0 + tw + 6, nw = cx - 6 - nx;
     if (nw > 10) {
       dl->PushClipRect({nx, r.y1}, {nx + nw, r.y2}, true);
-      dl->AddText({nx, ty}, IM_COL32(225, 225, 225, 255), m ? m->name.c_str() : "");
+      dl->AddText({nx, r.y1 + (top - ImGui::GetFontSize()) * 0.5f}, IM_COL32(225, 225, 225, 255), m ? m->name.c_str() : "");
       dl->PopClipRect();
-      if (dur > 0) {
-        float yb = ty + th - 4, f01 = float(std::clamp(pos / dur, 0.0, 1.0));
-        dl->AddRectFilled({nx, yb}, {nx + nw, yb + 3}, IM_COL32(60, 60, 64, 255), 1);
-        dl->AddRectFilled({nx, yb}, {nx + nw * f01, yb + 3}, pb.paused ? IM_COL32(150, 150, 150, 255) : kPlayingU32, 1);
+    }
+    // Timeline: the whole row wide. Click or drag to move the video forward / back.
+    if (dur > 0 && !live) {
+      float bx0 = x0, bx1 = x1, bw = std::max(1.0f, bx1 - bx0), byy = r.y1 + top + 3;
+      ImGui::SetCursorScreenPos({bx0, byy - 3});
+      ImGui::InvisibleButton("##scrub", {bw, barH - 2});
+      bool hov = ImGui::IsItemHovered(), act = ImGui::IsItemActive();
+      ImGuiIO &io = ImGui::GetIO();
+      double at = std::clamp(double(io.MousePos.x - bx0) / double(bw), 0.0, 1.0) * dur;
+      if (act) {
+        // While dragging: a seek at most every 80 ms (each one restarts the decoder), the last on release.
+        static double lastSeekAt = 0, lastTarget = -1;
+        double now = ImGui::GetTime();
+        if (std::fabs(at - lastTarget) > 0.01 && now - lastSeekAt > 0.08) {
+          double loops = pb.loop ? std::floor(t / dur) * dur : 0; // stay in the current loop
+          e.seekLayer(r.layerId, loops + std::min(at, dur - 0.001));
+          lastSeekAt = now;
+          lastTarget = at;
+        }
+      }
+      if (ImGui::IsItemDeactivated()) {
+        double loops = pb.loop ? std::floor(t / dur) * dur : 0;
+        e.seekLayer(r.layerId, loops + std::min(at, dur - 0.001));
+      }
+      float f01 = float(std::clamp((act ? at : pos) / dur, 0.0, 1.0));
+      ImU32 fill = pb.paused ? IM_COL32(150, 150, 150, 255) : kPlayingU32;
+      dl->AddRectFilled({bx0, byy}, {bx1, byy + 6}, IM_COL32(60, 60, 64, 255), 3);
+      dl->AddRectFilled({bx0, byy}, {bx0 + bw * f01, byy + 6}, fill, 3);
+      if (hov || act) {
+        dl->AddCircleFilled({bx0 + bw * f01, byy + 3}, 6, IM_COL32(255, 255, 255, 255));
+        ImGui::SetTooltip("%s / %s", clockText(at, false).c_str(), clockText(dur, false).c_str());
       }
     }
     ImGui::PopID();
@@ -1635,18 +1678,40 @@ void Ui::timePanel(App &app, const std::vector<TimeRow> &rows, float bodyTop, fl
   ImGui::EndChild();
 }
 
+void Ui::panelWindows(App &app) {
+  struct W { const char *title; void (Ui::*draw)(App &); };
+  const W wins[] = {{T("Propriedades das saídas###pw_out"), &Ui::outputInspector},
+                    {T("Interação (OSC, MIDI, DMX, serial)###pw_int"), &Ui::interactionInspector},
+                    {T("Projeto###pw_proj"), &Ui::projectInspector},
+                    {T("LED mapping###pw_led"), &Ui::ledInspector}};
+  if (!workspace.showLed) panelOpen_[3] = false;
+  ImGuiViewport *vp = ImGui::GetMainViewport();
+  for (int k = 0; k < 4; ++k) {
+    if (!panelOpen_[k]) continue;
+    ImGui::SetNextWindowSize({480, vp->WorkSize.y * 0.75f}, ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowPos({vp->WorkPos.x + vp->WorkSize.x - 520 - 30.0f * float(k), vp->WorkPos.y + 70 + 30.0f * float(k)},
+                            ImGuiCond_FirstUseEver);
+    if (ImGui::Begin(wins[k].title, &panelOpen_[k], ImGuiWindowFlags_NoCollapse)) (this->*wins[k].draw)(app);
+    ImGui::End();
+  }
+}
+
 void Ui::inspector(App &app) {
   struct Tab { const char *name; Inspector id; };
-  const Tab tabs[] = {{T("Layer"), Inspector::Layer},   {T("Célula"), Inspector::Cell},
-                      {T("Mídia"), Inspector::Media},   {T("Saídas"), Inspector::Output}, {T("LED"), Inspector::Led},
-                      {T("Interação"), Inspector::Interaction}, {T("Projeto"), Inspector::Project}};
-  if (app.sel.inspector == Inspector::Led && !workspace.showLed) app.sel.inspector = Inspector::Layer;
+  // What depends on the selection stays here; the setup panels are windows.
+  const Tab tabs[] = {{T("Layer"), Inspector::Layer}, {T("Célula"), Inspector::Cell}, {T("Mídia"), Inspector::Media}};
   static Inspector shown = Inspector::Layer;
+  // A request for a setup panel (menu, "Adicionar saída", a LED strip clicked...) opens its window.
+  const Inspector windows[] = {Inspector::Output, Inspector::Interaction, Inspector::Project, Inspector::Led};
+  for (int k = 0; k < 4; ++k)
+    if (app.sel.inspector == windows[k]) {
+      if (k != 3 || workspace.showLed) panelOpen_[k] = true;
+      app.sel.inspector = shown;
+    }
   bool forced = shown != app.sel.inspector;
   if (ImGui::BeginTabBar("##insp")) {
     for (auto &t : tabs) {
       ImGuiTabItemFlags f = (forced && app.sel.inspector == t.id) ? ImGuiTabItemFlags_SetSelected : 0;
-      if (t.id == Inspector::Led && !workspace.showLed) continue; // hidden: Janela > LED mapping
       if (ImGui::BeginTabItem(t.name, nullptr, f)) {
         if (!forced) app.sel.inspector = t.id;
         ImGui::BeginChild("##inspbody");
@@ -1654,10 +1719,7 @@ void Ui::inspector(App &app) {
         case Inspector::Layer: layerInspector(app); break;
         case Inspector::Cell: cellInspector(app); break;
         case Inspector::Media: mediaInspector(app); break;
-        case Inspector::Output: outputInspector(app); break;
-        case Inspector::Interaction: interactionInspector(app); break;
-        case Inspector::Project: projectInspector(app); break;
-        case Inspector::Led: ledInspector(app); break;
+        default: break;
         }
         ImGui::EndChild();
         ImGui::EndTabItem();

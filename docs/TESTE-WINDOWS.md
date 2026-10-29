@@ -13,7 +13,7 @@ um Arduino e o NDI Tools.
 
 ## 0. Instalação e diagnóstico
 
-- [ ] 0.1 Instale com `Lumen-0.10.4-setup.exe` (ou descompacte o .zip). O atalho
+- [ ] 0.1 Instale com `Lumen-0.10.5-setup.exe` (ou descompacte o .zip). O atalho
       aparece no Menu Iniciar, e arquivos `.lumen` abrem com o Lumen.
 - [ ] 0.2 Menu Iniciar → *Lumen (console de diagnóstico)*. O relatório abre no Bloco
       de Notas (também fica em `%APPDATA%\Lumen\diagnostico.txt`).
@@ -181,6 +181,11 @@ um Arduino e o NDI Tools.
 - [ ] 13.4 Menus Lista, Quadro, Saídas e Janela: cada item faz o que diz.
 - [ ] 13.5 *Saídas... → Mapping → Slice*: ligar *warping* e arrastar um canto deforma a
       imagem do projetor; desligar volta ao retângulo.
+- [ ] 13.7 Janela → Propriedades das saídas / Interação / Projeto abrem como janelas; o painel
+      da direita fica com Layer, Célula e Mídia.
+- [ ] 13.8 Painel Tempo: arrastar a divisa à esquerda dele o alarga; clicar ou arrastar na
+      linha do tempo leva o vídeo (com som) para aquele ponto.
+- [ ] 13.9 Com um vídeo em loop tocando, mudar *No fim* para *Congelar*: ele para no último quadro.
 - [ ] 13.6 LED escondido: sem botão LED, sem aba LED; *Janela → LED mapping* mostra tudo de volta.
 
 ## Como relatar

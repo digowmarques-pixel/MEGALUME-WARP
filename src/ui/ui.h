@@ -71,6 +71,9 @@ private:
   int syncRoleEdit_ = 0, syncPortEdit_ = 7400;
   char syncPeerEdit_[128] = {};
   bool showDiag_ = false;
+  // Setup panels in their own windows (Janela menu): Saídas, Interação, Projeto, LED.
+  bool panelOpen_[4] = {};
+  void panelWindows(App &app);
   std::string diagReport_;
   void relinkDialog(App &app);
   void toolbar(App &app);
@@ -120,6 +123,7 @@ private:
   bool tlDragFlag_ = false;
   float tlDragMin_ = 0, tlDragMax_ = 1;
   int dashZoom_ = 1;      // 0 small, 1 medium, 2 large cells
+  float timeW_ = 380;   // Tempo panel width (drag its left edge); machine setting
   int timeCounter_ = 2; // Tempo panel clocks: 0 none, 1 elapsed, 2 remaining (like Millumin)
   // Tempo panel beside the dashboard: one row per layer, at the screen rows of the table.
   struct TimeRow { int layerId; float y1, y2; };

@@ -101,6 +101,8 @@ public:
   // Pause: the media on air in the layer holds its picture and sound (not for
   // live inputs). Launching a cell plays again from the start.
   void pauseLayer(int layerId, bool paused);
+  // Jumps the media on air in the layer to `seconds` (files and generated media).
+  void seekLayer(int layerId, double seconds);
   bool layerPaused(int layerId) const;
   void stopAll(float fade = -1);
   int activeColumn() const { return activeColumn_; }
