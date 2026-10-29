@@ -1522,7 +1522,7 @@ void Ui::dashboard(App &app) {
   popStop();
   ImGui::SetItemTooltip("%s", T("Parar tudo"));
 
-  int removeLayer = -1, moveLayer = -1, moveLayerDir = 0;
+  int removeLayer = -1, moveLayer = -1, moveLayerDir = 0, layerFrom = -1, layerTo = -1;
   for (size_t li = 0; li < p.layers.size(); ++li) {
     Layer &l = p.layers[li];
     ImGui::TableNextRow(0, cellH);
@@ -1542,6 +1542,29 @@ void Ui::dashboard(App &app) {
       app.sel.slice = 0;
       app.sel.inspector = Inspector::Layer;
       if (workspace.viewOutputId < 0) workspace.viewCanvas = l.canvasId;
+    }
+    ImGui::SetItemTooltip("%s", T("Arraste para cima ou para baixo para mudar a ordem (a de cima fica na frente)"));
+    // Drag a layer by its name to another row: the layers above are drawn in front.
+    if (!locked && ImGui::BeginDragDropSource()) {
+      int from = int(li);
+      ImGui::SetDragDropPayload("LUMEN_LAYER", &from, sizeof(from));
+      ImGui::TextUnformatted(l.name.c_str());
+      ImGui::EndDragDropSource();
+    }
+    if (!locked && ImGui::BeginDragDropTarget()) {
+      if (const ImGuiPayload *pl = ImGui::AcceptDragDropPayload("LUMEN_LAYER", ImGuiDragDropFlags_AcceptNoDrawDefaultRect)) {
+        layerFrom = *static_cast<const int *>(pl->Data);
+        layerTo = int(li);
+      }
+      if (const ImGuiPayload *pl = ImGui::GetDragDropPayload(); pl && pl->IsDataType("LUMEN_LAYER")) {
+        int from = *static_cast<const int *>(pl->Data);
+        if (from != int(li)) { // yellow line where it will go
+          ImVec2 a = ImGui::GetItemRectMin(), b = ImGui::GetItemRectMax();
+          float y = from > int(li) ? a.y - 2 : b.y + 2;
+          ImGui::GetWindowDrawList()->AddLine({a.x - 30, y}, {b.x, y}, kAccentU32, 3);
+        }
+      }
+      ImGui::EndDragDropTarget();
     }
     // Explicit id: the row's label holds the name being typed, so an id taken from it
     // would change at each key, close the menu and send the next keys to the shortcuts.
@@ -1715,6 +1738,12 @@ void Ui::dashboard(App &app) {
   }
   if (moveLayer >= 0) {
     std::swap(p.layers[size_t(moveLayer)], p.layers[size_t(moveLayer + moveLayerDir)]);
+    app.edited();
+  }
+  if (layerFrom >= 0 && layerFrom != layerTo && layerFrom < int(p.layers.size()) && layerTo < int(p.layers.size())) {
+    Layer moved = std::move(p.layers[size_t(layerFrom)]);
+    p.layers.erase(p.layers.begin() + layerFrom);
+    p.layers.insert(p.layers.begin() + layerTo, std::move(moved));
     app.edited();
   }
 }

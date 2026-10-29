@@ -13,7 +13,7 @@ um Arduino e o NDI Tools.
 
 ## 0. Instalação e diagnóstico
 
-- [ ] 0.1 Instale com `Lumen-0.10.14-setup.exe` (ou descompacte o .zip). O atalho
+- [ ] 0.1 Instale com `Lumen-0.10.15-setup.exe` (ou descompacte o .zip). O atalho
       aparece no Menu Iniciar, e arquivos `.lumen` abrem com o Lumen.
 - [ ] 0.2 Menu Iniciar → *Lumen (console de diagnóstico)*. O relatório abre no Bloco
       de Notas (também fica em `%APPDATA%\Lumen\diagnostico.txt`).
@@ -212,6 +212,8 @@ um Arduino e o NDI Tools.
       cima vira duas linhas.
 - [ ] 13.23 Ponha um vídeo em pé (1080×1920) num canvas 16:9: ele aparece inteiro, sem esticar,
       com as laterais transparentes. Em Layer → Proporção, teste Preencher e Esticar.
+- [ ] 13.24 Com 2 layers, arraste o nome da de cima para baixo da outra: a ordem troca, as
+      células vão junto e a imagem que estava atrás passa para a frente.
 - [ ] 13.6 LED escondido: sem botão LED, sem aba LED; *Janela → LED mapping* mostra tudo de volta.
 
 ## Como relatar

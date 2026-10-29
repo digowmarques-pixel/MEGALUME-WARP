@@ -95,6 +95,10 @@ Ordem pensada para **videomapping** e **instalações interativas**.
 - *Seek* preciso de vídeo e áudio (também por OSC: `/lumen/layer/<l>/time`)
 - Testes de integração no CI (`scripts/test-integration.sh`)
 
+## ✅ v0.10.15
+- Ordem das layers: **arraste o nome da layer** no dashboard para cima ou para baixo (uma
+  linha amarela mostra onde ela entra). A de cima fica na frente; as células vão junto
+
 ## ✅ v0.10.14
 - Painéis estreitos não sobrepõem mais nada: os botões da Biblioteca, do Dashboard e do
   Workspace descem para a linha de baixo, as dicas são cortadas com "..." (texto inteiro ao

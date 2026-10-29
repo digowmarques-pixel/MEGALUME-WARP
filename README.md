@@ -100,7 +100,7 @@ código compila para Windows: `./scripts/check-windows-mingw.sh`.
 O instalador (NSIS, também roda no Linux com `sudo apt install nsis`):
 
 ```bash
-cd installer && makensis -DVERSION=0.10.14 -DSRCDIR=../build-mingw/Lumen -DOUTFILE=../Lumen-0.10.14-setup.exe lumen.nsi
+cd installer && makensis -DVERSION=0.10.15 -DSRCDIR=../build-mingw/Lumen -DOUTFILE=../Lumen-0.10.15-setup.exe lumen.nsi
 ```
 
 ## Compilar no Linux (desenvolvimento)
