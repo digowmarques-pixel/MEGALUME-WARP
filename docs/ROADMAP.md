@@ -95,6 +95,9 @@ Ordem pensada para **videomapping** e **instalações interativas**.
 - *Seek* preciso de vídeo e áudio (também por OSC: `/lumen/layer/<l>/time`)
 - Testes de integração no CI (`scripts/test-integration.sh`)
 
+## ✅ v0.10.7
+- As seções das propriedades da layer começam fechadas
+
 ## ✅ v0.10.6
 - **Máscaras** como no Millumin: lista com mostrar / esconder em cada uma e os botões
   + (quadrada, redonda, triangular, vazia), ••• (ordem, duplicar, SVG) e −

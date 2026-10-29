@@ -2894,7 +2894,7 @@ void Ui::layerInspector(App &app) {
   if (ImGui::Checkbox(T("Visível"), &l->visible)) app.edited();
 
   // Sections like Millumin's: Layer, Mapping, Effects, Masks, Current Media.
-  if (ImGui::CollapsingHeader(T("Layer##sec"), ImGuiTreeNodeFlags_DefaultOpen)) {
+  if (ImGui::CollapsingHeader(T("Layer##sec"))) {
     int blend = int(l->blend);
     if (ImGui::Combo(T("Blend"), &blend, TZ("Normal\0Adição\0Multiplicar\0Tela (screen)\0"
                                       "Matte alpha (máscara da layer de baixo)\0Matte alpha invertido\0"
@@ -2936,9 +2936,9 @@ void Ui::layerInspector(App &app) {
   if (isMatte(l->blend))
     ImGui::TextColored({1.0f, 0.77f, 0.0f, 1}, "%s", T("Matte: esta layer não aparece; ela recorta a layer logo abaixo."));
 
-  if (ImGui::CollapsingHeader(T("Mapping##sec"), ImGuiTreeNodeFlags_DefaultOpen)) mappingSection(app, *l, CW, CH);
+  if (ImGui::CollapsingHeader(T("Mapping##sec"))) mappingSection(app, *l, CW, CH);
 
-  if (ImGui::CollapsingHeader(T("Efeitos##sec"), ImGuiTreeNodeFlags_DefaultOpen)) {
+  if (ImGui::CollapsingHeader(T("Efeitos##sec"))) {
     if (ImGui::TreeNodeEx(T("Ajuste de cor"), ImGuiTreeNodeFlags_DefaultOpen)) {
       if (ImGui::SliderFloat(T("Brilho"), &l->fx.brightness, -1, 1)) app.edited();
       if (ImGui::SliderFloat(T("Contraste"), &l->fx.contrast, 0, 2)) app.edited();
@@ -2955,11 +2955,11 @@ void Ui::layerInspector(App &app) {
     effectsUi(app, *l);
   }
 
-  if (ImGui::CollapsingHeader(T("Máscaras"), ImGuiTreeNodeFlags_DefaultOpen)) {
+  if (ImGui::CollapsingHeader(T("Máscaras"))) {
     maskList(app, l->masks, app.sel.mask, app.sel.maskPoint, {1, 1}, {CW, CH}, false);
   }
 
-  if (ImGui::CollapsingHeader(T("Mídia atual"), ImGuiTreeNodeFlags_DefaultOpen)) {
+  if (ImGui::CollapsingHeader(T("Mídia atual"))) {
     const LayerState *st = app.engine.layerState(l->id);
     const MediaItem *m = st && st->current ? p.media(st->current->mediaId()) : nullptr;
     if (!m) {
