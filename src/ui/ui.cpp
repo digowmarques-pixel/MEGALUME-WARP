@@ -244,6 +244,7 @@ const char *mediaTypeLabel(MediaType t) {
 } // namespace
 
 void Ui::setup() {
+  workspace.showLed = machineSettingInt("showLed", 0) != 0;
   ImGuiIO &io = ImGui::GetIO();
   // No keyboard navigation: Space must always mean GO, never "press focused button".
   io.ConfigFlags &= ~ImGuiConfigFlags_NavEnableKeyboard;
@@ -679,7 +680,15 @@ void Ui::menuBar(App &app) {
                         {T("Saídas"), Inspector::Output}, {T("LED"), Inspector::Led},
                         {T("Interação (OSC, MIDI, DMX, serial)"), Inspector::Interaction}, {T("Projeto"), Inspector::Project}};
     for (auto &pn : panels)
-      if (ImGui::MenuItem(pn.name, nullptr, app.sel.inspector == pn.id)) app.sel.inspector = pn.id;
+      if ((pn.id != Inspector::Led || workspace.showLed) && ImGui::MenuItem(pn.name, nullptr, app.sel.inspector == pn.id))
+        app.sel.inspector = pn.id;
+    ImGui::Separator();
+    if (ImGui::MenuItem(T("LED mapping (fitas e matrizes)"), nullptr, &workspace.showLed)) {
+      setMachineSetting("showLed", workspace.showLed ? 1 : 0);
+      if (!workspace.showLed && app.sel.inspector == Inspector::Led) app.sel.inspector = Inspector::Layer;
+    }
+    ImGui::SetItemTooltip("%s", T("Mostra a ferramenta LED, a aba LED e as fitas no workspace. As fitas do "
+                                  "projeto continuam funcionando mesmo escondidas."));
     ImGui::Separator();
     if (ImGui::MenuItem(T("Diagnóstico do sistema..."))) {
       diagReport_ = app.diagnosticReport();
@@ -820,7 +829,7 @@ void Ui::toolbar(App &app) {
   const char *keys[] = {"V", "M", "G", "K", "L"};
   ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, {3, 6});
   ImGui::BeginDisabled(app.showLocked);
-  for (int i = 0; i < 5; ++i) {
+  for (int i = 0; i < (workspace.showLed ? 5 : 4); ++i) { // LED only when LED mapping is shown
     bool active = int(workspace.tool) == i;
     if (active) pushPrimary();
     if (ImGui::Button(tools[i], {0, 30})) workspace.tool = Tool(i);
@@ -1631,11 +1640,13 @@ void Ui::inspector(App &app) {
   const Tab tabs[] = {{T("Layer"), Inspector::Layer},   {T("Célula"), Inspector::Cell},
                       {T("Mídia"), Inspector::Media},   {T("Saídas"), Inspector::Output}, {T("LED"), Inspector::Led},
                       {T("Interação"), Inspector::Interaction}, {T("Projeto"), Inspector::Project}};
+  if (app.sel.inspector == Inspector::Led && !workspace.showLed) app.sel.inspector = Inspector::Layer;
   static Inspector shown = Inspector::Layer;
   bool forced = shown != app.sel.inspector;
   if (ImGui::BeginTabBar("##insp")) {
     for (auto &t : tabs) {
       ImGuiTabItemFlags f = (forced && app.sel.inspector == t.id) ? ImGuiTabItemFlags_SetSelected : 0;
+      if (t.id == Inspector::Led && !workspace.showLed) continue; // hidden: Janela > LED mapping
       if (ImGui::BeginTabItem(t.name, nullptr, f)) {
         if (!forced) app.sel.inspector = t.id;
         ImGui::BeginChild("##inspbody");

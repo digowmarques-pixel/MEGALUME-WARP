@@ -501,6 +501,10 @@ void Workspace::drawCanvasOverlay(App &app, ImDrawList *dl, ImVec2 origin, float
 }
 
 bool Workspace::drawLedOverlay(App &app, ImDrawList *dl, ImVec2 origin, float scale) {
+  if (!showLed) {
+    if (tool == Tool::Led) tool = Tool::Select;
+    return false;
+  }
   Project &p = app.engine.project;
   ImGuiIO &io = ImGui::GetIO();
   auto toScreen = [&](Vec2 v) { return ImVec2{origin.x + v.x * scale, origin.y + v.y * scale}; };
@@ -684,7 +688,7 @@ void Workspace::handleShortcuts(App &app) {
   if (ImGui::IsKeyPressed(ImGuiKey_M, false)) tool = Tool::Perspective;
   if (ImGui::IsKeyPressed(ImGuiKey_G, false)) tool = Tool::Mesh;
   if (ImGui::IsKeyPressed(ImGuiKey_K, false)) tool = Tool::Mask;
-  if (ImGui::IsKeyPressed(ImGuiKey_L, false)) tool = Tool::Led;
+  if (showLed && ImGui::IsKeyPressed(ImGuiKey_L, false)) tool = Tool::Led;
   if (ImGui::IsKeyPressed(ImGuiKey_F, false)) fitRequested = true;
 
   Project &p = app.engine.project;

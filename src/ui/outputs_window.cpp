@@ -257,6 +257,19 @@ void Ui::outputsWindow(App &app) {
     if (mappingTab_ == 0) {
       // Slice: the portion of the canvas this projector shows.
       ImGui::TextDisabled("%s", T("A fatia (slice) é a parte do canvas usada por este projetor. Arraste o retângulo ou os cantos."));
+      // Warping (Millumin's): the slice is no longer a rectangle, its points move
+      // over the canvas (the input side of this output's mesh).
+      bool sliceWarp = !sel->warp.uvMesh.empty() && !sel->warp.uvIsIdentity();
+      static bool sliceWarpOn = false;
+      static int sliceWarpFor = -1; // per output: another one starts from its own state
+      if (sliceWarpFor != sel->id) { sliceWarpFor = sel->id; sliceWarpOn = false; }
+      sliceWarpOn = sliceWarpOn || sliceWarp;
+      if (ImGui::Checkbox(T("warping##slice"), &sliceWarpOn)) {
+        if (!sliceWarpOn) sel->warp.uvMesh.clear(); // back to the rectangle
+        app.edited();
+      }
+      ImGui::SetItemTooltip("%s", T("Deforma a fatia: arraste os pontos sobre a imagem do canvas. "
+                                    "Desligar volta ao retângulo."));
       ImVec2 av = ImGui::GetContentRegionAvail();
       av.y -= ImGui::GetFrameHeightWithSpacing() * 1.5f;
       float scw = float(p.canvasWidth(sel->canvasId)), sch = float(p.canvasHeight(sel->canvasId));
@@ -279,8 +292,36 @@ void Ui::outputsWindow(App &app) {
       dl->AddRect(ra, rb, IM_COL32(255, 196, 0, 255), 0, 0, 2);
       ImGui::InvisibleButton("##slice", {o1.x - o0.x, o1.y - o0.y});
       static int dragCorner = -2; // -2 none, -1 move, 0 tl, 1 br
+      static int dragPoint = -1;  // warping: mesh point being dragged
       ImGuiIO &io = ImGui::GetIO();
-      if (ImGui::IsItemClicked()) {
+      Warp &w = sel->warp;
+      auto uvScreen = [&](Vec2 uv) { return ImVec2{ra.x + uv.x * (rb.x - ra.x), ra.y + uv.y * (rb.y - ra.y)}; };
+      if (sliceWarpOn) {
+        w.ensureUvMesh();
+        for (int r = 0; r < w.meshRows; ++r)
+          for (int c = 0; c < w.meshCols; ++c) {
+            if (c + 1 < w.meshCols) dl->AddLine(uvScreen(w.uvAt(c, r)), uvScreen(w.uvAt(c + 1, r)), IM_COL32(255, 120, 0, 255), 2);
+            if (r + 1 < w.meshRows) dl->AddLine(uvScreen(w.uvAt(c, r)), uvScreen(w.uvAt(c, r + 1)), IM_COL32(255, 120, 0, 255), 2);
+          }
+        for (auto &uv : w.uvMesh) dl->AddCircle(uvScreen(uv), 7, IM_COL32(255, 255, 255, 255), 0, 2);
+        if (ImGui::IsItemClicked()) {
+          dragPoint = -1;
+          float best = 12;
+          for (size_t i = 0; i < w.uvMesh.size(); ++i) {
+            ImVec2 q = uvScreen(w.uvMesh[i]);
+            float d = std::hypot(io.MousePos.x - q.x, io.MousePos.y - q.y);
+            if (d < best) { best = d; dragPoint = int(i); }
+          }
+        }
+        if (!ImGui::IsMouseDown(ImGuiMouseButton_Left)) dragPoint = -1;
+        if (dragPoint >= 0 && dragPoint < int(w.uvMesh.size()) && ImGui::IsItemActive()) {
+          float sw = std::max(1.0f, rb.x - ra.x), sh = std::max(1.0f, rb.y - ra.y);
+          w.uvMesh[size_t(dragPoint)] = {std::clamp((io.MousePos.x - ra.x) / sw, 0.0f, 1.0f),
+                                         std::clamp((io.MousePos.y - ra.y) / sh, 0.0f, 1.0f)};
+          app.edited();
+        }
+      }
+      if (ImGui::IsItemClicked() && dragPoint < 0) {
         auto near = [&](ImVec2 q) { return std::hypot(io.MousePos.x - q.x, io.MousePos.y - q.y) < 12; };
         dragCorner = near(ra) ? 0 : near(rb) ? 1
                    : (io.MousePos.x >= ra.x && io.MousePos.x <= rb.x && io.MousePos.y >= ra.y && io.MousePos.y <= rb.y) ? -1 : -2;

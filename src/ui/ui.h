@@ -25,6 +25,7 @@ class Workspace {
 public:
   void draw(App &app, ImVec2 size);
   Tool tool = Tool::Select;
+  bool showLed = false; // LED mapping tools shown (Janela > LED mapping)
   int viewOutputId = -1; // -1: canvas view, otherwise preview of that output
   int viewCanvas = 0;    // canvas shown when viewOutputId < 0
   bool fitRequested = false;

@@ -3,6 +3,10 @@
 O Lumen lê os pixels do canvas e os converte em DMX. Assim, a fita ou matriz de LED
 "toca" o mesmo conteúdo do vídeo, seguindo as colunas, os fades e a interação.
 
+> As ferramentas de LED ficam escondidas para não poluir a tela: ligue em
+> *Janela → LED mapping (fitas e matrizes)*. Escondidas, as fitas do projeto
+> continuam funcionando.
+
 ## Hardware
 
 ```

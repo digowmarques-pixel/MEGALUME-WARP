@@ -43,7 +43,7 @@ ao lado de cada projetor ligam, desligam e fecham o obturador, e mostram o estad
 Ative o PJLink no menu de rede do projetor (Epson: *Rede → Protocolo de controle*;
 Panasonic: *Rede → PJLink*). Sem senha, deixe o campo vazio.
 
-**DMX**: o comando usa os controladores de *Propriedades → LED* (Art-Net / sACN) do
+**DMX**: o comando usa os controladores de *Propriedades → LED* (Art-Net / sACN; a aba aparece com *Janela → LED mapping*) do
 mesmo protocolo; sem nenhum, vai em broadcast (Art-Net) ou multicast (sACN).
 Cada universo guarda o último valor de cada canal, então `dmx 0 1 255` seguido de
 `dmx 0 2 128` mantém o canal 1 em 255. Os valores são reenviados uma vez por segundo

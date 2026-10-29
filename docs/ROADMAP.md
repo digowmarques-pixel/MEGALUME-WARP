@@ -95,6 +95,12 @@ Ordem pensada para **videomapping** e **instalações interativas**.
 - *Seek* preciso de vídeo e áudio (também por OSC: `/lumen/layer/<l>/time`)
 - Testes de integração no CI (`scripts/test-integration.sh`)
 
+## ✅ v0.10.4
+- Saídas → Slice: **warping** da fatia (os pontos andam sobre a imagem do canvas), como
+  no Millumin
+- LED mapping escondido por padrão (*Janela → LED mapping* mostra a ferramenta, a aba e
+  as fitas)
+
 ## ✅ v0.10.3 (mais parecido com o Millumin)
 - **Propriedades da layer em seções**: Layer, Mapping, Efeitos, Máscaras e Mídia atual
 - **Mapping**: liga/desliga a deformação (*warping*) com a divisão da malha e uma prévia
