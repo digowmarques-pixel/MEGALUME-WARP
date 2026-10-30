@@ -95,6 +95,15 @@ Ordem pensada para **videomapping** e **instalações interativas**.
 - *Seek* preciso de vídeo e áudio (também por OSC: `/lumen/layer/<l>/time`)
 - Testes de integração no CI (`scripts/test-integration.sh`)
 
+## ✅ v0.10.16
+- Ferramenta **Escala** (tecla E): caixa amarela com 8 alças em volta da fatia; os cantos mudam
+  o tamanho mantendo a proporção (Shift: livre), os lados esticam, o meio move
+- **Ímã** (botão na barra): ao mover ou mudar o tamanho, a fatia encaixa nas bordas e no centro
+  do canvas, das saídas e das outras fatias, com uma linha-guia amarela. Ctrl inverte na hora
+- Workspace abre **enquadrado** e continua enquadrado enquanto os painéis mudam de tamanho
+  (até você dar zoom ou mover a vista)
+- Fundo do programa **mais claro** (cinza médio-escuro em vez de preto)
+
 ## ✅ v0.10.15
 - Ordem das layers: **arraste o nome da layer** no dashboard para cima ou para baixo (uma
   linha amarela mostra onde ela entra). A de cima fica na frente; as células vão junto

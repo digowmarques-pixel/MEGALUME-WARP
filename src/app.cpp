@@ -1,4 +1,5 @@
 #include "app.h"
+#include "ui/palette.h"
 
 #include "gl/gl.h"
 #include "platform/platform.h"
@@ -720,7 +721,7 @@ int App::run(const Options &opts) {
     int fbw, fbh;
     glfwGetFramebufferSize(window, &fbw, &fbh);
     glViewport(0, 0, fbw, fbh);
-    glClearColor(0, 0, 0, 1); // true black between the panels
+    glClearColor(pal::kBackdrop[0], pal::kBackdrop[1], pal::kBackdrop[2], 1); // between the panels
     glClear(GL_COLOR_BUFFER_BIT);
     ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
 

@@ -266,6 +266,7 @@ const char *mediaTypeLabel(MediaType t) {
 void Ui::setup() {
   timeW_ = float(machineSettingInt("timePanelW", 380));
   workspace.showLed = machineSettingInt("showLed", 0) != 0;
+  workspace.snap = machineSettingInt("snap", 1) != 0;
   ImGuiIO &io = ImGui::GetIO();
   // No keyboard navigation: Space must always mean GO, never "press focused button".
   io.ConfigFlags &= ~ImGuiConfigFlags_NavEnableKeyboard;
@@ -348,29 +349,31 @@ void Ui::setup() {
   s.WindowTitleAlign = {0.0f, 0.5f};
   s.SelectableTextAlign = {0.0f, 0.5f};
 
-  // True black behind, the panels a very dark grey, few lines: the colours stand out.
-  const ImVec4 black{0, 0, 0, 1}, panel{0.07f, 0.07f, 0.075f, 1}, inset{0.05f, 0.05f, 0.055f, 1};
-  const ImVec4 frame{0.13f, 0.13f, 0.14f, 1}, frameHi{0.18f, 0.18f, 0.195f, 1}, line{0.14f, 0.14f, 0.15f, 1};
+  // Mid-dark greys (lighter than black, easier on the eyes for long sessions), few
+  // lines: the yellow and the colours per kind still stand out.
+  const ImVec4 black{pal::kBackdrop[0], pal::kBackdrop[1], pal::kBackdrop[2], 1}, panel{0.215f, 0.215f, 0.225f, 1},
+      inset{0.185f, 0.185f, 0.195f, 1};
+  const ImVec4 frame{0.29f, 0.29f, 0.30f, 1}, frameHi{0.35f, 0.35f, 0.365f, 1}, line{0.29f, 0.29f, 0.30f, 1};
   const ImVec4 y = kAccent;
   auto ya = [&](float a) { return ImVec4(y.x, y.y, y.z, a); };
   ImVec4 *c = s.Colors;
   c[ImGuiCol_Text] = {0.93f, 0.93f, 0.92f, 1};
-  c[ImGuiCol_TextDisabled] = {0.52f, 0.52f, 0.5f, 1};
+  c[ImGuiCol_TextDisabled] = {0.62f, 0.62f, 0.6f, 1};
   c[ImGuiCol_WindowBg] = panel;
   c[ImGuiCol_ChildBg] = inset;
-  c[ImGuiCol_PopupBg] = {0.1f, 0.1f, 0.105f, 0.98f};
+  c[ImGuiCol_PopupBg] = {0.24f, 0.24f, 0.25f, 0.98f};
   c[ImGuiCol_Border] = line;
   c[ImGuiCol_BorderShadow] = {0, 0, 0, 0};
   c[ImGuiCol_MenuBarBg] = black;
   c[ImGuiCol_TitleBg] = c[ImGuiCol_TitleBgActive] = c[ImGuiCol_TitleBgCollapsed] = panel;
   c[ImGuiCol_FrameBg] = frame;
   c[ImGuiCol_FrameBgHovered] = frameHi;
-  c[ImGuiCol_FrameBgActive] = {0.23f, 0.22f, 0.18f, 1};
+  c[ImGuiCol_FrameBgActive] = {0.38f, 0.36f, 0.28f, 1};
   c[ImGuiCol_Button] = frame;
   c[ImGuiCol_ButtonHovered] = frameHi;
   c[ImGuiCol_ButtonActive] = ya(0.85f);
-  c[ImGuiCol_Header] = {0.16f, 0.16f, 0.17f, 1};
-  c[ImGuiCol_HeaderHovered] = {0.21f, 0.21f, 0.22f, 1};
+  c[ImGuiCol_Header] = {0.27f, 0.27f, 0.28f, 1};
+  c[ImGuiCol_HeaderHovered] = {0.33f, 0.33f, 0.345f, 1};
   c[ImGuiCol_HeaderActive] = ya(0.35f);
   c[ImGuiCol_CheckMark] = y;
   c[ImGuiCol_SliderGrab] = y;
@@ -388,12 +391,12 @@ void Ui::setup() {
   c[ImGuiCol_TabDimmed] = inset;
   c[ImGuiCol_TabDimmedSelected] = frame;
   c[ImGuiCol_ScrollbarBg] = {0, 0, 0, 0};
-  c[ImGuiCol_ScrollbarGrab] = {0.22f, 0.22f, 0.23f, 1};
-  c[ImGuiCol_ScrollbarGrabHovered] = {0.3f, 0.3f, 0.31f, 1};
+  c[ImGuiCol_ScrollbarGrab] = {0.36f, 0.36f, 0.37f, 1};
+  c[ImGuiCol_ScrollbarGrabHovered] = {0.44f, 0.44f, 0.45f, 1};
   c[ImGuiCol_ScrollbarGrabActive] = ya(0.7f);
   c[ImGuiCol_TableHeaderBg] = inset;
   c[ImGuiCol_TableBorderStrong] = line;
-  c[ImGuiCol_TableBorderLight] = {0.15f, 0.15f, 0.16f, 1};
+  c[ImGuiCol_TableBorderLight] = {0.26f, 0.26f, 0.27f, 1};
   c[ImGuiCol_TableRowBg] = {0, 0, 0, 0};
   c[ImGuiCol_TableRowBgAlt] = {1, 1, 1, 0.015f};
   c[ImGuiCol_TextSelectedBg] = ya(0.35f);
@@ -904,18 +907,33 @@ void Ui::toolbar(App &app) {
     ImGui::SetItemTooltip("%s", T("Fader de transição manual. Leve a 0 para assumir a transição e suba até 1."));
   }
   ImGui::SameLine(0, 16);
-  const char *tools[] = {T("Selecionar"), T("Perspectiva"), T("Malha"), T("Máscara"), T("LED")};
-  const char *keys[] = {"V", "M", "G", "K", "L"};
+  struct ToolButton { Tool tool; const char *label, *key; };
+  const ToolButton tools[] = {{Tool::Select, T("Selecionar"), "V"}, {Tool::Scale, T("Escala"), "E"},
+                              {Tool::Perspective, T("Perspectiva"), "M"}, {Tool::Mesh, T("Malha"), "G"},
+                              {Tool::Mask, T("Máscara"), "K"}, {Tool::Led, T("LED"), "L"}};
   ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, {3, 6});
   ImGui::BeginDisabled(app.showLocked);
-  for (int i = 0; i < (workspace.showLed ? 5 : 4); ++i) { // LED only when LED mapping is shown
-    bool active = int(workspace.tool) == i;
+  for (const ToolButton &tb : tools) {
+    if (tb.tool == Tool::Led && !workspace.showLed) continue; // LED only when LED mapping is shown
+    bool active = workspace.tool == tb.tool;
     if (active) pushPrimary();
-    if (ImGui::Button(tools[i], {0, 30})) workspace.tool = Tool(i);
+    if (ImGui::Button(tb.label, {0, 30})) workspace.tool = tb.tool;
     if (active) popPrimary();
-    ImGui::SetItemTooltip(T("Tecla %s"), keys[i]);
+    ImGui::SetItemTooltip(T("Tecla %s"), tb.key);
     ImGui::SameLine();
   }
+  // Magnet: moved and scaled slices snap to edges and centres.
+  ImGui::SameLine(0, 8);
+  const bool snapOn = workspace.snap;
+  if (snapOn) pushPrimary();
+  if (ImGui::Button(T("Ímã"), {0, 30})) {
+    workspace.snap = !workspace.snap;
+    setMachineSetting("snap", workspace.snap ? 1 : 0);
+  }
+  if (snapOn) popPrimary();
+  ImGui::SetItemTooltip("%s", T("Ímã ligado: ao mover ou mudar o tamanho, as fatias encaixam nas bordas e no centro "
+                                "do canvas, das saídas e das outras fatias. Segure Ctrl para inverter."));
+  ImGui::SameLine();
   ImGui::EndDisabled();
   ImGui::PopStyleVar();
 

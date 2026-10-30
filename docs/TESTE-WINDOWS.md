@@ -13,7 +13,7 @@ um Arduino e o NDI Tools.
 
 ## 0. Instalação e diagnóstico
 
-- [ ] 0.1 Instale com `Lumen-0.10.15-setup.exe` (ou descompacte o .zip). O atalho
+- [ ] 0.1 Instale com `Lumen-0.10.16-setup.exe` (ou descompacte o .zip). O atalho
       aparece no Menu Iniciar, e arquivos `.lumen` abrem com o Lumen.
 - [ ] 0.2 Menu Iniciar → *Lumen (console de diagnóstico)*. O relatório abre no Bloco
       de Notas (também fica em `%APPDATA%\Lumen\diagnostico.txt`).
@@ -214,6 +214,11 @@ um Arduino e o NDI Tools.
       com as laterais transparentes. Em Layer → Proporção, teste Preencher e Esticar.
 - [ ] 13.24 Com 2 layers, arraste o nome da de cima para baixo da outra: a ordem troca, as
       células vão junto e a imagem que estava atrás passa para a frente.
+- [ ] 13.25 Ao abrir o programa, o canvas aparece inteiro no Workspace (enquadrado).
+- [ ] 13.26 Escala (E): arraste um canto da fatia: muda o tamanho sem deformar; com Shift, deforma;
+      os lados esticam numa direção só.
+- [ ] 13.27 Ímã ligado: arraste a fatia perto da borda da saída: ela encaixa. Com Ctrl, não encaixa.
+      Desligue o Ímã: não encaixa (e fica desligado ao reabrir).
 - [ ] 13.6 LED escondido: sem botão LED, sem aba LED; *Janela → LED mapping* mostra tudo de volta.
 
 ## Como relatar

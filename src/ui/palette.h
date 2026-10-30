@@ -15,6 +15,9 @@ constexpr Rgb kPurple{168, 120, 255}; // effects and timeline
 constexpr Rgb kOrange{255, 140, 40};  // warnings, the last seconds of a clip
 constexpr Rgb kRed{235, 64, 64};      // stop, blackout
 
+// Grey behind the panels (also the GL clear colour of the main window).
+constexpr float kBackdrop[3] = {0.155f, 0.155f, 0.165f};
+
 inline ImU32 u32(Rgb c, int alpha = 255) { return IM_COL32(c.r, c.g, c.b, alpha); }
 inline ImVec4 vec(Rgb c, float alpha = 1.0f) { return ImVec4(c.r / 255.0f, c.g / 255.0f, c.b / 255.0f, alpha); }
 

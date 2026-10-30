@@ -176,6 +176,67 @@ bool Workspace::editMask(Mask &m, int &point, const std::function<ImVec2(Vec2)> 
   return changed;
 }
 
+// ---- Magnet (snapping) for moving and scaling slices.
+struct Box {
+  float x0 = 1e30f, y0 = 1e30f, x1 = -1e30f, y1 = -1e30f;
+  void add(Vec2 v) { x0 = std::min(x0, v.x); y0 = std::min(y0, v.y); x1 = std::max(x1, v.x); y1 = std::max(y1, v.y); }
+};
+
+static Box warpBox(const Warp &w) {
+  Box b;
+  for (auto &v : warpOutline(w)) b.add(v);
+  return b;
+}
+
+// Edges and centres the magnet snaps to: the canvas, its outputs and the other
+// slices (all of the moving layer's when sliceIdx < 0, else all but that one).
+static void snapTargets(const Project &p, int canvas, int layerId, int sliceIdx, std::vector<float> &xs,
+                        std::vector<float> &ys) {
+  float W = float(p.canvasWidth(canvas)), H = float(p.canvasHeight(canvas));
+  xs = {0, W * 0.5f, W};
+  ys = {0, H * 0.5f, H};
+  for (auto &o : p.outputs)
+    if (o.enabled && o.canvasId == canvas) {
+      xs.insert(xs.end(), {o.srcX, o.srcX + o.srcW});
+      ys.insert(ys.end(), {o.srcY, o.srcY + o.srcH});
+    }
+  for (auto &l : p.layers) {
+    if (!l.visible || l.canvasId != canvas) continue;
+    for (size_t si = 0; si < l.slices.size(); ++si) {
+      if (l.id == layerId && (sliceIdx < 0 || int(si) == sliceIdx)) continue;
+      Box b = warpBox(transformedWarp(l, l.slices[si]));
+      xs.insert(xs.end(), {b.x0, (b.x0 + b.x1) * 0.5f, b.x1});
+      ys.insert(ys.end(), {b.y0, (b.y0 + b.y1) * 0.5f, b.y1});
+    }
+  }
+}
+
+// Adds to `shift` what puts the nearest of `features` (+ shift) on a target closer
+// than `thr`; returns that target (NAN: none).
+static float snapAxis(const std::vector<float> &features, const std::vector<float> &targets, float thr, float &shift) {
+  float best = thr, hit = NAN, adj = 0;
+  for (float f : features)
+    for (float t : targets) {
+      float d = std::fabs(t - (f + shift));
+      if (d < best) { best = d; hit = t; adj = t - (f + shift); }
+    }
+  shift += adj;
+  return hit;
+}
+
+void Workspace::beginWarpDrag(const Layer &l, Vec2 mouseCanvas) {
+  dragWarps_.clear();
+  for (auto &sl : l.slices) dragWarps_.push_back(sl.warp);
+  dragPos_ = l.transform.position;
+  dragMouse_ = mouseCanvas;
+}
+
+void Workspace::restoreWarpDrag(Layer &l) const {
+  if (dragWarps_.size() != l.slices.size()) return;
+  for (size_t i = 0; i < l.slices.size(); ++i) l.slices[i].warp = dragWarps_[i];
+  l.transform.position = dragPos_;
+}
+
 void Workspace::fit(ImVec2 avail, float cw, float ch) {
   zoom_ = std::min(avail.x / cw, avail.y / ch) * 0.94f;
   pan_ = {(avail.x - cw * zoom_) * 0.5f, (avail.y - ch * zoom_) * 0.5f};
@@ -223,7 +284,8 @@ void Workspace::draw(App &app, ImVec2 size) {
                          T("Arraste os cantos para encaixar a imagem na superfície"),
                          T("Arraste os pontos da malha para curvar a imagem · duplo clique adiciona linha e coluna"),
                          T("Clique adiciona ponto · arraste move · botão direito apaga · Alt+clique: curva · Shift+arraste: máscara inteira"),
-                         T("LED: clique numa fita · arraste os cantos ou o meio para posicionar sobre a imagem")};
+                         T("LED: clique numa fita · arraste os cantos ou o meio para posicionar sobre a imagem"),
+                         T("Arraste os cantos para mudar o tamanho (Shift: livre) · os lados esticam · o meio move")};
   if (float hw = ImGui::GetContentRegionAvail().x; hw > 60) {
     ImVec2 at = ImGui::GetCursorScreenPos();
     ImGui::Dummy({hw, ImGui::GetTextLineHeight()});
@@ -253,8 +315,13 @@ void Workspace::draw(App &app, ImVec2 size) {
       ch = float(viewOut->winH);
     }
   }
-  if (!fitted_ || refit || fitRequested) {
+  // The panels settle (docking, window size) in the first frames after opening: while
+  // the view was not zoomed or moved by hand, it follows the panel size and stays framed.
+  bool resized = autoFit_ && (std::fabs(avail.x - fitAvail_.x) > 0.5f || std::fabs(avail.y - fitAvail_.y) > 0.5f);
+  if (!fitted_ || refit || fitRequested || resized) {
+    if (refit || fitRequested) autoFit_ = true;
     fit(avail, cw, ch);
+    fitAvail_ = avail;
     fitted_ = true;
     fitRequested = false;
   }
@@ -274,6 +341,7 @@ void Workspace::draw(App &app, ImVec2 size) {
     ImVec2 m{io.MousePos.x - base.x, io.MousePos.y - base.y};
     float old = zoom_;
     zoom_ = std::clamp(zoom_ * std::pow(1.15f, io.MouseWheel), 0.02f, 20.0f);
+    autoFit_ = false;
     pan_.x = m.x - (m.x - pan_.x) * (zoom_ / old);
     pan_.y = m.y - (m.y - pan_.y) * (zoom_ / old);
   }
@@ -282,6 +350,7 @@ void Workspace::draw(App &app, ImVec2 size) {
   if (ImGui::IsItemActive() && panning) {
     pan_.x += io.MouseDelta.x;
     pan_.y += io.MouseDelta.y;
+    autoFit_ = false;
   }
 
   ImVec2 origin{base.x + pan_.x, base.y + pan_.y};
@@ -390,6 +459,37 @@ void Workspace::drawCanvasOverlay(App &app, ImDrawList *dl, ImVec2 origin, float
       dl->AddPolyline(sp.data(), int(sp.size()), col, ImDrawFlags_Closed, active ? 2.0f : 1.0f);
     }
 
+    // Snap guides of this frame (canvas units), drawn after the tools.
+    float guideX = NAN, guideY = NAN;
+    // Slice move (Shift: the whole layer), from where the drag started, with the magnet.
+    auto moveDrag = [&] {
+      Layer *l = p.layer(app.sel.layerId);
+      if (!l || dragWarps_.size() != l->slices.size() || !ImGui::IsMouseDragging(ImGuiMouseButton_Left, 0)) return;
+      const int si = io.KeyShift ? -1 : std::clamp(app.sel.slice, 0, int(l->slices.size()) - 1);
+      restoreWarpDrag(*l);
+      Vec2 d = mc - dragMouse_;
+      if (snap != io.KeyCtrl) {
+        Box b;
+        for (size_t k = 0; k < l->slices.size(); ++k)
+          if (si < 0 || int(k) == si) {
+            Box sb = warpBox(transformedWarp(*l, l->slices[k]));
+            b.add({sb.x0, sb.y0});
+            b.add({sb.x1, sb.y1});
+          }
+        std::vector<float> xs, ys;
+        snapTargets(p, viewCanvas, l->id, si, xs, ys);
+        float thr = 8 / scale;
+        guideX = snapAxis({b.x0, (b.x0 + b.x1) * 0.5f, b.x1}, xs, thr, d.x);
+        guideY = snapAxis({b.y0, (b.y0 + b.y1) * 0.5f, b.y1}, ys, thr, d.y);
+      }
+      Vec2 ld = layerDelta(*l, d);
+      keepInPlace(*l, [&] {
+        for (size_t k = 0; k < l->slices.size(); ++k)
+          if (si < 0 || int(k) == si) l->slices[k].warp.translate(ld);
+      });
+      app.edited();
+    };
+
     switch (tool) {
     case Tool::Led: break; // handled by drawLedOverlay
     case Tool::Select: {
@@ -401,20 +501,76 @@ void Workspace::drawCanvasOverlay(App &app, ImDrawList *dl, ImVec2 origin, float
           app.sel.inspector = Inspector::Layer;
           dragging_ = true;
           dragKind_ = 3;
+          beginWarpDrag(*hit, mc);
         }
       }
-      if (dragging_ && dragKind_ == 3 && ImGui::IsMouseDragging(ImGuiMouseButton_Left, 0)) {
-        Layer *l = p.layer(app.sel.layerId);
-        if (l && (io.MouseDelta.x != 0 || io.MouseDelta.y != 0)) {
-          Vec2 d = layerDelta(*l, {io.MouseDelta.x / scale, io.MouseDelta.y / scale});
-          keepInPlace(*l, [&] {
-            if (io.KeyShift)
-              for (auto &sl : l->slices) sl.warp.translate(d);
-            else
-              l->slices[size_t(std::clamp(app.sel.slice, 0, int(l->slices.size()) - 1))].warp.translate(d);
-          });
-          app.edited();
+      if (dragging_ && dragKind_ == 3) moveDrag();
+      break;
+    }
+    case Tool::Scale: {
+      // Box around the slice (in the layer's space, drawn through its transform):
+      // corners scale proportionally (Shift: free), sides stretch one way.
+      const Box lb = warpBox(slice.warp);
+      Slice box;
+      box.warp.setRect({lb.x0, lb.y0}, {lb.x1 - lb.x0, lb.y1 - lb.y0});
+      Warp bw = transformedWarp(*sel, box);
+      ImVec2 hs[8];
+      for (int k = 0; k < 4; ++k) hs[k] = toScreen(bw.corners[size_t(k)]);
+      for (int k = 0; k < 4; ++k)
+        hs[4 + k] = {(hs[k].x + hs[(k + 1) % 4].x) * 0.5f, (hs[k].y + hs[(k + 1) % 4].y) * 0.5f};
+      dl->AddPolyline(hs, 4, pal::u32(pal::kYellow), ImDrawFlags_Closed, 1.5f);
+      for (int k = 0; k < 8; ++k)
+        handle(dl, hs[k], pal::u32(pal::kYellow), dragging_ && dragKind_ == 8 && scaleHandle_ == k);
+      if (clicked) {
+        int best = -1;
+        float bestD = kPick;
+        for (int k = 0; k < 8; ++k)
+          if (float d = dist(mouse, hs[k]); d < bestD) { bestD = d; best = k; }
+        if (best >= 0) {
+          scaleHandle_ = best;
+          dragging_ = true;
+          dragKind_ = 8;
+          beginWarpDrag(*sel, mc);
+        } else if (pointInPolygon(mc, warpOutline(tw))) {
+          dragging_ = true;
+          dragKind_ = 3;
+          beginWarpDrag(*sel, mc);
+        } else {
+          int si = 0;
+          if (Layer *hit = pickLayer(mc, si)) {
+            app.sel.layerId = hit->id;
+            app.sel.slice = si;
+          }
         }
+      }
+      if (dragging_ && dragKind_ == 3) moveDrag();
+      if (dragging_ && dragKind_ == 8 && scaleHandle_ >= 0 && dragWarps_.size() == sel->slices.size()) {
+        restoreWarpDrag(*sel);
+        const int h = scaleHandle_;
+        const bool onX = h < 4 || h == 5 || h == 7, onY = h < 4 || h == 4 || h == 6;
+        Vec2 target = mc;
+        if (snap != io.KeyCtrl) { // the dragged handle snaps on its own axes
+          std::vector<float> xs, ys;
+          snapTargets(p, viewCanvas, sel->id, app.sel.slice, xs, ys);
+          float thr = 8 / scale, dx = 0, dy = 0;
+          if (onX) guideX = snapAxis({target.x}, xs, thr, dx);
+          if (onY) guideY = snapAxis({target.y}, ys, thr, dy);
+          target = {target.x + dx, target.y + dy};
+        }
+        Vec2 ml = untransform(*sel, target);
+        const Box lb = warpBox(slice.warp); // the box where the drag started (warps restored above)
+        const Vec2 hp[8] = {{lb.x0, lb.y0}, {lb.x1, lb.y0}, {lb.x1, lb.y1}, {lb.x0, lb.y1},
+                            {(lb.x0 + lb.x1) * 0.5f, lb.y0}, {lb.x1, (lb.y0 + lb.y1) * 0.5f},
+                            {(lb.x0 + lb.x1) * 0.5f, lb.y1}, {lb.x0, (lb.y0 + lb.y1) * 0.5f}};
+        const Vec2 anchor = h < 4 ? hp[(h + 2) % 4] : hp[4 + (h - 2) % 4], from = hp[h];
+        float fx = onX && std::fabs(from.x - anchor.x) > 1e-3f ? (ml.x - anchor.x) / (from.x - anchor.x) : 1;
+        float fy = onY && std::fabs(from.y - anchor.y) > 1e-3f ? (ml.y - anchor.y) / (from.y - anchor.y) : 1;
+        if (h < 4 && !io.KeyShift) fx = fy = std::fabs(fx - 1) > std::fabs(fy - 1) ? fx : fy;
+        auto notFlat = [](float f) { return std::fabs(f) < 0.02f ? (f < 0 ? -0.02f : 0.02f) : f; };
+        fx = notFlat(fx);
+        fy = notFlat(fy);
+        keepInPlace(*sel, [&] { slice.warp.scaleAround(anchor, fx, fy); });
+        app.edited();
       }
       break;
     }
@@ -508,6 +664,10 @@ void Workspace::drawCanvasOverlay(App &app, ImDrawList *dl, ImVec2 origin, float
       break;
     }
     }
+    // Magnet guides: a thin yellow line across the canvas where the edge snapped.
+    const float cW = float(p.canvasWidth(viewCanvas)), cH = float(p.canvasHeight(viewCanvas));
+    if (!std::isnan(guideX)) dl->AddLine(toScreen({guideX, 0}), toScreen({guideX, cH}), pal::u32(pal::kYellow, 200), 1);
+    if (!std::isnan(guideY)) dl->AddLine(toScreen({0, guideY}), toScreen({cW, guideY}), pal::u32(pal::kYellow, 200), 1);
   } else if (clicked) {
     int si = 0;
     if (Layer *hit = pickLayer(mc, si)) {
@@ -713,6 +873,7 @@ void Workspace::handleShortcuts(App &app) {
   ImGuiIO &io = ImGui::GetIO();
   if (io.WantTextInput || io.KeyCtrl) return;
   if (ImGui::IsKeyPressed(ImGuiKey_V, false)) tool = Tool::Select;
+  if (ImGui::IsKeyPressed(ImGuiKey_E, false)) tool = Tool::Scale;
   if (ImGui::IsKeyPressed(ImGuiKey_M, false)) tool = Tool::Perspective;
   if (ImGui::IsKeyPressed(ImGuiKey_G, false)) tool = Tool::Mesh;
   if (ImGui::IsKeyPressed(ImGuiKey_K, false)) tool = Tool::Mask;
@@ -769,7 +930,8 @@ void Workspace::handleShortcuts(App &app) {
   Slice &s = l->slices[size_t(std::clamp(app.sel.slice, 0, int(l->slices.size()) - 1))];
   switch (tool) {
   case Tool::Led: break;
-  case Tool::Select: keepInPlace(*l, [&] { s.warp.translate(layerDelta(*l, d)); }); break;
+  case Tool::Select:
+  case Tool::Scale: keepInPlace(*l, [&] { s.warp.translate(layerDelta(*l, d)); }); break;
   case Tool::Perspective:
     if (app.sel.corner < 0) return;
     keepInPlace(*l, [&] { s.warp.corners[size_t(app.sel.corner)] += layerDelta(*l, d); });

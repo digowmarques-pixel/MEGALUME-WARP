@@ -21,13 +21,16 @@ namespace lumen {
 class App;
 struct OutputConfig;
 
-enum class Tool { Select, Perspective, Mesh, Mask, Led };
+enum class Tool { Select, Perspective, Mesh, Mask, Led, Scale }; // values index the hints: only append
 
 class Workspace {
 public:
   void draw(App &app, ImVec2 size);
   Tool tool = Tool::Select;
   bool showLed = false; // LED mapping tools shown (Janela > LED mapping)
+  // Magnet: moved / scaled slices snap to the canvas, the outputs and the other
+  // slices (edges and centres). Ctrl held inverts it for the drag.
+  bool snap = true;
   // Masks: a click adds a point only when this is on (button in the Masks
   // section); off, clicks select and drag points. A mask with fewer than 3
   // points always takes new ones (it has no shape yet).
@@ -52,11 +55,20 @@ private:
   float zoom_ = 1;
   ImVec2 pan_{0, 0};
   bool fitted_ = false;
+  bool autoFit_ = true; // keeps refitting when the panel changes size, until you zoom or pan
+  ImVec2 fitAvail_{0, 0};
   int lastCanvas_ = 0, lastView_ = -2; // per workspace: the main one and the Outputs window's
   Vec2 dragLast_;                      // mask move: last mouse position in mask units
   bool dragging_ = false;
   ImVec2 dragStart_{0, 0};
-  int dragKind_ = 0; // 1 corner, 2 mesh, 3 slice move, 4 mask point, 5 mask move, 6 output corner, 7 output mesh
+  int dragKind_ = 0; // 1 corner, 2 mesh, 3 slice move, 4 mask point, 5 mask move, 6 output corner, 7 output mesh, 8 scale
+  // Move / scale drags start from these (restored each frame, then the whole
+  // movement applied): snapping never accumulates rounding.
+  std::vector<Warp> dragWarps_;
+  Vec2 dragPos_, dragMouse_;
+  int scaleHandle_ = -1; // 0-3 corners (TL TR BR BL), 4-7 sides (T R B L)
+  void beginWarpDrag(const Layer &l, Vec2 mouseCanvas);
+  void restoreWarpDrag(Layer &l) const;
   Framebuffer preview_;
 };
 

@@ -807,3 +807,6 @@
 {"Esticar", "Stretch"},
 {"Mídia com proporção diferente do canvas (ex.: vídeo em pé): encaixar mostra a imagem inteira com sobras transparentes; preencher cobre o canvas cortando as bordas; esticar deforma para cobrir tudo.", "Media with another proportion than the canvas (e.g. a vertical video): fit shows the whole image with transparent bars; fill covers the canvas, cropping the edges; stretch distorts it to cover everything."},
 {"Arraste para cima ou para baixo para mudar a ordem (a de cima fica na frente)", "Drag up or down to change the order (the top one is in front)"},
+{"Ímã", "Snap"},
+{"Ímã ligado: ao mover ou mudar o tamanho, as fatias encaixam nas bordas e no centro do canvas, das saídas e das outras fatias. Segure Ctrl para inverter.", "Snap on: when moving or resizing, slices snap to the edges and centre of the canvas, the outputs and the other slices. Hold Ctrl to invert."},
+{"Arraste os cantos para mudar o tamanho (Shift: livre) · os lados esticam · o meio move", "Drag the corners to resize (Shift: free) · the sides stretch · the middle moves"},
