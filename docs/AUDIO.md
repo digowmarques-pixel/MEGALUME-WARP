@@ -56,13 +56,38 @@ O LTC não passa pelo volume master (master em zero não corta o timecode) e seg
 relógio da placa: depois de um engasgo do computador ele se realinha à timeline em vez
 de ficar atrasado.
 
-## ASIO
+## ASIO®
 
-O Lumen ainda **não fala ASIO**. O SDK da Steinberg só pode ser usado sob a licença
-GPLv3 ou com um acordo com a Steinberg; isso precisa ser decidido antes de incluí-lo.
-Enquanto isso, o **modo exclusivo do WASAPI** dá latência parecida, e quase todas as
-interfaces profissionais têm driver WASAPI multicanal (Dante Virtual Soundcard
-também, no modo WDM).
+As versões do Lumen geradas com o **Steinberg ASIO SDK** saem direto pelos drivers ASIO
+das interfaces de áudio (Focusrite, RME, MOTU, Behringer, Dante Virtual Soundcard, ASIO4ALL...).
+
+- Em *Projeto → Áudio → Saída de áudio*, os drivers aparecem como **"ASIO: nome do driver"**.
+- O Lumen abre o driver a 48 kHz com **todas as saídas** (ou o número escolhido em *Canais*,
+  até 64). Cada layer escolhe as suas saídas em *Layer → Saída de áudio*, como antes.
+- O **tamanho do buffer** é o do próprio driver: botão **Painel do driver ASIO...** abre a janela
+  de configuração do fabricante. Quando você muda algo lá, o Lumen reabre a placa sozinho.
+- Se o driver não abrir (outro programa usando, não aceita 48 kHz), o Lumen avisa e volta para o
+  dispositivo padrão do Windows, sem parar o show.
+- O campo *Buffer (ms)* e o *Modo exclusivo* valem só para WASAPI.
+
+Sem ASIO, o **modo exclusivo do WASAPI** dá latência parecida, e quase todas as interfaces
+profissionais têm driver WASAPI multicanal.
+
+**Como gerar o Lumen com ASIO** (só na máquina que faz o instalador; o SDK é licenciado
+pela Steinberg à parte e **nunca vai para o repositório**): descompacte o SDK
+(steinberg.net/asiosdk) e passe a pasta dele:
+
+```
+FORCE=1 ASIO_SDK=/caminho/ASIOSDK ./scripts/build-windows-mingw.sh <ffmpeg> <glfw>   # MinGW
+cmake -B build -DLUMEN_ASIO_SDK=C:/caminho/ASIOSDK                                     # MSVC
+```
+
+O logo "ASIO compatible" do SDK é copiado para junto do programa (`asio-logo.png`) e aparece
+na configuração de áudio e em *Ajuda → Sobre o Lumen*, como pedem as regras da Steinberg.
+Antes de **distribuir** uma versão com ASIO é preciso ter o contrato de licença do ASIO SDK
+assinado pela Steinberg (veja `docs/ASIO-LICENCA.md`).
+
+ASIO is a registered trademark of Steinberg Media Technologies GmbH.
 
 ## Velocidade
 

@@ -112,8 +112,10 @@ public:
   float peak(int ch) const { return ch >= 0 && ch < kMaxOutputChannels ? peak_[ch].load() : 0.0f; }
 
   void callback(float *out, size_t frames); // called by the device thread
+  void asioControlPanel(); // the ASIO driver's own settings (buffer size...), when one is open
 
 private:
+  bool startMiniaudio(const std::string &deviceName, const AudioDeviceOptions &options);
   struct Impl;
   std::unique_ptr<Impl> impl_;
   std::mutex voicesMutex_;

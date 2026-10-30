@@ -1,4 +1,5 @@
 #include "media/audio.h"
+#include "media/asio_out.h"
 
 #define MINIAUDIO_IMPLEMENTATION
 #define MA_NO_DECODING
@@ -22,6 +23,7 @@ extern "C" {
 #endif
 
 #include <algorithm>
+#include <cstring>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -170,6 +172,7 @@ struct AudioEngine::Impl {
   ma_context context{};
   ma_device device{};
   bool hasContext = false, hasDevice = false;
+  AsioOutput asio; // used instead of miniaudio for "ASIO: ..." devices
 };
 
 static void dataCallback(ma_device *d, void *out, const void *, ma_uint32 frames) {
@@ -191,6 +194,7 @@ std::vector<std::string> AudioEngine::devices() {
   if (ma_context_get_devices(&ctx, &playback, &count, nullptr, nullptr) == MA_SUCCESS)
     for (ma_uint32 i = 0; i < count; ++i) names.emplace_back(playback[i].name);
   ma_context_uninit(&ctx);
+  for (auto &d : AsioOutput::drivers()) names.push_back(kAsioPrefix + d);
   return names;
 }
 
@@ -206,6 +210,38 @@ bool AudioEngine::start(const std::string &name, const AudioDeviceOptions &opt) 
   stop();
   error_.clear();
   silent_ = false;
+  exclusive_ = false;
+  if (name.rfind(kAsioPrefix, 0) == 0) {
+    // ASIO: the driver's own buffer size (set in its panel) and every output.
+    const int maxCh = opt.channels > 0 ? std::min(opt.channels, kMaxOutputChannels) : kMaxOutputChannels;
+    lastCallbackNs_ = steadyNs();
+    std::string err;
+    bool ok = impl_->asio.start(name.substr(std::strlen(kAsioPrefix)), kAudioRate, maxCh,
+                                [this](float *out, size_t frames, int ch) {
+                                  if (stride_.load() != ch) { // set before the first buffer
+                                    stride_ = ch;
+                                    channels_ = std::min(ch, kMaxOutputChannels);
+                                  }
+                                  callback(out, frames);
+                                },
+                                err);
+    if (ok) {
+      stride_ = impl_->asio.channels();
+      channels_ = std::min(stride_.load(), kMaxOutputChannels);
+      latencyMs_ = impl_->asio.latencyMs();
+      deviceName_ = name;
+      for (auto &p : peak_) p = 0;
+      running_ = true;
+      ++generation_;
+      return true;
+    }
+    error_ = err + "; usando o dispositivo padrão";
+    return startMiniaudio("", opt);
+  }
+  return startMiniaudio(name, opt);
+}
+
+bool AudioEngine::startMiniaudio(const std::string &name, const AudioDeviceOptions &opt) {
   auto tryInit = [&](const ma_backend *backends, ma_uint32 nb, bool exclusive) -> bool {
     if (ma_context_init(backends, nb, nullptr, &impl_->context) != MA_SUCCESS) return false;
     impl_->hasContext = true;
@@ -264,7 +300,6 @@ bool AudioEngine::start(const std::string &name, const AudioDeviceOptions &opt) 
     deviceName_ = impl_->device.playback.name;
     return true;
   };
-  exclusive_ = false;
   bool ok = false;
   if (opt.exclusive) { // the device may refuse (in use, format): then shared
     ok = tryInit(nullptr, 0, true);
@@ -291,6 +326,7 @@ bool AudioEngine::start(const std::string &name, const AudioDeviceOptions &opt) 
 }
 
 void AudioEngine::stop() {
+  impl_->asio.stop();
   if (impl_->hasDevice) {
     ma_device_uninit(&impl_->device);
     impl_->hasDevice = false;
@@ -322,8 +358,11 @@ void AudioEngine::purge() {
 }
 
 bool AudioEngine::stalled() const {
-  return running_ && steadyNs() - lastCallbackNs_.load() > 500'000'000LL;
+  // An ASIO driver asking to be reopened (its buffer size changed) counts as stalled.
+  return running_ && (steadyNs() - lastCallbackNs_.load() > 500'000'000LL || impl_->asio.needsReset());
 }
+
+void AudioEngine::asioControlPanel() { impl_->asio.controlPanel(); }
 
 void AudioEngine::debugStall() {
   if (impl_->hasDevice) ma_device_stop(&impl_->device);

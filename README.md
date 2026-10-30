@@ -9,7 +9,7 @@ Millumin, feito para **Windows** (também compila no Linux).
 |---|---|
 | **Show** | Dashboard em colunas (cues) × layers, GO pela barra de espaço, crossfade por coluna, clique na célula só seleciona (vai ao ar pelo ▶ da coluna ou GO), painel **Tempo** com tempo restante / decorrido e **pausa** por layer, blackout, master |
 | **Mídia** | Vídeo via FFmpeg (H.264, HEVC, ProRes, HAP, VP9, AV1...) em thread separada, imagens (PNG, JPG, TIFF, WebP...), geradores: test card, cor sólida, degradê, grade, plasma, listras |
-| **Áudio** | Som dos vídeos (WASAPI no Windows, **modo exclusivo** de baixa latência), **multicanal**: todos os canais da interface, cada layer num par de saídas ou numa **matriz** própria, arquivos 5.1/7.1 nativos ou mixados. Volume e mudo por layer, o fade do áudio acompanha o da imagem, medidores por canal. O relógio do áudio comanda o vídeo, então imagem e som não se perdem nem depois de horas em loop. Veja [docs/AUDIO.md](docs/AUDIO.md) |
+| **Áudio** | Som dos vídeos (WASAPI no Windows, **modo exclusivo** de baixa latência; **ASIO®** nas versões geradas com o SDK da Steinberg), **multicanal**: todos os canais da interface, cada layer num par de saídas ou numa **matriz** própria, arquivos 5.1/7.1 nativos ou mixados. Volume e mudo por layer, o fade do áudio acompanha o da imagem, medidores por canal. O relógio do áudio comanda o vídeo, então imagem e som não se perdem nem depois de horas em loop. Veja [docs/AUDIO.md](docs/AUDIO.md) |
 | **Ao vivo** | Câmeras e placas de captura (DirectShow), streams de rede (RTSP, SRT, UDP, HTTP) e **Spout** (receber de TouchDesigner, Resolume, OBS, Unreal...). Uma câmera usada por várias layers abre uma vez só. Reconecta sozinho se o sinal cair |
 | **Desempenho** | Conversão de cor YUV → RGB na GPU (8, 10 e 12 bits, BT.601/709/2020), **decodificação por hardware** (D3D11VA/DXVA2), **HAP / HAP Alpha / HAP Q / HAP Q Alpha direto na GPU** como textura comprimida, **envio assíncrono à GPU** (PBO, cópia em várias threads) para 8K e vários 4K, leitura assíncrona para o NDI |
 | **Redundância** | **Máquina reserva**: segue a principal pela rede (colunas, tempo dos vídeos, timelines, masters) e **assume sozinha** se ela parar, rodando comandos de troca (switcher, PJLink). Veja [docs/REDUNDANCIA.md](docs/REDUNDANCIA.md) |
@@ -100,7 +100,7 @@ código compila para Windows: `./scripts/check-windows-mingw.sh`.
 O instalador (NSIS, também roda no Linux com `sudo apt install nsis`):
 
 ```bash
-cd installer && makensis -DVERSION=0.10.16 -DSRCDIR=../build-mingw/Lumen -DOUTFILE=../Lumen-0.10.16-setup.exe lumen.nsi
+cd installer && makensis -DVERSION=0.10.17 -DSRCDIR=../build-mingw/Lumen -DOUTFILE=../Lumen-0.10.17-setup.exe lumen.nsi
 ```
 
 ## Compilar no Linux (desenvolvimento)
@@ -215,3 +215,7 @@ Dear ImGui (MIT), nlohmann/json (MIT), miniaudio (MIT-0/domínio público),
 RtMidi (MIT), Spout2 SDK (BSD-2), cabeçalhos Khronos (MIT/Apache-2.0),
 GLFW (zlib), stb_truetype (domínio público, via Dear ImGui) e FFmpeg (LGPL 2.1+,
 link dinâmico). NDI® é marca da Vizrt; o runtime NDI é carregado só se instalado.
+
+O **Steinberg ASIO SDK** (opcional, Windows) é usado pela licença proprietária da Steinberg, com
+contrato assinado ([docs/ASIO-LICENCA.md](docs/ASIO-LICENCA.md)); o SDK não faz parte deste
+repositório. ASIO is a registered trademark of Steinberg Media Technologies GmbH.

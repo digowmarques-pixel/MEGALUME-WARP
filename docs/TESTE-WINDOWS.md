@@ -13,7 +13,7 @@ um Arduino e o NDI Tools.
 
 ## 0. Instalação e diagnóstico
 
-- [ ] 0.1 Instale com `Lumen-0.10.16-setup.exe` (ou descompacte o .zip). O atalho
+- [ ] 0.1 Instale com `Lumen-0.10.17-setup.exe` (ou descompacte o .zip). O atalho
       aparece no Menu Iniciar, e arquivos `.lumen` abrem com o Lumen.
 - [ ] 0.2 Menu Iniciar → *Lumen (console de diagnóstico)*. O relatório abre no Bloco
       de Notas (também fica em `%APPDATA%\Lumen\diagnostico.txt`).
@@ -219,6 +219,10 @@ um Arduino e o NDI Tools.
       os lados esticam numa direção só.
 - [ ] 13.27 Ímã ligado: arraste a fatia perto da borda da saída: ela encaixa. Com Ctrl, não encaixa.
       Desligue o Ímã: não encaixa (e fica desligado ao reabrir).
+- [ ] 13.28 (versão com ASIO) Projeto → Áudio: a interface aparece como "ASIO: ..." e o logo
+      ASIO compatible aparece embaixo. Escolha-a: "Em uso" mostra o driver e os canais; o som sai.
+      "Painel do driver ASIO..." abre a janela do fabricante; mude o buffer lá: o som volta sozinho.
+- [ ] 13.29 Ajuda → Sobre o Lumen: versão e (na versão com ASIO) o logo e a frase da Steinberg.
 - [ ] 13.6 LED escondido: sem botão LED, sem aba LED; *Janela → LED mapping* mostra tudo de volta.
 
 ## Como relatar

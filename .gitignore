@@ -8,3 +8,7 @@ vcpkg_installed/
 *.lumen.tmp
 build-mingw-check/
 build-mingw/
+
+# Steinberg ASIO SDK: licensed separately, never committed (build with ASIO_SDK=/path)
+ASIOSDK/
+asiosdk/

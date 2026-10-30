@@ -8,6 +8,7 @@
 #include "io/serial.h"
 #include "engine/outputs.h"
 #include "io/spout.h"
+#include "media/asio_out.h"
 #include "media/decoder.h"
 #include "media/upload.h"
 #include "platform/platform.h"
@@ -523,6 +524,20 @@ void Ui::draw(App &app) {
     panelWindows(app);
   }
   recoveryPopup(app);
+  if (showAbout_) {
+    ImGui::SetNextWindowSize({460, 0}, ImGuiCond_Appearing);
+    if (ImGui::Begin(T("Sobre o Lumen"), &showAbout_, ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoDocking)) {
+      ImGui::Text(T("Lumen %s"), LUMEN_VERSION);
+      ImGui::TextDisabled("%s", T("Media server para shows, projeção mapeada e instalações."));
+      ImGui::Spacing();
+      ImGui::TextWrapped("%s", T("Usa FFmpeg (LGPL), GLFW, Dear ImGui, miniaudio, RtMidi, nlohmann/json e Spout."));
+      if (AsioOutput::available()) {
+        ImGui::Spacing();
+        asioNotice();
+      }
+    }
+    ImGui::End();
+  }
   if (showDiag_) {
     ImGui::SetNextWindowSize({640, 560}, ImGuiCond_FirstUseEver);
     if (ImGui::Begin(T("Diagnóstico do sistema"), &showDiag_)) {
@@ -788,6 +803,7 @@ void Ui::menuBar(App &app) {
       showDiag_ = true;
     }
     ImGui::MenuItem(T("Demo do ImGui"), nullptr, &showDemo_);
+    if (ImGui::MenuItem(T("Sobre o Lumen..."))) showAbout_ = true;
     ImGui::Separator();
     ImGui::TextDisabled(T("Lumen %s"), LUMEN_VERSION);
     ImGui::EndMenu();
@@ -946,6 +962,25 @@ void Ui::toolbar(App &app) {
     ImGui::TextDisabled("%s", T("Nada no ar"));
   ImGui::SameLine(0, 0);
   toolbarRowB_ = ImGui::GetCursorPosX() - rowBx;
+}
+
+void Ui::asioNotice() {
+  if (!asioLogoTried_) {
+    asioLogoTried_ = true;
+    VideoFrame f;
+    if (decodeStill(platform::executableDir() + "/asio-logo.png", f) && f.width > 0)
+      asioLogo_.upload(f.rgba().data(), f.width, f.height, f.stride[0]);
+  }
+  if (!asioLogo_.empty()) {
+    const float h = 96, w = h * float(asioLogo_.width()) / float(std::max(1, asioLogo_.height()));
+    // The artwork is black on white: on a white card so it reads on the dark theme.
+    ImVec2 a = ImGui::GetCursorScreenPos();
+    ImGui::GetWindowDrawList()->AddRectFilled(a, {a.x + w + 8, a.y + h + 8}, IM_COL32(255, 255, 255, 255), 3);
+    ImGui::SetCursorScreenPos({a.x + 4, a.y + 4});
+    ImGui::Image(ImTextureID(intptr_t(asioLogo_.id())), {w, h});
+    ImGui::SetCursorScreenPos({a.x, a.y + h + 12});
+  }
+  ImGui::TextWrapped("%s", "ASIO is a registered trademark of Steinberg Media Technologies GmbH.");
 }
 
 void Ui::library(App &app) {
@@ -4848,6 +4883,14 @@ void Ui::projectInspector(App &app) {
   ImGui::TextDisabled(T("Em uso: %s · %d canais · %d ms%s"), e.audio.deviceName().c_str(), e.audio.channels(),
                       e.audio.latencyMs(), e.audio.exclusive() ? T(" · exclusivo") : "");
   if (!e.audio.error().empty()) ImGui::TextColored({1, 0.5f, 0.4f, 1}, "%s", e.audio.error().c_str());
+  if (AsioOutput::available()) {
+    if (e.audio.deviceName().rfind(kAsioPrefix, 0) == 0) {
+      if (ImGui::Button(T("Painel do driver ASIO..."))) e.audio.asioControlPanel();
+      ImGui::SetItemTooltip("%s", T("Abre as configurações do próprio driver (tamanho do buffer, clock...). "
+                                    "O Lumen reabre a placa sozinho quando elas mudam."));
+    }
+    asioNotice();
+  }
   if (ImGui::SliderFloat(T("Volume master"), &p.masterVolume, 0, 2, "%.2f")) app.edited();
   audioMeters(e.audio);
 

@@ -95,6 +95,14 @@ Ordem pensada para **videomapping** e **instalações interativas**.
 - *Seek* preciso de vídeo e áudio (também por OSC: `/lumen/layer/<l>/time`)
 - Testes de integração no CI (`scripts/test-integration.sh`)
 
+## ✅ v0.10.17
+- **ASIO®** (Windows): saída direta pelos drivers ASIO, todas as saídas da interface, botão
+  para o painel do driver, reabre sozinho quando o buffer muda e volta ao WASAPI se o driver
+  falhar. Entra só nas versões geradas com o SDK da Steinberg (`ASIO_SDK=` / `LUMEN_ASIO_SDK=`);
+  testado com o driver de exemplo do SDK (16 saídas, 48 kHz, parar e reabrir)
+- Logo "ASIO compatible" na configuração de áudio e nova janela *Ajuda → Sobre o Lumen*
+- `docs/ASIO-LICENCA.md`: o que fazer com o contrato da Steinberg antes de distribuir
+
 ## ✅ v0.10.16
 - Ferramenta **Escala** (tecla E): caixa amarela com 8 alças em volta da fatia; os cantos mudam
   o tamanho mantendo a proporção (Shift: livre), os lados esticam, o meio move

@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(Lumen VERSION 0.10.16 LANGUAGES C CXX)
+project(Lumen VERSION 0.10.17 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -84,6 +84,24 @@ if(WIN32)
   endif()
 endif()
 
+# ---------------------------------------------------------------- ASIO (Windows, optional)
+# The Steinberg ASIO SDK is licensed separately (signed agreement with Steinberg)
+# and must never be committed here: point LUMEN_ASIO_SDK at an unpacked copy
+# (the folder with common/ and host/) to build with ASIO output.
+set(LUMEN_ASIO_SDK "" CACHE PATH "Steinberg ASIO SDK folder (optional, Windows)")
+if(WIN32 AND LUMEN_ASIO_SDK)
+  add_library(asiosdk STATIC ${LUMEN_ASIO_SDK}/common/asio.cpp ${LUMEN_ASIO_SDK}/host/asiodrivers.cpp
+                             ${LUMEN_ASIO_SDK}/host/pc/asiolist.cpp)
+  target_include_directories(asiosdk PUBLIC ${LUMEN_ASIO_SDK}/common ${LUMEN_ASIO_SDK}/host ${LUMEN_ASIO_SDK}/host/pc)
+  target_compile_definitions(asiosdk PUBLIC LUMEN_ASIO)
+  target_link_libraries(asiosdk PUBLIC ole32 advapi32 user32)
+  if(MSVC)
+    target_compile_options(asiosdk PRIVATE /W0)
+  else()
+    target_compile_options(asiosdk PRIVATE -w)
+  endif()
+endif()
+
 # ---------------------------------------------------------------- Lumen
 # Everything but main() is compiled once into lumen_core; on Windows the same
 # objects also make lumen-console.exe (a console program: the log live, for
@@ -101,6 +119,7 @@ add_library(lumen_core OBJECT
   src/media/hap.cpp
   src/media/upload.cpp
   src/media/audio.cpp
+  src/media/asio_out.cpp
   src/core/audio_route.cpp
   src/media/source.cpp
   src/media/text.cpp
@@ -141,6 +160,9 @@ target_include_directories(lumen_core PUBLIC
 target_link_libraries(lumen_core PUBLIC imgui glfw OpenGL::GL lumen_ffmpeg rtmidi)
 if(WIN32)
   target_link_libraries(lumen_core PUBLIC spout)
+  if(TARGET asiosdk)
+    target_link_libraries(lumen_core PUBLIC asiosdk)
+  endif()
 elseif(APPLE)
   target_link_libraries(lumen_core PUBLIC "-framework CoreFoundation" "-framework CoreAudio" "-framework AudioToolbox")
 else()

@@ -92,6 +92,12 @@ private:
   int syncRoleEdit_ = 0, syncPortEdit_ = 7400;
   char syncPeerEdit_[128] = {};
   bool showDiag_ = false;
+  bool showAbout_ = false;
+  // "ASIO compatible" logo (asio-logo.png next to the exe, only in builds with ASIO):
+  // Steinberg's terms ask for it wherever ASIO is set up, and in the About box.
+  Texture asioLogo_;
+  bool asioLogoTried_ = false;
+  void asioNotice();
   // Setup panels in their own windows (Janela menu): Saídas, Interação, Projeto, LED.
   bool panelOpen_[4] = {};
   void panelWindows(App &app);

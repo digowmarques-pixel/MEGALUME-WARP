@@ -11,6 +11,12 @@ FF="$1"; GLFW="$2"
 [ -d "$FF/include" ] && [ -d "$GLFW/include" ] || { echo "usage: $0 <ffmpeg-dir> <glfw-dir>"; exit 2; }
 OUT="${OUT:-$ROOT/build-mingw}"
 CXX=${CXX:-x86_64-w64-mingw32-g++-posix}
+# ASIO output: ASIO_SDK=/path/to/ASIOSDK (licensed separately by Steinberg, never
+# committed). Switching it on or off needs FORCE=1 (asio_out.cpp changes).
+if [ -n "$ASIO_SDK" ]; then
+  [ -f "$ASIO_SDK/common/asio.h" ] || { echo "ASIO_SDK: $ASIO_SDK/common/asio.h not found"; exit 2; }
+  EXTRA_CXXFLAGS="$EXTRA_CXXFLAGS -DLUMEN_ASIO -I$ASIO_SDK/common -I$ASIO_SDK/host -I$ASIO_SDK/host/pc"
+fi
 mkdir -p "$OUT/obj" "$OUT/Lumen"
 CXXFLAGS="-std=c++20 -O2 -Wall -Wno-unused-parameter -DNOMINMAX -DWIN32_LEAN_AND_MEAN -DGLFW_INCLUDE_NONE -DLUMEN_VERSION=\"$(grep -oP 'project\(Lumen VERSION \K[0-9.]+' "$ROOT/CMakeLists.txt")\" \
   -I$ROOT/src -I$ROOT/third_party -I$ROOT/third_party/khr -I$ROOT/third_party/imgui -I$ROOT/third_party/imgui/backends \
@@ -37,6 +43,13 @@ for s in $SOURCES; do
 done
 for p in "${pids[@]}"; do wait "$p"; done
 touch "$OUT/.stamp"
+if [ -n "$ASIO_SDK" ]; then
+  for f in common/asio.cpp host/asiodrivers.cpp host/pc/asiolist.cpp; do
+    o="$OUT/obj/asiosdk_$(basename "$f").o"
+    $CXX -O2 -w -I"$ASIO_SDK/common" -I"$ASIO_SDK/host" -I"$ASIO_SDK/host/pc" -c "$ASIO_SDK/$f" -o "$o"
+    OBJS="$OBJS $o"
+  done
+fi
 # Icon resource (Explorer, taskbar and the GLFW windows).
 x86_64-w64-mingw32-windres --include-dir "$ROOT/assets" "$ROOT/src/lumen.rc" -O coff -o "$OUT/obj/lumen_rc.o"
 OBJS="$OBJS $OUT/obj/lumen_rc.o"
@@ -57,4 +70,7 @@ for d in /usr/x86_64-w64-mingw32/lib /usr/lib/gcc/x86_64-w64-mingw32/*-posix; do
 done
 rm -rf "$OUT/Lumen/examples" "$OUT/Lumen/docs" "$OUT/Lumen/effects" && cp -r "$ROOT/examples" "$ROOT/docs" "$ROOT/effects" "$OUT/Lumen/"
 cp "$ROOT/README.md" "$OUT/Lumen/"
+# The "ASIO compatible" logo from the SDK is shown wherever ASIO is set up (Steinberg's terms).
+rm -f "$OUT/Lumen/asio-logo.png"
+[ -n "$ASIO_SDK" ] && cp "$ASIO_SDK/Steinberg ASIO Logo Artwork/ASIO-compatible-logo-Steinberg-TM-BW.png" "$OUT/Lumen/asio-logo.png"
 echo "built $OUT/Lumen/lumen.exe"
