@@ -411,6 +411,7 @@ struct TimecodeConfig {
   std::string ltcDevice; // capture device ("" = default)
   int ltcChannel = 0;
   float freewheel = 1.0f; // seconds the clock keeps running when the signal drops
+  int delayFrames = 0;    // received timecode acts this many frames later (<0: earlier)
   // Generation (for other machines / the sound desk) from a timeline.
   bool generate = false;
   int genTimelineId = -1;

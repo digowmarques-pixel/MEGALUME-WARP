@@ -842,6 +842,7 @@ static void testV09() {
   c.commands = {"pjlink Sala power on", "wait 2", "midi note 1 60 127"};
   c.timecodeCue = 3661.5f;
   c.timecodeChase = false;
+  p.timecode.delayFrames = -3;
   p.projectors.push_back({"Sala", "10.0.0.9", "segredo"});
   ScheduleEntry se;
   se.action = ScheduleAction::Command;
@@ -854,7 +855,7 @@ static void testV09() {
   const Column &qc = q.columns[0];
   CHECK(qc.timelineId == tl.id && qc.transitionType == TransitionType::Shader && qc.manualTransition);
   CHECK(qc.stingerMediaId == 7 && qc.stingerCut == 0.3f && qc.commands.size() == 3 && qc.timecodeCue == 3661.5f &&
-        !qc.timecodeChase);
+        !qc.timecodeChase && q.timecode.delayFrames == -3);
   CHECK(platform::toPath(qc.transitionShader) == platform::toPath(builtinEffectsDir()) / "T_Circulo.fs");
   CHECK(q.projectors.size() == 1 && q.projectors[0].password == "segredo");
   CHECK(q.schedule[0].action == ScheduleAction::Command && q.schedule[0].command == "pjlink Sala power off");

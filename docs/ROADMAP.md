@@ -95,6 +95,12 @@ Ordem pensada para **videomapping** e **instalações interativas**.
 - *Seek* preciso de vídeo e áudio (também por OSC: `/lumen/layer/<l>/time`)
 - Testes de integração no CI (`scripts/test-integration.sh`)
 
+## ✅ v0.10.21
+- **Atraso (quadros)** do timecode recebido (*Interação → Timecode*): acerta o vídeo com o
+  som do Reaper/mesa; positivo atrasa o vídeo, negativo adianta (até ±100 quadros)
+- Vídeo que segue o timecode fica no quadro: diferenças pequenas (até 0,5 s) são corrigidas
+  acelerando ou freando até 10%, sem pular; acima disso, pula
+
 ## ✅ v0.10.20
 - **Vídeo segue o timecode** (por coluna, ligado por padrão): pausa quando o Reaper para,
   pula quando ele pula (para frente ou para trás); dar play no meio entra na coluna da última

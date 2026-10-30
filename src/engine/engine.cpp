@@ -498,25 +498,38 @@ void Engine::updateTimelines(double dt) {
 // timecode's position: paused while it is stopped (on the last frame it sent)
 // or before the cue, and jumps when they drift apart.
 void Engine::chaseTimecode() {
-  if (following() || activeColumn_ < 0 || activeColumn_ >= int(project.columns.size())) return;
-  const Column &c = project.columns[size_t(activeColumn_)];
-  if (c.timecodeCue < 0 || !c.timecodeChase || project.timecode.source == TimecodeSource::Off) return;
-  if (tcLastReal_ < 0) return; // no timecode yet: leave the column as launched
+  const Column *c = activeColumn_ >= 0 && activeColumn_ < int(project.columns.size())
+                        ? &project.columns[size_t(activeColumn_)] : nullptr;
+  bool on = !following() && c && c->timecodeCue >= 0 && c->timecodeChase &&
+            project.timecode.source != TimecodeSource::Off && tcLastReal_ >= 0; // no timecode yet: as launched
   // Pause at once when the frames stop (Reaper's pause), not after the freewheel:
   // the picture then stays on the last frame received.
   const bool moving = timecodeValid_ && time_ - tcFreshAt_ < 0.2;
-  const double at = (moving ? timecodeSeconds_ : tcLastReal_) - c.timecodeCue;
+  const double at = (moving ? timecodeSeconds_ : tcLastReal_) - (c ? c->timecodeCue : 0);
   const bool run = moving && at >= 0;
   for (auto &[id, st] : states_) {
     Playback *p = st.current.get();
-    if (!p || st.columnId != c.id || st.fadingOut || !p->seekable()) continue;
-    double target = std::max(0.0, at) * double(std::max(0.0f, p->speed));
+    if (!p) continue;
+    const bool chased = on && st.columnId == c->id && !st.fadingOut && p->seekable();
+    if (!chased) {
+      if (st.chaseBase >= 0) p->speed = st.chaseBase; // back to the cell's speed
+      st.chaseBase = -1;
+      continue;
+    }
+    if (st.chaseBase < 0) st.chaseBase = p->speed;
+    const double base = std::max(0.0f, st.chaseBase);
+    double target = std::max(0.0, at) * base;
     if (!p->loop && p->duration() > 0) target = std::min(target, p->duration());
     p->paused = !run;
-    // Playing: small drift is left alone (a seek costs a moment of decoding).
-    if (std::fabs(p->time() - target) > (run ? 0.25 : 0.02)) {
+    const double drift = p->time() - target;
+    if (std::fabs(drift) > (run ? 0.5 : 0.02)) { // stopped (exact frame) or far off: jump
       p->seek(target);
+      p->speed = float(base);
       ++st.run; // a backup machine follows the jump
+    } else {
+      // Playing: catch up by up to 10% faster or slower (a seek would cost a
+      // moment of decoding); a third of a frame is close enough.
+      p->speed = float(base * (std::fabs(drift) < 0.01 ? 1.0 : 1.0 - std::clamp(drift, -0.1, 0.1)));
     }
   }
 }
@@ -552,6 +565,7 @@ void Engine::updateTimecode(double dt) {
   if (got && age < 0.25) {
     // An LTC frame is read when its last bit arrives: one frame after its label.
     double t = tc.seconds() + age + (cfg.source == TimecodeSource::LTC && tc.fps > 0 ? 1.0 / tc.fps : 0.0);
+    t -= double(cfg.delayFrames) / (tc.fps > 0 ? tc.fps : 25.0); // the "Atraso" setting: >0 the video later
     // Small jitter: keep the running clock smooth; big differences jump.
     if (!timecodeValid_ || std::fabs(t - timecodeSeconds_) > 0.12) timecodeSeconds_ = t;
     else timecodeSeconds_ += dt + (t - timecodeSeconds_) * 0.1;

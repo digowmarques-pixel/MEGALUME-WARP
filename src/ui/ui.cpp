@@ -4312,6 +4312,16 @@ void Ui::interactionInspector(App &app) {
       if (ImGui::DragFloat(T("Roda livre (s)"), &tc.freewheel, 0.05f, 0, 10)) app.edited();
       helpMarker(T("Se o sinal cair, o relógio continua sozinho por este tempo (evita parar o show "
                  "num cabo com mau contato)."));
+      ImGui::SetNextItemWidth(130);
+      if (ImGui::InputInt(T("Atraso (quadros)"), &tc.delayFrames)) {
+        tc.delayFrames = std::clamp(tc.delayFrames, -100, 100);
+        app.edited();
+      }
+      ImGui::SameLine();
+      ImGui::TextDisabled(T("%+.0f ms"), tc.delayFrames * 1000.0 / (e.timecodeFps() > 0 ? e.timecodeFps() : 25.0));
+      helpMarker(T("Acerta o vídeo com o som: positivo atrasa o vídeo, negativo adianta. Vale para "
+                 "as colunas, as timelines e o vídeo que segue o timecode. Pode mudar com o show "
+                 "rodando: o vídeo se ajusta sozinho."));
       if (e.timecodeValid())
         ImGui::TextColored(kAccent, T("%s  (%.2f fps)"), Timecode::fromSeconds(e.timecodeSeconds(), e.timecodeFps()).str().c_str(),
                            e.timecodeFps());

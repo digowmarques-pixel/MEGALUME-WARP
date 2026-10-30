@@ -45,6 +45,7 @@ struct LayerState {
   bool composed = false;   // shader transition or crossfade: currentTex holds both contents
   std::string transitionShader;
   bool endHandled = false; // the end of the current media was acted upon
+  float chaseBase = -1;    // following the timecode: the speed before the catch-up nudges
   const Texture *currentTex = nullptr, *previousTex = nullptr;
 };
 

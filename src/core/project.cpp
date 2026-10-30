@@ -883,7 +883,7 @@ std::string serializeProject(const Project &p, const std::string &baseDir) {
   {
     const TimecodeConfig &t = p.timecode;
     j["timecode"] = {{"source", int(t.source)}, {"ltcDevice", t.ltcDevice}, {"ltcChannel", t.ltcChannel},
-                     {"freewheel", t.freewheel}, {"generate", t.generate}, {"genTimeline", t.genTimelineId},
+                     {"freewheel", t.freewheel}, {"delayFrames", t.delayFrames}, {"generate", t.generate}, {"genTimeline", t.genTimelineId},
                      {"genStart", t.genStart}, {"genFps", t.genFps}, {"genMtc", t.genMtc}, {"genMtcPort", t.genMtcPort},
                      {"genLtc", t.genLtc}, {"genLtcChannel", t.genLtcChannel}};
   }
@@ -1155,6 +1155,7 @@ bool deserializeProject(const std::string &text, const std::string &baseDir, Pro
       t.ltcDevice = x.value("ltcDevice", "");
       t.ltcChannel = x.value("ltcChannel", 0);
       t.freewheel = x.value("freewheel", 1.0f);
+      t.delayFrames = x.value("delayFrames", 0);
       t.generate = x.value("generate", false);
       t.genTimelineId = x.value("genTimeline", -1);
       t.genStart = x.value("genStart", 3600.0f);

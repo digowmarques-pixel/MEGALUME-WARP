@@ -212,6 +212,24 @@ c = near(3.5); check("timecode: play do zero dispara a cue 1 e o vídeo anda jun
 c = near(5.5); check("timecode: parado, o vídeo pausa onde o timecode parou", c[3] and abs(c[2] - 3.0) < 0.2, c)
 c = near(7.5); check("timecode: pulo para 10 s entra na cue 2, 4 s adiante", c[1] == 2 and abs(c[2] - 5.5) < 0.2 and not c[3], c)
 c = near(9.5); check("timecode: volta para 2 s volta para a cue 1, em 3 s", c[1] == 1 and abs(c[2] - 3.0) < 0.2, c)
+# Timecode delay: 6 frames at 30 fps, the video runs 0.2 s behind the timecode received.
+out = run({"format": "lumen", "version": 1, "canvas": {"width": 320, "height": 180}, "timecode": {"source": 1, "delayFrames": 6},
+           "library": [tcv(1)], "layers": [{"id": 1, "name": "L1"}],
+           "columns": [{"id": 5, "name": "A", "transition": 0, "timecodeCue": 0, "cells": [{"layer": 1, "media": 1, "loop": False, "end": 1}]}]},
+          ["--quit-after", "5", "--test-timecode", "1-5@1"], "tc_delay")
+tr = [dict(x.split("=") for x in l.split()[2:] if "=" in x) for l in out.splitlines() if "[test] tc at=" in l]
+c = min(tr, key=lambda f: abs(float(f["at"]) - 4)) if tr else {"at": 0, "t": -9}
+check("timecode com atraso de 6 quadros: vídeo 0,2 s atrás", abs(float(c["t"]) - (float(c["at"]) - 0.2)) < 0.05, c)
+# A small jump (0.3 s, under the seek threshold): the video catches up by speed, without a seek.
+out = run({"format": "lumen", "version": 1, "canvas": {"width": 320, "height": 180}, "timecode": {"source": 1},
+           "library": [tcv(1)], "layers": [{"id": 1, "name": "L1"}],
+           "columns": [{"id": 5, "name": "A", "transition": 0, "timecodeCue": 0, "cells": [{"layer": 1, "media": 1, "loop": False, "end": 1}]}]},
+          ["--quit-after", "7.5", "--test-timecode", "1-3@1;3-7.5@3.3"], "tc_nudge")
+tr = [dict(x.split("=") for x in l.split()[2:] if "=" in x) for l in out.splitlines() if "[test] tc at=" in l]
+c = min(tr, key=lambda f: abs(float(f["at"]) - 3.5)) if tr else {"t": -9, "tc": 0}
+check("timecode: diferença de 0,3 s não pula na hora", float(c["tc"]) - float(c["t"]) > 0.1, c)
+c = min(tr, key=lambda f: abs(float(f["at"]) - 7)) if tr else {"t": -9, "tc": 0}
+check("timecode: ... e o vídeo alcança acelerando", abs(float(c["tc"]) - float(c["t"])) < 0.04, c)
 sys.exit(0 if ok else 1)
 EOF2
 python3 review.py "$LUMEN" "$WORK" || fail=1
