@@ -1581,6 +1581,9 @@ void Ui::dashboard(App &app) {
           ImGui::SameLine();
           ImGui::TextDisabled("%.2f fps", fps);
           helpMarker(T("A coluna dispara quando o timecode recebido (MTC ou LTC, em Interação) passa por este valor."));
+          if (ImGui::Checkbox(T("Vídeo segue o timecode"), &colRef.timecodeChase)) app.edited();
+          helpMarker(T("O vídeo anda junto com o timecode: pausa quando ele para, pula quando ele pula, "
+                       "e dar play no meio (no Reaper, na mesa...) já entra nesta coluna, no ponto certo."));
         }
       }
       sectionTitle(T("Estados (animar parâmetros)"));

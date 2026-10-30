@@ -77,6 +77,10 @@ Em *Interação → Timecode*:
   inclusive para trás e em saltos.
 - **Coluna no timecode**: no menu da coluna, *Disparar no timecode* com o valor
   `hh mm ss qq`. A coluna dispara quando o timecode passa por ali.
+  Com *Vídeo segue o timecode* (ligado por padrão) o vídeo anda preso ao timecode:
+  pausa quando o Reaper/mesa para (no último quadro recebido), pula quando ele pula, e
+  dar play em qualquer ponto já entra na coluna certa (a última cue antes daquele
+  ponto), com o vídeo na posição certa. Antes da cue, o vídeo espera no primeiro quadro.
 - **Gerar**: escolha uma timeline, o timecode inicial (padrão 01:00:00:00) e o fps
   (24, 25, 29.97 drop, 30). O Lumen gera MTC numa saída MIDI e/ou LTC num canal da
   saída de áudio enquanto a timeline estiver tocando — para sincronizar luz (grandMA,

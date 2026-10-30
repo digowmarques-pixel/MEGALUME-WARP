@@ -192,6 +192,26 @@ out = run({"format": "lumen", "version": 1, "canvas": {"width": 320, "height": 1
                        {"id": 7, "name": "C", "transition": 0, "cells": [{"layer": 1, "media": 1}]}]},
           ["--launch", "1", "--quit-after", "4.5"], "boards")
 check("dois dashboards: GO pula a coluna do outro dashboard", "[test] column=3" in out, [l for l in out.splitlines() if "column=" in l])
+# Chase: the video follows the timecode (play, stop, jumps between two cues).
+ffmpeg = lambda name: subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "testsrc2=size=320x180:rate=30",
+                                      "-t", "20", "-c:v", "libx264", "-pix_fmt", "yuv420p", work + "/" + name], check=True)
+ffmpeg("tc.mp4")
+tcv = lambda i: {"id": i, "name": "v%d" % i, "type": 0, "path": work + "/tc.mp4"}
+out = run({"format": "lumen", "version": 1, "canvas": {"width": 320, "height": 180}, "timecode": {"source": 1},
+           "library": [tcv(1), tcv(2)], "layers": [{"id": 1, "name": "L1"}],
+           "columns": [{"id": 5, "name": "A", "transition": 0, "timecodeCue": 0, "cells": [{"layer": 1, "media": 1, "loop": False, "end": 1}]},
+                       {"id": 6, "name": "B", "transition": 0, "timecodeCue": 6, "cells": [{"layer": 1, "media": 2, "loop": False, "end": 1}]}]},
+          ["--quit-after", "12", "--test-timecode", "1-4@0;6-8@10;8.5-10.5@2"], "chase")
+tr = []
+for l in out.splitlines():
+    if "[test] tc at=" in l:
+        f = dict(x.split("=") for x in l.split()[2:] if "=" in x)
+        tr.append((float(f["at"]), int(f["column"]), float(f["t"]), f["paused"] == "1"))
+near = lambda at: min(tr, key=lambda r: abs(r[0] - at)) if tr else (0, 0, -9, False)
+c = near(3.5); check("timecode: play do zero dispara a cue 1 e o vídeo anda junto", c[1] == 1 and abs(c[2] - 2.5) < 0.2 and not c[3], c)
+c = near(5.5); check("timecode: parado, o vídeo pausa onde o timecode parou", c[3] and abs(c[2] - 3.0) < 0.2, c)
+c = near(7.5); check("timecode: pulo para 10 s entra na cue 2, 4 s adiante", c[1] == 2 and abs(c[2] - 5.5) < 0.2 and not c[3], c)
+c = near(9.5); check("timecode: volta para 2 s volta para a cue 1, em 3 s", c[1] == 1 and abs(c[2] - 3.0) < 0.2, c)
 sys.exit(0 if ok else 1)
 EOF2
 python3 review.py "$LUMEN" "$WORK" || fail=1

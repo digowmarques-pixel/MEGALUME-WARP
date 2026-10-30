@@ -574,6 +574,13 @@ int App::run(const Options &opts) {
   double last = glfwGetTime(), fpsTimer = last, started = last;
   bool testDropDone = false;
   bool audioStallDone = false;
+  for (size_t at = 0; at < opts.testTimecode.size();) {
+    size_t end = opts.testTimecode.find(';', at);
+    std::string seg = opts.testTimecode.substr(at, end == std::string::npos ? std::string::npos : end - at);
+    double a = 0, b = 0, t = 0;
+    if (std::sscanf(seg.c_str(), "%lf-%lf@%lf", &a, &b, &t) == 3) engine.testTimecode.push_back({a, b, t});
+    at = end == std::string::npos ? opts.testTimecode.size() : end + 1;
+  }
   if (!opts.testAudioRecord.empty()) engine.audio.debugRecord(opts.quitAfter > 0 ? opts.quitAfter + 1 : 30);
   int frame = 0, fpsFrames = 0;
 
@@ -729,6 +736,17 @@ int App::run(const Options &opts) {
     if (opts.testAudioStall > 0 && !audioStallDone && glfwGetTime() - started >= opts.testAudioStall) {
       audioStallDone = true;
       engine.audio.debugStall(); // as if the interface were unplugged
+    }
+    if (!engine.testTimecode.empty()) { // trace for the tests, every half second
+      static double nextTrace = 0;
+      if (engine.time() >= nextTrace) {
+        nextTrace = engine.time() + 0.5;
+        for (auto &l : engine.project.layers)
+          if (const LayerState *st = engine.layerState(l.id); st && st->current)
+            std::printf("[test] tc at=%.2f valid=%d tc=%.2f column=%d %s t=%.2f paused=%d\n", engine.time(),
+                        engine.timecodeValid() ? 1 : 0, engine.timecodeSeconds(), engine.activeColumn() + 1,
+                        l.name.c_str(), st->current->time(), st->current->paused ? 1 : 0);
+      }
     }
     bool lastFrame = (opts.frames > 0 && frame >= opts.frames) || (opts.quitAfter > 0 && glfwGetTime() - started >= opts.quitAfter);
     if (lastFrame) {

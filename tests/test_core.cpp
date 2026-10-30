@@ -841,6 +841,7 @@ static void testV09() {
   c.stingerMediaId = 7; c.stingerCut = 0.3f;
   c.commands = {"pjlink Sala power on", "wait 2", "midi note 1 60 127"};
   c.timecodeCue = 3661.5f;
+  c.timecodeChase = false;
   p.projectors.push_back({"Sala", "10.0.0.9", "segredo"});
   ScheduleEntry se;
   se.action = ScheduleAction::Command;
@@ -852,7 +853,8 @@ static void testV09() {
   CHECK(q.timelines[0].flags[0].command == "pjlink Sala shutter close");
   const Column &qc = q.columns[0];
   CHECK(qc.timelineId == tl.id && qc.transitionType == TransitionType::Shader && qc.manualTransition);
-  CHECK(qc.stingerMediaId == 7 && qc.stingerCut == 0.3f && qc.commands.size() == 3 && qc.timecodeCue == 3661.5f);
+  CHECK(qc.stingerMediaId == 7 && qc.stingerCut == 0.3f && qc.commands.size() == 3 && qc.timecodeCue == 3661.5f &&
+        !qc.timecodeChase);
   CHECK(platform::toPath(qc.transitionShader) == platform::toPath(builtinEffectsDir()) / "T_Circulo.fs");
   CHECK(q.projectors.size() == 1 && q.projectors[0].password == "segredo");
   CHECK(q.schedule[0].action == ScheduleAction::Command && q.schedule[0].command == "pjlink Sala power off");
@@ -892,6 +894,9 @@ static void testV09() {
   CHECK(timecodeCueHit(0, -1, 2.0 / 30) && timecodeCueHit(10, -1, 10.1));
   CHECK(!timecodeCueHit(0, -1, 0.5) && !timecodeCueHit(-1, -1, 0.05));
   CHECK(timecodeCueHit(5, 4.98, 5.01) && !timecodeCueHit(5, 5.0, 5.02) && !timecodeCueHit(5, 4.9, 4.95));
+  // Chase: the cue on at a time is the latest one up to it.
+  CHECK(timecodeCueAt({0, 90, -1, 45}, 50) == 3 && timecodeCueAt({0, 90, -1, 45}, 90) == 1);
+  CHECK(timecodeCueAt({10, 90}, 5) == -1 && timecodeCueAt({}, 5) == -1 && timecodeCueAt({-1, 0}, 0) == 1);
   // LTC: encode a few frames, decode them back (also at another sample rate and level).
   for (double fps : {25.0, 30.0, 24.0}) {
     for (int rate : {48000, 44100}) {

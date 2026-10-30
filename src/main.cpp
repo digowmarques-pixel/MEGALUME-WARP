@@ -29,6 +29,7 @@ static void usage() {
       "  --quit-after S          sai depois de S segundos, em tempo real (testes)\n"
       "  --test-audio-stall S    para a placa de som depois de S segundos (testes)\n"
       "  --test-audio-record F   grava em F (WAV) o som enviado à placa (testes)\n"
+      "  --test-timecode A-B@T;  timecode recebido: de A a B s de execução, T, T+1... (testes)\n"
       "  --screenshot-canvas F   salva o canvas em F (.ppm) no último quadro\n"
       "  --screenshot-ui F       salva a interface em F (.ppm) no último quadro\n"
       "  --screenshot-output F   salva a saída 1 em F (.ppm) no último quadro\n"
@@ -77,6 +78,7 @@ int main(int argc, char **argv) {
     else if (a == "--quit-after") opts.quitAfter = std::atof(next().c_str());
     else if (a == "--test-audio-stall") opts.testAudioStall = std::atof(next().c_str());
     else if (a == "--test-drop") opts.testDrop = next();
+    else if (a == "--test-timecode") opts.testTimecode = next();
     else if (a == "--test-audio-record") opts.testAudioRecord = next();
     else if (a == "--screenshot-canvas") opts.screenshotCanvas = next();
     else if (a == "--screenshot-ui") opts.screenshotUi = next();

@@ -494,6 +494,33 @@ void Engine::updateTimelines(double dt) {
   if (next && !following()) go();
 }
 
+// Chase: the media of the column on air (cued on the timecode) plays at the
+// timecode's position: paused while it is stopped (on the last frame it sent)
+// or before the cue, and jumps when they drift apart.
+void Engine::chaseTimecode() {
+  if (following() || activeColumn_ < 0 || activeColumn_ >= int(project.columns.size())) return;
+  const Column &c = project.columns[size_t(activeColumn_)];
+  if (c.timecodeCue < 0 || !c.timecodeChase || project.timecode.source == TimecodeSource::Off) return;
+  if (tcLastReal_ < 0) return; // no timecode yet: leave the column as launched
+  // Pause at once when the frames stop (Reaper's pause), not after the freewheel:
+  // the picture then stays on the last frame received.
+  const bool moving = timecodeValid_ && time_ - tcFreshAt_ < 0.2;
+  const double at = (moving ? timecodeSeconds_ : tcLastReal_) - c.timecodeCue;
+  const bool run = moving && at >= 0;
+  for (auto &[id, st] : states_) {
+    Playback *p = st.current.get();
+    if (!p || st.columnId != c.id || st.fadingOut || !p->seekable()) continue;
+    double target = std::max(0.0, at) * double(std::max(0.0f, p->speed));
+    if (!p->loop && p->duration() > 0) target = std::min(target, p->duration());
+    p->paused = !run;
+    // Playing: small drift is left alone (a seek costs a moment of decoding).
+    if (std::fabs(p->time() - target) > (run ? 0.25 : 0.02)) {
+      p->seek(target);
+      ++st.run; // a backup machine follows the jump
+    }
+  }
+}
+
 void Engine::updateTimecode(double dt) {
   const TimecodeConfig &cfg = project.timecode;
   // LTC input device follows the settings.
@@ -513,6 +540,15 @@ void Engine::updateTimecode(double dt) {
   double age = 1e9;
   bool got = cfg.source == TimecodeSource::MTC ? midi_.timecode(tc, age)
            : cfg.source == TimecodeSource::LTC ? ltcIn_.latest(tc, age) : false;
+  if (!testTimecode.empty()) {
+    got = false;
+    for (auto &s : testTimecode)
+      if (time_ >= s[0] && time_ < s[1]) {
+        tc = Timecode::fromSeconds(s[2] + time_ - s[0], 30);
+        age = 0;
+        got = true;
+      }
+  }
   if (got && age < 0.25) {
     // An LTC frame is read when its last bit arrives: one frame after its label.
     double t = tc.seconds() + age + (cfg.source == TimecodeSource::LTC && tc.fps > 0 ? 1.0 / tc.fps : 0.0);
@@ -522,6 +558,7 @@ void Engine::updateTimecode(double dt) {
     timecodeFps_ = tc.fps;
     timecodeValid_ = true;
     tcFreshAt_ = time_;
+    tcLastReal_ = t;
   } else if (timecodeValid_ && time_ - tcFreshAt_ < std::max(0.0f, cfg.freewheel)) {
     timecodeSeconds_ += dt;
   } else {
@@ -532,13 +569,28 @@ void Engine::updateTimecode(double dt) {
     // Going back or jumping ahead (play from another point) is a new start.
     const double now = timecodeSeconds_;
     const bool fresh = tcPrev_ < 0 || now < tcPrev_ - 0.12 || now - tcPrev_ >= 1.0;
-    if (!following())
+    auto chasing = [&](int i) {
+      return i >= 0 && i < int(project.columns.size()) && project.columns[size_t(i)].timecodeCue >= 0 &&
+             project.columns[size_t(i)].timecodeChase;
+    };
+    if (!following()) {
+      int on = -1; // a start inside a chasing cue's span brings that cue up
+      if (fresh) {
+        std::vector<float> cues;
+        for (auto &c : project.columns) cues.push_back(c.timecodeChase ? c.timecodeCue : -1.0f);
+        on = timecodeCueAt(cues, now);
+        if (on >= 0 && on != activeColumn_) launchColumn(on);
+      }
       for (size_t i = 0; i < project.columns.size(); ++i)
-        if (timecodeCueHit(project.columns[i].timecodeCue, fresh ? -1.0 : tcPrev_, now)) launchColumn(int(i));
+        if (int(i) != on && !(chasing(int(i)) && int(i) == activeColumn_) &&
+            timecodeCueHit(project.columns[i].timecodeCue, fresh ? -1.0 : tcPrev_, now))
+          launchColumn(int(i));
+    }
     tcPrev_ = fresh ? now : std::max(now, tcPrev_); // jitter back: no cue twice
   } else {
     tcPrev_ = -1;
   }
+  chaseTimecode();
 
   // Generation from a timeline.
   const TimelineRun *run = timelineRun(cfg.genTimelineId);

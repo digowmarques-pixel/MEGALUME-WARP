@@ -95,6 +95,12 @@ Ordem pensada para **videomapping** e **instalações interativas**.
 - *Seek* preciso de vídeo e áudio (também por OSC: `/lumen/layer/<l>/time`)
 - Testes de integração no CI (`scripts/test-integration.sh`)
 
+## ✅ v0.10.20
+- **Vídeo segue o timecode** (por coluna, ligado por padrão): pausa quando o Reaper para,
+  pula quando ele pula (para frente ou para trás); dar play no meio entra na coluna da última
+  cue antes daquele ponto, com o vídeo na posição certa
+- Opção de teste `--test-timecode` (timecode simulado) e teste de integração da perseguição
+
 ## ✅ v0.10.19
 - **Coluna no timecode dispara no início**: com o horário em 00:00:00:00 (ou em qualquer ponto
   de onde se dá play no Reaper/mesa), a coluna dispara. Antes o primeiro quadro de MTC já chegava

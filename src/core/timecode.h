@@ -39,6 +39,10 @@ private:
 // from 00:00:00:00 first reads about 00:00:00:02.
 bool timecodeCueHit(double cue, double prev, double now);
 
+// Chase: the cue that is on at timecode `now` is the latest one up to it.
+// Returns its index in `cues` (seconds, <0 = no cue), or -1 before the first.
+int timecodeCueAt(const std::vector<float> &cues, double now);
+
 // The 8 quarter-frame messages of a frame, and the full-frame sysex.
 std::vector<uint8_t> mtcQuarterFrame(const Timecode &tc, int piece);
 std::vector<uint8_t> mtcFullFrame(const Timecode &tc);

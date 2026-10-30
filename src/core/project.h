@@ -270,6 +270,9 @@ struct Column {
   // ("pjlink 10.0.0.5 power on", "midi note 1 60 127", "dmx 0 12 255"...).
   std::vector<std::string> commands;
   float timecodeCue = -1;     // launches when the incoming timecode reaches this (s); <0 off
+  // With a cue: the media follows the timecode (chase): it pauses when it
+  // stops, jumps with it, and playing from any point brings up this column.
+  bool timecodeChase = true;
 };
 
 struct OscTarget {

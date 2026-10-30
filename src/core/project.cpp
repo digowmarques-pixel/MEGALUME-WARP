@@ -990,6 +990,7 @@ std::string serializeProject(const Project &p, const std::string &baseDir) {
     if (c.stingerMediaId >= 0) jc["stinger"] = {{"media", c.stingerMediaId}, {"cut", c.stingerCut}};
     if (!c.commands.empty()) jc["commands"] = c.commands;
     if (c.timecodeCue >= 0) jc["timecodeCue"] = c.timecodeCue;
+    if (!c.timecodeChase) jc["timecodeChase"] = false;
     for (auto &st : c.states)
       jc["states"].push_back({{"layer", st.layerId}, {"param", st.param}, {"value", st.value}});
     for (auto &[lid, cell] : c.cells)
@@ -1362,6 +1363,7 @@ bool deserializeProject(const std::string &text, const std::string &baseDir, Pro
       for (auto &a : jc.value("commands", json::array()))
         if (a.is_string()) c.commands.push_back(a.get<std::string>());
       c.timecodeCue = jc.value("timecodeCue", -1.0f);
+      c.timecodeChase = jc.value("timecodeChase", true);
       for (auto &x : jc.value("states", json::array()))
         c.states.push_back({x.value("layer", -1), x.value("param", 0), x.value("value", 0.0f)});
       for (auto &cell : jc.value("cells", json::array())) {

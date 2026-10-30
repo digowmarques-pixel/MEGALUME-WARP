@@ -36,6 +36,8 @@ struct Options {
   int syncPort = 0;
   double quitAfter = 0;         // tests in real time: exit after this many seconds
   double testAudioStall = 0;    // tests: the sound card stops after this many seconds
+  // tests: timecode received, "A-B@T;..." (from A to B seconds of running: T, T+1...; none outside)
+  std::string testTimecode;
   // tests: "X,Y,file[,file...]" dropped at window point X,Y after 3 s (as from the file manager)
   std::string testDrop;
   std::string testAudioRecord;  // tests: WAV file with what was sent to the sound card

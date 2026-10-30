@@ -17,6 +17,7 @@
 #include "media/audio.h"
 #include "media/source.h"
 
+#include <array>
 #include <deque>
 #include <map>
 #include <memory>
@@ -178,6 +179,9 @@ public:
   double timecodeFps() const { return timecodeFps_; }
   const LtcCapture &ltcInput() const { return ltcIn_; }
   const std::string &timecodeError() const { return tcError_; }
+  // Tests: timecode received without a device, {from, to, timecode at `from`}
+  // in seconds of engine time (stands for MTC / LTC).
+  std::vector<std::array<double, 3>> testTimecode;
   // Timecode being generated (valid while the source timeline plays).
   bool generatingTimecode() const { return genActive_; }
   double generatedTimecode() const { return genTime_; }
@@ -274,6 +278,8 @@ private:
   LtcEncoder ltcEnc_{kAudioRate};
   std::shared_ptr<AudioVoice> ltcVoice_;
   void updateTimecode(double dt);
+  void chaseTimecode();
+  double tcLastReal_ = -1; // last timecode actually received (where it stopped)
   bool manualActive_ = false, manualArmed_ = false;
   float manualProgress_ = 0;
   // Shader transitions (one per layer) and the stinger.

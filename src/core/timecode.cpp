@@ -82,6 +82,13 @@ bool timecodeCueHit(double cue, double prev, double now) {
   return cue > from && cue <= now;
 }
 
+int timecodeCueAt(const std::vector<float> &cues, double now) {
+  int best = -1;
+  for (size_t i = 0; i < cues.size(); ++i)
+    if (cues[i] >= 0 && cues[i] <= now + 1e-6 && (best < 0 || cues[i] >= cues[size_t(best)])) best = int(i);
+  return best;
+}
+
 static double mtcRate(int code) {
   static const double r[4] = {24, 25, 29.97, 30};
   return r[code & 3];
