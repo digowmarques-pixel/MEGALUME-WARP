@@ -33,6 +33,12 @@ private:
   int lastPiece_ = -1;
 };
 
+// Whether a column cued at `cue` seconds fires between two readings of a running
+// timecode. prev < 0: the clock just started (or jumped), so a cue a moment behind
+// `now` still counts: MTC needs two frames before it can tell the time, so play
+// from 00:00:00:00 first reads about 00:00:00:02.
+bool timecodeCueHit(double cue, double prev, double now);
+
 // The 8 quarter-frame messages of a frame, and the full-frame sysex.
 std::vector<uint8_t> mtcQuarterFrame(const Timecode &tc, int piece);
 std::vector<uint8_t> mtcFullFrame(const Timecode &tc);

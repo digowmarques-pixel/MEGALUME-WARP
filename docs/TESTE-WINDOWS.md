@@ -13,7 +13,7 @@ um Arduino e o NDI Tools.
 
 ## 0. Instalação e diagnóstico
 
-- [ ] 0.1 Instale com `Lumen-0.10.18-setup.exe` (ou descompacte o .zip). O atalho
+- [ ] 0.1 Instale com `Lumen-0.10.19-setup.exe` (ou descompacte o .zip). O atalho
       aparece no Menu Iniciar, e arquivos `.lumen` abrem com o Lumen.
 - [ ] 0.2 Menu Iniciar → *Lumen (console de diagnóstico)*. O relatório abre no Bloco
       de Notas (também fica em `%APPDATA%\Lumen\diagnostico.txt`).
@@ -227,6 +227,9 @@ um Arduino e o NDI Tools.
       coluna(s)" apaga só as marcadas, do dashboard atual.
 - [ ] 13.31 Leitura: botões (claros, com contorno) se distinguem dos campos (escuros); títulos de
       seção em amarelo; Parar e ■ vermelhos.
+- [ ] 13.32 Timecode MTC do Reaper: coluna com *Disparar no timecode* em 00 00 00 00; Reaper no
+      zero, play: a coluna dispara. Stop, volte ao zero, play: dispara de novo. Com o Reaper
+      parado, mover o cursor não dispara nada.
 - [ ] 13.6 LED escondido: sem botão LED, sem aba LED; *Janela → LED mapping* mostra tudo de volta.
 
 ## Como relatar

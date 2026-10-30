@@ -76,6 +76,12 @@ bool parseTimecode(const std::string &text, double fps, double &seconds) {
   return true;
 }
 
+bool timecodeCueHit(double cue, double prev, double now) {
+  if (cue < 0) return false;
+  const double from = prev >= 0 ? prev : now - 0.3;
+  return cue > from && cue <= now;
+}
+
 static double mtcRate(int code) {
   static const double r[4] = {24, 25, 29.97, 30};
   return r[code & 3];

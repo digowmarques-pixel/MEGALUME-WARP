@@ -95,6 +95,13 @@ Ordem pensada para **videomapping** e **instalações interativas**.
 - *Seek* preciso de vídeo e áudio (também por OSC: `/lumen/layer/<l>/time`)
 - Testes de integração no CI (`scripts/test-integration.sh`)
 
+## ✅ v0.10.19
+- **Coluna no timecode dispara no início**: com o horário em 00:00:00:00 (ou em qualquer ponto
+  de onde se dá play no Reaper/mesa), a coluna dispara. Antes o primeiro quadro de MTC já chegava
+  ~2 quadros adiante e o horário nunca era "atravessado". Voltar e dar play de novo dispara de novo
+- MTC "full frame" (enviado ao posicionar com o transporte parado) só move a posição: não faz o
+  relógio andar sozinho nem dispara colunas
+
 ## ✅ v0.10.18
 - Leitura mais fácil: fonte maior (17 px), texto mais claro, **botões em relevo** (cinza claro
   com contorno), **campos escuros** com contorno, títulos de seção em amarelo claro, Parar e ■

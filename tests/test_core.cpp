@@ -887,6 +887,11 @@ static void testV09() {
   CHECK(ok && got.fps == 25 && std::fabs(got.seconds() - (src.seconds() + 2.0 / 25)) < 1e-6);
   auto ff = mtcFullFrame(Timecode::fromSeconds(10.0, 30));
   CHECK(mtc.feed(ff.data(), ff.size(), got) && got.s == 10 && got.fps == 30);
+  // Column cues: crossed between readings; on a start, a cue just behind the
+  // first reading (play from 0 first reads ~2 frames in) still fires.
+  CHECK(timecodeCueHit(0, -1, 2.0 / 30) && timecodeCueHit(10, -1, 10.1));
+  CHECK(!timecodeCueHit(0, -1, 0.5) && !timecodeCueHit(-1, -1, 0.05));
+  CHECK(timecodeCueHit(5, 4.98, 5.01) && !timecodeCueHit(5, 5.0, 5.02) && !timecodeCueHit(5, 4.9, 4.95));
   // LTC: encode a few frames, decode them back (also at another sample rate and level).
   for (double fps : {25.0, 30.0, 24.0}) {
     for (int rate : {48000, 44100}) {

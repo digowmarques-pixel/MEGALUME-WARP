@@ -529,12 +529,13 @@ void Engine::updateTimecode(double dt) {
   }
   // Columns cued on a timecode.
   if (timecodeValid_) {
-    if (tcPrev_ >= 0 && timecodeSeconds_ >= tcPrev_ && timecodeSeconds_ - tcPrev_ < 1.0)
-      for (size_t i = 0; i < project.columns.size(); ++i) {
-        float cue = project.columns[i].timecodeCue;
-        if (cue >= 0 && cue > tcPrev_ && cue <= timecodeSeconds_ && !following()) launchColumn(int(i));
-      }
-    tcPrev_ = timecodeSeconds_;
+    // Going back or jumping ahead (play from another point) is a new start.
+    const double now = timecodeSeconds_;
+    const bool fresh = tcPrev_ < 0 || now < tcPrev_ - 0.12 || now - tcPrev_ >= 1.0;
+    if (!following())
+      for (size_t i = 0; i < project.columns.size(); ++i)
+        if (timecodeCueHit(project.columns[i].timecodeCue, fresh ? -1.0 : tcPrev_, now)) launchColumn(int(i));
+    tcPrev_ = fresh ? now : std::max(now, tcPrev_); // jitter back: no cue twice
   } else {
     tcPrev_ = -1;
   }

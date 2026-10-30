@@ -76,7 +76,9 @@ void MidiInputs::timecodeFromCallback(const unsigned char *b, size_t n) {
   if (mtc_.feed(b, n, tc)) {
     mtcLast_ = tc;
     mtcHave_ = true;
-    mtcAt_ = std::chrono::steady_clock::now();
+    // A full frame (sysex) is a locate with the transport stopped: it is not
+    // running time, so it must not start the clock (nor fire cues).
+    if (b[0] == 0xF1) mtcAt_ = std::chrono::steady_clock::now();
   }
 }
 
