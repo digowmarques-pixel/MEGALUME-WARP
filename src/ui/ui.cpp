@@ -801,6 +801,8 @@ void Ui::menuBar(App &app) {
     ImGui::MenuItem(T("Interação (OSC, MIDI, DMX, serial)"), nullptr, &panelOpen_[1]);
     ImGui::MenuItem(T("Projeto"), nullptr, &panelOpen_[2]);
     if (workspace.showLed) ImGui::MenuItem(T("LED"), nullptr, &panelOpen_[3]);
+    sectionTitle(T("Timecode"));
+    ImGui::MenuItem(T("Timecode (MTC / LTC)"), nullptr, &panelOpen_[4]);
     sectionTitle(T("Propriedades"));
     struct P { const char *name; Inspector id; };
     const P panels[] = {{T("Layer"), Inspector::Layer}, {T("Célula"), Inspector::Cell}, {T("Mídia"), Inspector::Media}};
@@ -1580,7 +1582,8 @@ void Ui::dashboard(App &app) {
           }
           ImGui::SameLine();
           ImGui::TextDisabled("%.2f fps", fps);
-          helpMarker(T("A coluna dispara quando o timecode recebido (MTC ou LTC, em Interação) passa por este valor."));
+          helpMarker(T("A coluna dispara quando o timecode recebido (MTC ou LTC, em Janela → Timecode) passa por este valor."));
+          if (ImGui::SmallButton(T("Configurar timecode..."))) app.sel.inspector = Inspector::Timecode;
           if (ImGui::Checkbox(T("Vídeo segue o timecode"), &colRef.timecodeChase)) app.edited();
           helpMarker(T("O vídeo anda junto com o timecode: pausa quando ele para, pula quando ele pula, "
                        "e dar play no meio (no Reaper, na mesa...) já entra nesta coluna, no ponto certo."));
@@ -2298,12 +2301,13 @@ void Ui::panelWindows(App &app) {
   const W wins[] = {{T("Propriedades das saídas###pw_out"), &Ui::outputInspector},
                     {T("Interação (OSC, MIDI, DMX, serial)###pw_int"), &Ui::interactionInspector},
                     {T("Projeto###pw_proj"), &Ui::projectInspector},
-                    {T("LED mapping###pw_led"), &Ui::ledInspector}};
+                    {T("LED mapping###pw_led"), &Ui::ledInspector},
+                    {T("Timecode###pw_tc"), &Ui::timecodeInspector}};
   if (!workspace.showLed) panelOpen_[3] = false;
   ImGuiViewport *vp = ImGui::GetMainViewport();
-  for (int k = 0; k < 4; ++k) {
+  for (int k = 0; k < 5; ++k) {
     if (!panelOpen_[k]) continue;
-    ImGui::SetNextWindowSize({480, vp->WorkSize.y * 0.75f}, ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize({480, k == 4 ? 560 : vp->WorkSize.y * 0.75f}, ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowPos({vp->WorkPos.x + vp->WorkSize.x - 520 - 30.0f * float(k), vp->WorkPos.y + 70 + 30.0f * float(k)},
                             ImGuiCond_FirstUseEver);
     if (ImGui::Begin(wins[k].title, &panelOpen_[k], ImGuiWindowFlags_NoCollapse)) (this->*wins[k].draw)(app);
@@ -2317,8 +2321,9 @@ void Ui::inspector(App &app) {
   const Tab tabs[] = {{T("Layer"), Inspector::Layer}, {T("Célula"), Inspector::Cell}, {T("Mídia"), Inspector::Media}};
   static Inspector shown = Inspector::Layer;
   // A request for a setup panel (menu, "Adicionar saída", a LED strip clicked...) opens its window.
-  const Inspector windows[] = {Inspector::Output, Inspector::Interaction, Inspector::Project, Inspector::Led};
-  for (int k = 0; k < 4; ++k)
+  const Inspector windows[] = {Inspector::Output, Inspector::Interaction, Inspector::Project, Inspector::Led,
+                               Inspector::Timecode};
+  for (int k = 0; k < 5; ++k)
     if (app.sel.inspector == windows[k]) {
       if (k != 3 || workspace.showLed) panelOpen_[k] = true;
       app.sel.inspector = shown;
@@ -4218,6 +4223,140 @@ void Ui::redundancyUi(App &app) {
   if (inputTextMultiline("##takeover", p.redundancy.takeoverCommands, {-1, 70})) app.edited();
 }
 
+// Timecode (MTC / LTC): receiving, delay, generating. Its own window (Janela → Timecode).
+void Ui::timecodeInspector(App &app) {
+  Engine &e = app.engine;
+  Project &p = e.project;
+  // Big clock, like a SMPTE display: what the show follows right now (delay included).
+  {
+    const bool on = p.timecode.source != TimecodeSource::Off && e.timecodeValid();
+    std::string clock = on ? Timecode::fromSeconds(e.timecodeSeconds(), e.timecodeFps()).str() : "--:--:--:--";
+    if (bigFont_) ImGui::PushFont(bigFont_);
+    ImGui::SetWindowFontScale(1.6f);
+    ImGui::TextColored(on ? kAccent : ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled), "%s", clock.c_str());
+    ImGui::SetWindowFontScale(1.0f);
+    if (bigFont_) ImGui::PopFont();
+    ImGui::SameLine();
+    char info[96];
+    int n = on ? std::snprintf(info, sizeof(info), T("%.2f fps"), e.timecodeFps())
+               : std::snprintf(info, sizeof(info), "%s", T("Sem sinal"));
+    if (p.timecode.delayFrames != 0 && n > 0 && n < int(sizeof(info)))
+      std::snprintf(info + n, sizeof(info) - size_t(n), T(" · atraso %+d q"), p.timecode.delayFrames);
+    ImGui::TextDisabled("%s", info);
+  }
+  if (p.timecode.source == TimecodeSource::MTC && !p.midiEnabled) {
+    ImGui::TextColored({1, 0.6f, 0.3f, 1}, "%s", T("O MTC chega pelo MIDI, que está desligado."));
+    ImGui::SameLine();
+    if (ImGui::Button(T("Ativar MIDI"))) {
+      p.midiEnabled = true;
+      e.restartMidi();
+      app.edited();
+    }
+  } else if (p.timecode.source == TimecodeSource::MTC) {
+    std::string ports;
+    for (auto &q : e.midi().ports()) ports += (ports.empty() ? "" : ", ") + q;
+    ImGui::TextDisabled(T("Portas MIDI: %s"), ports.empty() ? T("nenhuma") : ports.c_str());
+  }
+  sectionTitle(T("Receber"));
+  {
+    TimecodeConfig &tc = p.timecode;
+    int src = int(tc.source);
+    if (ImGui::Combo(T("Receber"), &src, TZ("Desligado\0MTC (MIDI Time Code)\0LTC (áudio)\0"))) {
+      tc.source = TimecodeSource(src);
+      app.edited();
+    }
+    if (tc.source == TimecodeSource::LTC) {
+      static std::vector<std::string> caps;
+      static double capsAt = -10;
+      if (ImGui::GetTime() - capsAt > 5) { caps = LtcCapture::devices(); capsAt = ImGui::GetTime(); }
+      if (ImGui::BeginCombo(T("Entrada de áudio"), tc.ltcDevice.empty() ? T("Padrão do sistema") : tc.ltcDevice.c_str())) {
+        if (ImGui::Selectable(T("Padrão do sistema"), tc.ltcDevice.empty())) { tc.ltcDevice.clear(); app.edited(); }
+        for (auto &d : caps)
+          if (ImGui::Selectable(d.c_str(), d == tc.ltcDevice)) { tc.ltcDevice = d; app.edited(); }
+        ImGui::EndCombo();
+      }
+      ImGui::SetNextItemWidth(100);
+      if (ImGui::InputInt(T("Canal (0 = esquerdo)"), &tc.ltcChannel)) { tc.ltcChannel = std::clamp(tc.ltcChannel, 0, 7); app.edited(); }
+      ImGui::ProgressBar(std::min(1.0f, e.ltcInput().level()), {-1, 5}, "");
+    }
+    if (tc.source != TimecodeSource::Off) {
+      ImGui::SetNextItemWidth(100);
+      if (ImGui::DragFloat(T("Roda livre (s)"), &tc.freewheel, 0.05f, 0, 10)) app.edited();
+      helpMarker(T("Se o sinal cair, o relógio continua sozinho por este tempo (evita parar o show "
+                 "num cabo com mau contato)."));
+      ImGui::SetNextItemWidth(130);
+      if (ImGui::InputInt(T("Atraso (quadros)"), &tc.delayFrames)) {
+        tc.delayFrames = std::clamp(tc.delayFrames, -100, 100);
+        app.edited();
+      }
+      ImGui::SameLine();
+      ImGui::TextDisabled(T("%+.0f ms"), tc.delayFrames * 1000.0 / (e.timecodeFps() > 0 ? e.timecodeFps() : 25.0));
+      helpMarker(T("Acerta o vídeo com o som: positivo atrasa o vídeo, negativo adianta. Vale para "
+                 "as colunas, as timelines e o vídeo que segue o timecode. Pode mudar com o show "
+                 "rodando: o vídeo se ajusta sozinho."));
+      if (!e.timecodeError().empty()) ImGui::TextColored({1, 0.4f, 0.4f, 1}, "%s", e.timecodeError().c_str());
+      ImGui::TextDisabled("%s", T("Use: timeline → \"timecode\", ou coluna → Disparar no timecode."));
+    }
+    sectionTitle(T("Gerar"));
+    if (ImGui::Checkbox(T("Gerar timecode a partir de uma timeline"), &tc.generate)) app.edited();
+    if (tc.generate) {
+      const Timeline *gt = p.timeline(tc.genTimelineId);
+      if (ImGui::BeginCombo(T("Timeline##gen"), gt ? gt->name.c_str() : T("(escolha)"))) {
+        for (auto &t : p.timelines)
+          if (ImGui::Selectable(t.name.c_str(), t.id == tc.genTimelineId)) { tc.genTimelineId = t.id; app.edited(); }
+        ImGui::EndCombo();
+      }
+      static char start[32] = "";
+      std::string cur = Timecode::fromSeconds(tc.genStart, tc.genFps).str();
+      if (!ImGui::IsAnyItemActive()) std::snprintf(start, sizeof(start), "%s", cur.c_str());
+      ImGui::SetNextItemWidth(120);
+      if (ImGui::InputText(T("Início"), start, sizeof(start), ImGuiInputTextFlags_EnterReturnsTrue)) {
+        double v;
+        if (parseTimecode(start, tc.genFps, v)) { tc.genStart = v; app.edited(); }
+      }
+      int fpsI = tc.genFps < 24.5 ? 0 : tc.genFps < 27 ? 1 : tc.genFps < 29.99 ? 2 : 3;
+      ImGui::SetNextItemWidth(120);
+      if (ImGui::Combo(T("fps##gen"), &fpsI, TZ("24\00025\00029.97 drop\00030\0"))) {
+        static const double f[] = {24, 25, 29.97, 30};
+        tc.genFps = f[fpsI];
+        app.edited();
+      }
+      if (ImGui::Checkbox(T("MTC na porta MIDI"), &tc.genMtc)) app.edited();
+      if (tc.genMtc) {
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(120);
+        if (inputText("##mtcport", tc.genMtcPort)) app.edited();
+        ImGui::SetItemTooltip("%s", T("Parte do nome da porta MIDI (vazio = a primeira)"));
+      }
+      if (ImGui::Checkbox(T("LTC no áudio"), &tc.genLtc)) app.edited();
+      if (tc.genLtc) {
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(100);
+        // Left / right / both, or a dedicated output of a multichannel interface.
+        auto ltcLabel = [](int v) -> std::string {
+          if (v == 0) return T("esquerdo");
+          if (v == 1) return T("direito");
+          if (v == 2) return T("os dois");
+          char b[32];
+          std::snprintf(b, sizeof(b), T("saída %d"), v);
+          return b;
+        };
+        if (ImGui::BeginCombo("##ltcch", ltcLabel(tc.genLtcChannel).c_str())) {
+          for (int v = 0; v <= std::max(2, e.audio.channels()); ++v) {
+            if (ImGui::Selectable(ltcLabel(v).c_str(), tc.genLtcChannel == v)) { tc.genLtcChannel = v; app.edited(); }
+          }
+          ImGui::EndCombo();
+        }
+      }
+      if (e.generatingTimecode())
+        ImGui::TextColored(kAccent, T("Gerando %s"), Timecode::fromSeconds(e.generatedTimecode(), tc.genFps).str().c_str());
+      else
+        ImGui::TextDisabled("%s", T("Gera enquanto a timeline estiver tocando."));
+    }
+  }
+
+}
+
 void Ui::interactionInspector(App &app) {
   Engine &e = app.engine;
   Project &p = e.project;
@@ -4286,106 +4425,8 @@ void Ui::interactionInspector(App &app) {
   }
 
   sectionTitle(T("Timecode"));
-  {
-    TimecodeConfig &tc = p.timecode;
-    int src = int(tc.source);
-    if (ImGui::Combo(T("Receber"), &src, TZ("Desligado\0MTC (MIDI Time Code)\0LTC (áudio)\0"))) {
-      tc.source = TimecodeSource(src);
-      app.edited();
-    }
-    if (tc.source == TimecodeSource::LTC) {
-      static std::vector<std::string> caps;
-      static double capsAt = -10;
-      if (ImGui::GetTime() - capsAt > 5) { caps = LtcCapture::devices(); capsAt = ImGui::GetTime(); }
-      if (ImGui::BeginCombo(T("Entrada de áudio"), tc.ltcDevice.empty() ? T("Padrão do sistema") : tc.ltcDevice.c_str())) {
-        if (ImGui::Selectable(T("Padrão do sistema"), tc.ltcDevice.empty())) { tc.ltcDevice.clear(); app.edited(); }
-        for (auto &d : caps)
-          if (ImGui::Selectable(d.c_str(), d == tc.ltcDevice)) { tc.ltcDevice = d; app.edited(); }
-        ImGui::EndCombo();
-      }
-      ImGui::SetNextItemWidth(100);
-      if (ImGui::InputInt(T("Canal (0 = esquerdo)"), &tc.ltcChannel)) { tc.ltcChannel = std::clamp(tc.ltcChannel, 0, 7); app.edited(); }
-      ImGui::ProgressBar(std::min(1.0f, e.ltcInput().level()), {-1, 5}, "");
-    }
-    if (tc.source != TimecodeSource::Off) {
-      ImGui::SetNextItemWidth(100);
-      if (ImGui::DragFloat(T("Roda livre (s)"), &tc.freewheel, 0.05f, 0, 10)) app.edited();
-      helpMarker(T("Se o sinal cair, o relógio continua sozinho por este tempo (evita parar o show "
-                 "num cabo com mau contato)."));
-      ImGui::SetNextItemWidth(130);
-      if (ImGui::InputInt(T("Atraso (quadros)"), &tc.delayFrames)) {
-        tc.delayFrames = std::clamp(tc.delayFrames, -100, 100);
-        app.edited();
-      }
-      ImGui::SameLine();
-      ImGui::TextDisabled(T("%+.0f ms"), tc.delayFrames * 1000.0 / (e.timecodeFps() > 0 ? e.timecodeFps() : 25.0));
-      helpMarker(T("Acerta o vídeo com o som: positivo atrasa o vídeo, negativo adianta. Vale para "
-                 "as colunas, as timelines e o vídeo que segue o timecode. Pode mudar com o show "
-                 "rodando: o vídeo se ajusta sozinho."));
-      if (e.timecodeValid())
-        ImGui::TextColored(kAccent, T("%s  (%.2f fps)"), Timecode::fromSeconds(e.timecodeSeconds(), e.timecodeFps()).str().c_str(),
-                           e.timecodeFps());
-      else
-        ImGui::TextDisabled("%s", T("Sem sinal"));
-      if (!e.timecodeError().empty()) ImGui::TextColored({1, 0.4f, 0.4f, 1}, "%s", e.timecodeError().c_str());
-      ImGui::TextDisabled("%s", T("Use: timeline → \"timecode\", ou coluna → Disparar no timecode."));
-    }
-    if (ImGui::Checkbox(T("Gerar timecode a partir de uma timeline"), &tc.generate)) app.edited();
-    if (tc.generate) {
-      const Timeline *gt = p.timeline(tc.genTimelineId);
-      if (ImGui::BeginCombo(T("Timeline##gen"), gt ? gt->name.c_str() : T("(escolha)"))) {
-        for (auto &t : p.timelines)
-          if (ImGui::Selectable(t.name.c_str(), t.id == tc.genTimelineId)) { tc.genTimelineId = t.id; app.edited(); }
-        ImGui::EndCombo();
-      }
-      static char start[32] = "";
-      std::string cur = Timecode::fromSeconds(tc.genStart, tc.genFps).str();
-      if (!ImGui::IsAnyItemActive()) std::snprintf(start, sizeof(start), "%s", cur.c_str());
-      ImGui::SetNextItemWidth(120);
-      if (ImGui::InputText(T("Início"), start, sizeof(start), ImGuiInputTextFlags_EnterReturnsTrue)) {
-        double v;
-        if (parseTimecode(start, tc.genFps, v)) { tc.genStart = v; app.edited(); }
-      }
-      int fpsI = tc.genFps < 24.5 ? 0 : tc.genFps < 27 ? 1 : tc.genFps < 29.99 ? 2 : 3;
-      ImGui::SetNextItemWidth(120);
-      if (ImGui::Combo(T("fps##gen"), &fpsI, TZ("24\00025\00029.97 drop\00030\0"))) {
-        static const double f[] = {24, 25, 29.97, 30};
-        tc.genFps = f[fpsI];
-        app.edited();
-      }
-      if (ImGui::Checkbox(T("MTC na porta MIDI"), &tc.genMtc)) app.edited();
-      if (tc.genMtc) {
-        ImGui::SameLine();
-        ImGui::SetNextItemWidth(120);
-        if (inputText("##mtcport", tc.genMtcPort)) app.edited();
-        ImGui::SetItemTooltip("%s", T("Parte do nome da porta MIDI (vazio = a primeira)"));
-      }
-      if (ImGui::Checkbox(T("LTC no áudio"), &tc.genLtc)) app.edited();
-      if (tc.genLtc) {
-        ImGui::SameLine();
-        ImGui::SetNextItemWidth(100);
-        // Left / right / both, or a dedicated output of a multichannel interface.
-        auto ltcLabel = [](int v) -> std::string {
-          if (v == 0) return T("esquerdo");
-          if (v == 1) return T("direito");
-          if (v == 2) return T("os dois");
-          char b[32];
-          std::snprintf(b, sizeof(b), T("saída %d"), v);
-          return b;
-        };
-        if (ImGui::BeginCombo("##ltcch", ltcLabel(tc.genLtcChannel).c_str())) {
-          for (int v = 0; v <= std::max(2, e.audio.channels()); ++v) {
-            if (ImGui::Selectable(ltcLabel(v).c_str(), tc.genLtcChannel == v)) { tc.genLtcChannel = v; app.edited(); }
-          }
-          ImGui::EndCombo();
-        }
-      }
-      if (e.generatingTimecode())
-        ImGui::TextColored(kAccent, T("Gerando %s"), Timecode::fromSeconds(e.generatedTimecode(), tc.genFps).str().c_str());
-      else
-        ImGui::TextDisabled("%s", T("Gera enquanto a timeline estiver tocando."));
-    }
-  }
+  ImGui::TextDisabled("%s", T("MTC / LTC: tem uma janela só para ele."));
+  if (ImGui::Button(T("Abrir Timecode..."))) panelOpen_[4] = true;
 
   sectionTitle(T("Serial (Arduino)"));
   {

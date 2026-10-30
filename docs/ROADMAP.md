@@ -95,6 +95,12 @@ Ordem pensada para **videomapping** e **instalações interativas**.
 - *Seek* preciso de vídeo e áudio (também por OSC: `/lumen/layer/<l>/time`)
 - Testes de integração no CI (`scripts/test-integration.sh`)
 
+## ✅ v0.10.22
+- **Janela própria do Timecode** (*Janela → Timecode (MTC / LTC)*, em seção separada no menu):
+  relógio grande com fps e atraso, Receber (MTC/LTC, roda livre, atraso em quadros) e Gerar.
+  Avisa (com botão) quando o MTC está escolhido e o MIDI desligado. Interação e a coluna têm
+  um atalho para ela
+
 ## ✅ v0.10.21
 - **Atraso (quadros)** do timecode recebido (*Interação → Timecode*): acerta o vídeo com o
   som do Reaper/mesa; positivo atrasa o vídeo, negativo adianta (até ±100 quadros)

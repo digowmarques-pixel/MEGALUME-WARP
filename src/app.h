@@ -48,7 +48,7 @@ struct Options {
   std::string screenshotOutputs; // prefix: writes <prefix>1.ppm... (1 px = 1 canvas px)
 };
 
-enum class Inspector { Layer, Cell, Media, Output, Led, Interaction, Project };
+enum class Inspector { Layer, Cell, Media, Output, Led, Interaction, Project, Timecode };
 
 struct Selection {
   int layerId = -1;

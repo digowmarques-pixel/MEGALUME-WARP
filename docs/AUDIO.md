@@ -50,7 +50,7 @@ que iam para 3-4, 5-6... tocam em 1-2. Assim dá para ensaiar em qualquer lugar.
 
 ## Timecode LTC numa saída própria
 
-Em *Interação → Timecode → Gerar*, a saída do LTC pode ser esquerda, direita, os dois
+Em *Janela → Timecode → Gerar*, a saída do LTC pode ser esquerda, direita, os dois
 ou **qualquer saída da interface** (ex.: saída 8, ligada direto na mesa de luz).
 O LTC não passa pelo volume master (master em zero não corta o timecode) e segue o
 relógio da placa: depois de um engasgo do computador ele se realinha à timeline em vez

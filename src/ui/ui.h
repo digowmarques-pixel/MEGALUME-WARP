@@ -102,8 +102,8 @@ private:
   Texture asioLogo_;
   bool asioLogoTried_ = false;
   void asioNotice();
-  // Setup panels in their own windows (Janela menu): Saídas, Interação, Projeto, LED.
-  bool panelOpen_[4] = {};
+  // Setup panels in their own windows (Janela menu): Saídas, Interação, Projeto, LED, Timecode.
+  bool panelOpen_[5] = {};
   void panelWindows(App &app);
   std::string diagReport_;
   void relinkDialog(App &app);
@@ -121,6 +121,7 @@ private:
   void mediaInspector(App &app);
   void outputInspector(App &app);
   void interactionInspector(App &app);
+  void timecodeInspector(App &app);
   void softEdgeControls(App &app, OutputConfig *o);
   void blackAndColorControls(App &app, OutputConfig *o);
   void effectsUi(App &app, Layer &l);

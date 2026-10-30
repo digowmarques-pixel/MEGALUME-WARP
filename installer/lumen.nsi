@@ -1,5 +1,5 @@
 ; Lumen installer (NSIS 3). Builds on Windows (CI) or Linux (apt install nsis):
-;   makensis -DVERSION=0.10.21 -DSRCDIR=path\to\Lumen -DOUTFILE=Lumen-setup.exe installer/lumen.nsi
+;   makensis -DVERSION=0.10.22 -DSRCDIR=path\to\Lumen -DOUTFILE=Lumen-setup.exe installer/lumen.nsi
 ; SRCDIR is the packaged folder (lumen.exe, DLLs, effects, examples, docs).
 
 Unicode true

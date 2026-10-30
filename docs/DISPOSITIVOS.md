@@ -65,7 +65,7 @@ osc 192.168.1.40:53000 /cue/abertura/start
 
 ## Timecode (MTC e LTC)
 
-Em *Interação → Timecode*:
+Em *Janela → Timecode (MTC / LTC)* (MTC precisa do MIDI ativado: a janela avisa):
 
 - **Receber**: *MTC* chega por qualquer entrada MIDI; *LTC* entra pela placa de som
   (escolha a entrada e o canal: 0 = esquerdo). O valor recebido aparece ao lado, com
