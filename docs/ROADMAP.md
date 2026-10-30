@@ -95,6 +95,13 @@ Ordem pensada para **videomapping** e **instalações interativas**.
 - *Seek* preciso de vídeo e áudio (também por OSC: `/lumen/layer/<l>/time`)
 - Testes de integração no CI (`scripts/test-integration.sh`)
 
+## ✅ v0.10.18
+- Leitura mais fácil: fonte maior (17 px), texto mais claro, **botões em relevo** (cinza claro
+  com contorno), **campos escuros** com contorno, títulos de seção em amarelo claro, Parar e ■
+  como botões vermelhos, Remover coluna em vermelho; Mover para a esquerda/direita viraram botões
+- **Remover várias colunas de uma vez**: *Lista → Remover colunas...* (ou "Remover várias..." no
+  menu da coluna): marque as colunas, com atalhos *Todas*, *Só as vazias* e *Nenhuma*
+
 ## ✅ v0.10.17
 - **ASIO®** (Windows): saída direta pelos drivers ASIO, todas as saídas da interface, botão
   para o painel do driver, reabre sozinho quando o buffer muda e volta ao WASAPI se o driver

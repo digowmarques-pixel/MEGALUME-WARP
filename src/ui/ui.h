@@ -93,6 +93,10 @@ private:
   char syncPeerEdit_[128] = {};
   bool showDiag_ = false;
   bool showAbout_ = false;
+  // "Remover colunas...": several columns of the current dashboard at once.
+  bool showRemoveColumns_ = false;
+  std::vector<int> removeColumnIds_; // ticked column ids
+  void removeColumnsWindow(App &app);
   // "ASIO compatible" logo (asio-logo.png next to the exe, only in builds with ASIO):
   // Steinberg's terms ask for it wherever ASIO is set up, and in the About box.
   Texture asioLogo_;

@@ -13,7 +13,7 @@ um Arduino e o NDI Tools.
 
 ## 0. Instalação e diagnóstico
 
-- [ ] 0.1 Instale com `Lumen-0.10.17-setup.exe` (ou descompacte o .zip). O atalho
+- [ ] 0.1 Instale com `Lumen-0.10.18-setup.exe` (ou descompacte o .zip). O atalho
       aparece no Menu Iniciar, e arquivos `.lumen` abrem com o Lumen.
 - [ ] 0.2 Menu Iniciar → *Lumen (console de diagnóstico)*. O relatório abre no Bloco
       de Notas (também fica em `%APPDATA%\Lumen\diagnostico.txt`).
@@ -223,6 +223,10 @@ um Arduino e o NDI Tools.
       ASIO compatible aparece embaixo. Escolha-a: "Em uso" mostra o driver e os canais; o som sai.
       "Painel do driver ASIO..." abre a janela do fabricante; mude o buffer lá: o som volta sozinho.
 - [ ] 13.29 Ajuda → Sobre o Lumen: versão e (na versão com ASIO) o logo e a frase da Steinberg.
+- [ ] 13.30 Lista → Remover colunas...: "Só as vazias" marca as colunas sem mídia; "Remover N
+      coluna(s)" apaga só as marcadas, do dashboard atual.
+- [ ] 13.31 Leitura: botões (claros, com contorno) se distinguem dos campos (escuros); títulos de
+      seção em amarelo; Parar e ■ vermelhos.
 - [ ] 13.6 LED escondido: sem botão LED, sem aba LED; *Janela → LED mapping* mostra tudo de volta.
 
 ## Como relatar

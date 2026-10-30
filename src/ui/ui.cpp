@@ -71,9 +71,33 @@ bool section(const char *label, pal::Rgb c) {
   return open;
 }
 
-// Red text: stop and blackout.
-void pushStop() { ImGui::PushStyleColor(ImGuiCol_Text, pal::vec(pal::kRed)); }
-void popStop() { ImGui::PopStyleColor(); }
+// Section title inside panels and menus: light yellow, so the sections stand out.
+void sectionTitle(const char *label) {
+  ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.84f, 0.42f, 1));
+  ImGui::SeparatorText(label);
+  ImGui::PopStyleColor();
+}
+
+// A button that deletes something: red, so it is not pressed by mistake.
+bool dangerButton(const char *label, ImVec2 size = {0, 0}) {
+  ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.55f, 0.16f, 0.16f, 1));
+  ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.72f, 0.2f, 0.2f, 1));
+  ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.85f, 0.25f, 0.25f, 1));
+  ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.85f, 0.35f, 0.35f, 1));
+  bool hit = ImGui::Button(label, size);
+  ImGui::PopStyleColor(4);
+  return hit;
+}
+
+// Red button: stop and blackout.
+void pushStop() {
+  ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.62f, 0.15f, 0.15f, 1));
+  ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.78f, 0.2f, 0.2f, 1));
+  ImGui::PushStyleColor(ImGuiCol_ButtonActive, pal::vec(pal::kRed));
+  ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.9f, 0.36f, 0.36f, 1));
+  ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1, 1, 1, 1));
+}
+void popStop() { ImGui::PopStyleColor(5); }
 
 // Yellow button with black text (main actions, active tools).
 void pushPrimary() {
@@ -81,8 +105,9 @@ void pushPrimary() {
   ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(1.0f, 0.84f, 0.25f, 1));
   ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.9f, 0.68f, 0.0f, 1));
   ImGui::PushStyleColor(ImGuiCol_Text, kOnAccent);
+  ImGui::PushStyleColor(ImGuiCol_Border, kAccent);
 }
-void popPrimary() { ImGui::PopStyleColor(4); }
+void popPrimary() { ImGui::PopStyleColor(5); }
 
 bool colorEdit(const char *label, Color &c, bool alpha = false) {
   float v[4] = {c.r, c.g, c.b, c.a};
@@ -293,14 +318,14 @@ void Ui::setup() {
       // Latin-1 plus punctuation (– — … ·) and arrows (→) used in the interface.
       static const ImWchar ranges[] = {0x0020, 0x00FF, 0x2000, 0x206F, 0x2190, 0x21FF, 0x2212, 0x2212,
                                        0x25A0, 0x25FF, 0};
-      if (io.Fonts->AddFontFromFileTTF(f, 16.0f, nullptr, ranges)) {
+      if (io.Fonts->AddFontFromFileTTF(f, 17.0f, nullptr, ranges)) {
         loaded = true;
         // Symbols (▶ ■ ⚙ ...) from Windows' symbol font when the UI font lacks them.
         static const ImWchar symbols[] = {0x2190, 0x21FF, 0x25A0, 0x25FF, 0x2600, 0x26FF, 0};
         if (std::filesystem::exists("C:/Windows/Fonts/seguisym.ttf", ec)) {
           ImFontConfig merge;
           merge.MergeMode = true;
-          io.Fonts->AddFontFromFileTTF("C:/Windows/Fonts/seguisym.ttf", 16.0f, &merge, symbols);
+          io.Fonts->AddFontFromFileTTF("C:/Windows/Fonts/seguisym.ttf", 17.0f, &merge, symbols);
         }
         break;
       }
@@ -319,7 +344,7 @@ void Ui::setup() {
       else if (std::filesystem::exists("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", ec) &&
                std::string(f).find("DejaVu") != std::string::npos)
         bold = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf";
-      bigFont_ = io.Fonts->AddFontFromFileTTF(bold, 21.0f);
+      bigFont_ = io.Fonts->AddFontFromFileTTF(bold, 22.0f);
       break;
     }
   }
@@ -337,7 +362,7 @@ void Ui::setup() {
   s.WindowBorderSize = 0;
   s.ChildBorderSize = 1;
   s.PopupBorderSize = 1;
-  s.FrameBorderSize = 0;
+  s.FrameBorderSize = 1; // fields and buttons outlined: easy to tell from the text around them
   s.TabBarOverlineSize = 2;
   s.WindowPadding = {10, 8};
   s.FramePadding = {8, 4};
@@ -355,23 +380,26 @@ void Ui::setup() {
   const ImVec4 black{pal::kBackdrop[0], pal::kBackdrop[1], pal::kBackdrop[2], 1}, panel{0.215f, 0.215f, 0.225f, 1},
       inset{0.185f, 0.185f, 0.195f, 1};
   const ImVec4 frame{0.29f, 0.29f, 0.30f, 1}, frameHi{0.35f, 0.35f, 0.365f, 1}, line{0.29f, 0.29f, 0.30f, 1};
+  // Fields (text, numbers, lists) are sunken and dark; buttons are raised and light.
+  const ImVec4 field{0.13f, 0.13f, 0.14f, 1}, fieldHi{0.17f, 0.17f, 0.18f, 1};
+  const ImVec4 button{0.40f, 0.40f, 0.42f, 1}, buttonHi{0.50f, 0.50f, 0.52f, 1};
   const ImVec4 y = kAccent;
   auto ya = [&](float a) { return ImVec4(y.x, y.y, y.z, a); };
   ImVec4 *c = s.Colors;
-  c[ImGuiCol_Text] = {0.93f, 0.93f, 0.92f, 1};
-  c[ImGuiCol_TextDisabled] = {0.62f, 0.62f, 0.6f, 1};
+  c[ImGuiCol_Text] = {0.98f, 0.98f, 0.97f, 1};
+  c[ImGuiCol_TextDisabled] = {0.72f, 0.72f, 0.70f, 1};
   c[ImGuiCol_WindowBg] = panel;
   c[ImGuiCol_ChildBg] = inset;
   c[ImGuiCol_PopupBg] = {0.24f, 0.24f, 0.25f, 0.98f};
-  c[ImGuiCol_Border] = line;
+  c[ImGuiCol_Border] = {0.46f, 0.46f, 0.48f, 1}; // outline of fields and buttons
   c[ImGuiCol_BorderShadow] = {0, 0, 0, 0};
   c[ImGuiCol_MenuBarBg] = black;
   c[ImGuiCol_TitleBg] = c[ImGuiCol_TitleBgActive] = c[ImGuiCol_TitleBgCollapsed] = panel;
-  c[ImGuiCol_FrameBg] = frame;
-  c[ImGuiCol_FrameBgHovered] = frameHi;
-  c[ImGuiCol_FrameBgActive] = {0.38f, 0.36f, 0.28f, 1};
-  c[ImGuiCol_Button] = frame;
-  c[ImGuiCol_ButtonHovered] = frameHi;
+  c[ImGuiCol_FrameBg] = field;
+  c[ImGuiCol_FrameBgHovered] = fieldHi;
+  c[ImGuiCol_FrameBgActive] = {0.21f, 0.19f, 0.12f, 1};
+  c[ImGuiCol_Button] = button;
+  c[ImGuiCol_ButtonHovered] = buttonHi;
   c[ImGuiCol_ButtonActive] = ya(0.85f);
   c[ImGuiCol_Header] = {0.27f, 0.27f, 0.28f, 1};
   c[ImGuiCol_HeaderHovered] = {0.33f, 0.33f, 0.345f, 1};
@@ -524,8 +552,10 @@ void Ui::draw(App &app) {
     panelWindows(app);
   }
   recoveryPopup(app);
+  if (showRemoveColumns_) removeColumnsWindow(app);
   if (showAbout_) {
     ImGui::SetNextWindowSize({460, 0}, ImGuiCond_Appearing);
+    ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing, {0.5f, 0.5f});
     if (ImGui::Begin(T("Sobre o Lumen"), &showAbout_, ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoDocking)) {
       ImGui::Text(T("Lumen %s"), LUMEN_VERSION);
       ImGui::TextDisabled("%s", T("Media server para shows, projeção mapeada e instalações."));
@@ -554,22 +584,22 @@ void Ui::draw(App &app) {
   if (showHelp_) {
     ImGui::SetNextWindowSize({520, 460}, ImGuiCond_FirstUseEver);
     if (ImGui::Begin(T("Atalhos e ajuda"), &showHelp_)) {
-      ImGui::SeparatorText(T("Show"));
+      sectionTitle(T("Show"));
       ImGui::BulletText("%s", T("Espaço: GO (próxima coluna)   |   Shift+Espaço: coluna anterior"));
       ImGui::BulletText("%s", T("Esc: fecha menus (nunca para o show)   |   B: blackout"));
       ImGui::BulletText("%s", T("Clique numa célula: só seleciona (não vai para o ar)"));
       ImGui::BulletText("%s", T("Botão direito na célula: Disparar só esta célula"));
-      ImGui::SeparatorText(T("Workspace / mapping"));
+      sectionTitle(T("Workspace / mapping"));
       ImGui::BulletText("%s", T("V: selecionar/mover   M: perspectiva (4 cantos)"));
       ImGui::BulletText("%s", T("G: malha (mesh warp)   K: máscara"));
       ImGui::BulletText("%s", T("Tab: próximo canto/ponto   Setas: ajuste fino (Shift = 10px)"));
       ImGui::BulletText("%s", T("Roda do mouse: zoom   Botão do meio / Alt+arrastar: mover a vista"));
       ImGui::BulletText("%s", T("F: enquadrar   Máscara: com \"Adicionar pontos\" ligado, clique cria ponto; botão direito apaga"));
-      ImGui::SeparatorText(T("Projeto"));
+      sectionTitle(T("Projeto"));
       ImGui::BulletText("%s", T("Ctrl+N novo, Ctrl+O abrir, Ctrl+S salvar, Ctrl+Shift+S salvar como"));
       ImGui::BulletText("%s", T("Ctrl+Z desfazer, Ctrl+Y / Ctrl+Shift+Z refazer, Ctrl+I importar"));
       ImGui::BulletText("%s", T("Arraste arquivos do Explorer para a janela para importar"));
-      ImGui::SeparatorText(T("OSC"));
+      sectionTitle(T("OSC"));
       ImGui::TextWrapped("%s", T("Envie mensagens para a porta configurada (padrão 8000). "
                          "Exemplos: /lumen/go, /lumen/column/launch 2, /lumen/layer/1/opacity 0.5. "
                          "Veja docs/OSC.md para a lista completa."));
@@ -648,6 +678,10 @@ void Ui::menuBar(App &app) {
       app.sel.layerId = l.id;
       app.sel.slice = 0;
       app.edited();
+    }
+    if (ImGui::MenuItem(T("Remover colunas..."))) {
+      removeColumnIds_.clear();
+      showRemoveColumns_ = true;
     }
     if (ImGui::MenuItem(T("Remover layer selecionada"), nullptr, false, li >= 0)) {
       p.removeLayer(app.sel.layerId);
@@ -762,12 +796,12 @@ void Ui::menuBar(App &app) {
     if (ImGui::MenuItem(T("Dashboard"))) { bottomTab_ = 0; forceBottom_ = true; }
     if (ImGui::MenuItem(T("Timeline"))) { bottomTab_ = 1; forceBottom_ = true; }
     if (ImGui::MenuItem(T("Saídas..."), nullptr, false, edit)) openOutputs();
-    ImGui::SeparatorText(T("Janelas"));
+    sectionTitle(T("Janelas"));
     ImGui::MenuItem(T("Propriedades das saídas"), nullptr, &panelOpen_[0]);
     ImGui::MenuItem(T("Interação (OSC, MIDI, DMX, serial)"), nullptr, &panelOpen_[1]);
     ImGui::MenuItem(T("Projeto"), nullptr, &panelOpen_[2]);
     if (workspace.showLed) ImGui::MenuItem(T("LED"), nullptr, &panelOpen_[3]);
-    ImGui::SeparatorText(T("Propriedades"));
+    sectionTitle(T("Propriedades"));
     struct P { const char *name; Inspector id; };
     const P panels[] = {{T("Layer"), Inspector::Layer}, {T("Célula"), Inspector::Cell}, {T("Mídia"), Inspector::Media}};
     for (auto &pn : panels)
@@ -964,6 +998,68 @@ void Ui::toolbar(App &app) {
   toolbarRowB_ = ImGui::GetCursorPosX() - rowBx;
 }
 
+void Ui::removeColumnsWindow(App &app) {
+  Project &p = app.engine.project;
+  ImGui::SetNextWindowSize({420, 480}, ImGuiCond_Appearing);
+  ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing, {0.5f, 0.5f});
+  if (!ImGui::Begin(T("Remover colunas"), &showRemoveColumns_, ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoDocking)) {
+    ImGui::End();
+    return;
+  }
+  auto ticked = [&](int id) { return std::find(removeColumnIds_.begin(), removeColumnIds_.end(), id) != removeColumnIds_.end(); };
+  auto empty = [](const Column &c) {
+    return std::none_of(c.cells.begin(), c.cells.end(), [](const auto &kv) { return kv.second.mediaId >= 0; });
+  };
+  ImGui::TextWrapped(T("Marque as colunas do dashboard \"%s\" que quer apagar."),
+                     p.boards[size_t(std::clamp(p.currentBoard, 0, int(p.boards.size()) - 1))].c_str());
+  if (ImGui::Button(T("Todas"))) {
+    removeColumnIds_.clear();
+    for (auto &c : p.columns)
+      if (c.board == p.currentBoard) removeColumnIds_.push_back(c.id);
+  }
+  ImGui::SameLine();
+  if (ImGui::Button(T("Só as vazias"))) {
+    removeColumnIds_.clear();
+    for (auto &c : p.columns)
+      if (c.board == p.currentBoard && empty(c)) removeColumnIds_.push_back(c.id);
+  }
+  ImGui::SameLine();
+  if (ImGui::Button(T("Nenhuma"))) removeColumnIds_.clear();
+  const float footer = ImGui::GetFrameHeightWithSpacing() + 8;
+  if (ImGui::BeginChild("##cols", {0, -footer}, ImGuiChildFlags_Borders)) {
+    int n = 0;
+    for (auto &c : p.columns) {
+      if (c.board != p.currentBoard) continue;
+      ++n;
+      bool on = ticked(c.id);
+      char label[192];
+      std::snprintf(label, sizeof(label), "%02d  %s%s##%d", n, c.name.c_str(), empty(c) ? T("  (vazia)") : "", c.id);
+      if (ImGui::Checkbox(label, &on)) {
+        if (on) removeColumnIds_.push_back(c.id);
+        else std::erase(removeColumnIds_, c.id);
+      }
+    }
+  }
+  ImGui::EndChild();
+  int count = 0;
+  for (auto &c : p.columns)
+    if (c.board == p.currentBoard && ticked(c.id)) ++count;
+  char btn[96];
+  std::snprintf(btn, sizeof(btn), T("Remover %d coluna(s)"), count);
+  ImGui::BeginDisabled(count == 0 || app.showLocked);
+  if (dangerButton(btn)) {
+    std::erase_if(p.columns, [&](const Column &c) { return c.board == p.currentBoard && ticked(c.id); });
+    app.sel.cellColumn = -1;
+    removeColumnIds_.clear();
+    showRemoveColumns_ = false;
+    app.edited();
+  }
+  ImGui::EndDisabled();
+  ImGui::SameLine();
+  if (ImGui::Button(T("Cancelar"))) showRemoveColumns_ = false;
+  ImGui::End();
+}
+
 void Ui::asioNotice() {
   if (!asioLogoTried_) {
     asioLogoTried_ = true;
@@ -996,7 +1092,7 @@ void Ui::library(App &app) {
         app.sel.inspector = Inspector::Media;
         app.edited();
       }
-    ImGui::SeparatorText(T("Texto"));
+    sectionTitle(T("Texto"));
     if (ImGui::MenuItem(T("Texto (dinâmico)"))) {
       MediaItem &m = p.addText(T("Texto"));
       app.sel.mediaId = m.id;
@@ -1004,7 +1100,7 @@ void Ui::library(App &app) {
       app.edited();
     }
     ImGui::SetItemTooltip("%s", T("Texto que muda por OSC (/layer:Nome/text \"...\") ou lido de um arquivo .txt"));
-    ImGui::SeparatorText(T("Shaders ISF"));
+    sectionTitle(T("Shaders ISF"));
     for (auto &e : app.engine.isfCatalog.builtins()) {
       if (e.info.filter || e.info.transition) continue;
       if (ImGui::MenuItem(e.name.c_str())) {
@@ -1039,7 +1135,7 @@ void Ui::library(App &app) {
       app.edited();
       ImGui::CloseCurrentPopup();
     };
-    ImGui::SeparatorText(T("Câmeras e placas de captura"));
+    sectionTitle(T("Câmeras e placas de captura"));
 #ifdef __APPLE__
     // FFmpeg cannot list AVFoundation devices: offer the usual indexes.
     if (ImGui::MenuItem(T("Câmera 1 do Mac (AVFoundation)"))) add(p.addLive(T("Câmera 1"), "0", "avfoundation", "framerate=30"));
@@ -1049,12 +1145,12 @@ void Ui::library(App &app) {
     for (auto &d : captureDevices_)
       if (ImGui::MenuItem(d.name.c_str())) add(p.addLive(d.name, d.url, d.format, ""));
     if (ImGui::SmallButton(T("Procurar de novo"))) captureDevices_ = listCaptureDevices();
-    ImGui::SeparatorText(T("Stream de rede"));
+    sectionTitle(T("Stream de rede"));
     ImGui::SetNextItemWidth(300);
     ImGui::InputTextWithHint("##url", "rtsp://, srt://, udp://, http://...", liveUrl_, sizeof(liveUrl_));
     ImGui::SameLine();
     if (ImGui::Button(T("Adicionar")) && liveUrl_[0]) add(p.addLive("", liveUrl_, "", ""));
-    ImGui::SeparatorText(T("NDI (rede)"));
+    sectionTitle(T("NDI (rede)"));
     if (!ndiAvailable()) {
       ImGui::TextDisabled("%s", ndiStatus().c_str());
     } else {
@@ -1063,21 +1159,21 @@ void Ui::library(App &app) {
       for (auto &n : srcs)
         if (ImGui::MenuItem(n.c_str())) add(p.addNdi(n));
     }
-    ImGui::SeparatorText(T("Spout (Windows)"));
+    sectionTitle(T("Spout (Windows)"));
     if (!spoutAvailable()) ImGui::TextDisabled("%s", T("Disponível só no Windows (no Mac o equivalente é o Syphon)"));
     else {
       if (ImGui::MenuItem(T("Sender ativo (qualquer um)"))) add(p.addSpout(""));
       for (auto &n : spoutSenders_)
         if (ImGui::MenuItem(n.c_str())) add(p.addSpout(n));
     }
-    ImGui::SeparatorText(T("Canvas (video routing)"));
+    sectionTitle(T("Canvas (video routing)"));
     for (int c : p.canvasIds()) {
       char label[160];
       std::snprintf(label, sizeof(label), T("%s (%d×%d)##cvm%d"), p.canvasLabel(c).c_str(), p.canvasWidth(c), p.canvasHeight(c), c);
       if (ImGui::MenuItem(label)) add(p.addCanvasMedia(c));
     }
     ImGui::TextDisabled("%s", T("Mostra um canvas dentro de outro (posição, escala e mapping da layer)."));
-    ImGui::SeparatorText(T("Teste"));
+    sectionTitle(T("Teste"));
     if (ImGui::MenuItem(T("Sinal de teste ao vivo (lavfi)")))
       add(p.addLive(T("Sinal de teste"), T("testsrc2=size=1280x720:rate=30"), "lavfi", ""));
     ImGui::EndPopup();
@@ -1328,7 +1424,7 @@ void Ui::dashboard(App &app) {
     bool popupOpen = !locked && ImGui::BeginPopup("colpop");
     if (!popupOpen && !locked) popupOpen = ImGui::BeginPopupContextItem("colpop");
     if (popupOpen) {
-      ImGui::SeparatorText(T("Coluna"));
+      sectionTitle(T("Coluna"));
       ImGui::SetNextItemWidth(220);
       if (inputText(T("Título"), colRef.name)) app.edited();
       {
@@ -1339,7 +1435,7 @@ void Ui::dashboard(App &app) {
           app.edited();
         }
       }
-      ImGui::SeparatorText(T("Transição"));
+      sectionTitle(T("Transição"));
       int tt = int(colRef.transitionType);
       ImGui::SetNextItemWidth(160);
       if (ImGui::Combo(T("Tipo"), &tt, TZ("Crossfade\0Corte (sem transição)\0Fade pelo preto\0Shader (ISF)\0"))) {
@@ -1402,7 +1498,7 @@ void Ui::dashboard(App &app) {
         ImGui::SameLine();
         ImGui::TextDisabled(T("(padrão %.2f s)"), p.defaultTransition);
       }
-      ImGui::SeparatorText(T("Auto-GO"));
+      sectionTitle(T("Auto-GO"));
       {
         bool on = colRef.autoGo >= 0;
         if (ImGui::Checkbox(T("Disparar outra coluna sozinho"), &on)) {
@@ -1422,7 +1518,7 @@ void Ui::dashboard(App &app) {
           }
         }
       }
-      ImGui::SeparatorText(T("Timeline"));
+      sectionTitle(T("Timeline"));
       {
         const Timeline *tl = p.timeline(colRef.timelineId);
         ImGui::SetNextItemWidth(180);
@@ -1441,7 +1537,7 @@ void Ui::dashboard(App &app) {
         helpMarker(T("A timeline começa quando a coluna é disparada e para quando outra coluna "
                    "(sem ela) entra. Se a próxima coluna usa a mesma timeline, ela continua."));
       }
-      ImGui::SeparatorText(T("Comandos para equipamentos"));
+      sectionTitle(T("Comandos para equipamentos"));
       {
         std::string text;
         for (auto &line : colRef.commands) text += line + "\n";
@@ -1465,7 +1561,7 @@ void Ui::dashboard(App &app) {
                    "tcp|udp <ip>:<porta> <texto>   serial COM3@9600 <texto>\n"
                    "osc <ip>:<porta> /endereco args   wait <segundos>"));
       }
-      ImGui::SeparatorText(T("Timecode"));
+      sectionTitle(T("Timecode"));
       {
         bool on = colRef.timecodeCue >= 0;
         if (ImGui::Checkbox(T("Disparar no timecode"), &on)) { colRef.timecodeCue = on ? 0.0f : -1.0f; app.edited(); }
@@ -1487,7 +1583,7 @@ void Ui::dashboard(App &app) {
           helpMarker(T("A coluna dispara quando o timecode recebido (MTC ou LTC, em Interação) passa por este valor."));
         }
       }
-      ImGui::SeparatorText(T("Estados (animar parâmetros)"));
+      sectionTitle(T("Estados (animar parâmetros)"));
       {
         helpMarker(T("Grava o valor atual de parâmetros de uma layer nesta coluna. Ao disparar a "
                    "coluna, eles vão até esse valor durante a transição. Colunas sem valor "
@@ -1534,17 +1630,30 @@ void Ui::dashboard(App &app) {
           app.edited();
         }
       }
-      ImGui::SeparatorText(T("Organizar"));
+      sectionTitle(T("Organizar"));
       if (ImGui::ColorEdit3(T("Cor"), colRef.color, ImGuiColorEditFlags_NoInputs)) app.edited();
       // moveDir: distance to the neighbour of the same dashboard.
-      if (ImGui::MenuItem(T("Mover para a esquerda"), nullptr, false, ci > 0)) { moveColumn = c; moveDir = vis[size_t(ci - 1)] - c; }
-      if (ImGui::MenuItem(T("Mover para a direita"), nullptr, false, ci + 1 < ncols)) { moveColumn = c; moveDir = vis[size_t(ci + 1)] - c; }
+      ImGui::BeginDisabled(ci <= 0);
+      if (ImGui::Button(T("\xe2\x97\x80 Mover para a esquerda"))) { // ◀
+        moveColumn = c;
+        moveDir = vis[size_t(ci - 1)] - c;
+        ImGui::CloseCurrentPopup();
+      }
+      ImGui::EndDisabled();
+      ImGui::SameLine();
+      ImGui::BeginDisabled(ci + 1 >= ncols);
+      if (ImGui::Button(T("Mover para a direita \xe2\x96\xb6"))) { // ▶
+        moveColumn = c;
+        moveDir = vis[size_t(ci + 1)] - c;
+        ImGui::CloseCurrentPopup();
+      }
+      ImGui::EndDisabled();
       if (p.boards.size() > 1 && ImGui::BeginMenu(T("Mover para o dashboard"))) {
         for (size_t b = 0; b < p.boards.size(); ++b)
           if (int(b) != colRef.board && ImGui::MenuItem(p.boards[b].c_str())) { colRef.board = int(b); app.edited(); }
         ImGui::EndMenu();
       }
-      ImGui::SeparatorText(T("Ações OSC ao disparar"));
+      sectionTitle(T("Ações OSC ao disparar"));
       {
         std::string text;
         for (auto &line : p.columns[size_t(c)].oscActions) text += line + "\n";
@@ -1563,7 +1672,17 @@ void Ui::dashboard(App &app) {
         }
         ImGui::TextDisabled("%s", T("Uma por linha, ex.: /luz/cena 3   (vai para as saídas OSC)"));
       }
-      if (ImGui::MenuItem(T("Remover coluna"))) removeColumn = c;
+      ImGui::Separator();
+      if (dangerButton(T("Remover coluna"))) {
+        removeColumn = c;
+        ImGui::CloseCurrentPopup();
+      }
+      ImGui::SameLine();
+      if (ImGui::Button(T("Remover várias..."))) {
+        removeColumnIds_ = {colRef.id};
+        showRemoveColumns_ = true;
+        ImGui::CloseCurrentPopup();
+      }
       ImGui::EndPopup();
     }
     ImGui::PopID();
@@ -1684,7 +1803,7 @@ void Ui::dashboard(App &app) {
       if (cell && ImGui::BeginPopupContextItem("##cellctx")) {
         if (ImGui::MenuItem(T("\xe2\x96\xb6 Disparar só esta célula"))) e.launchCell(c, l.id); // ▶
         if (!locked) {
-          ImGui::SeparatorText(T("No fim da mídia"));
+          sectionTitle(T("No fim da mídia"));
           for (int em = 0; em < int(EndMode::COUNT); ++em) {
             const char *names[] = {T("Loop"), T("Congelar no último quadro"), T("Parar"),
                                           T("Disparar a próxima coluna")};
@@ -2388,7 +2507,7 @@ void Ui::maskList(App &app, std::vector<Mask> &masks, int &sel, int &selPoint, V
 
   if (sel < 0 || sel >= int(masks.size())) return;
   Mask &m = masks[size_t(sel)];
-  ImGui::SeparatorText(m.name.c_str());
+  sectionTitle(m.name.c_str());
   ImGui::PushID("maskprops");
   if (inputText(T("Nome"), m.name)) app.edited();
   if (ImGui::Checkbox(T("Invertida"), &m.inverted)) app.edited();
@@ -2989,14 +3108,14 @@ void Ui::effectsUi(App &app, Layer &l) {
       }
       byCat.erase(it);
     };
-    ImGui::SeparatorText(T("COR"));
+    sectionTitle(T("COR"));
     items("Cor");
-    ImGui::SeparatorText(T("PADRÃO"));
+    sectionTitle(T("PADRÃO"));
     items("Geometria");
     items("Desfoque");
-    ImGui::SeparatorText(T("ESPECIAL"));
+    sectionTitle(T("ESPECIAL"));
     if (ImGui::MenuItem(T("Rastreamento de blobs (câmera)"))) add(kBlobTrackerId, T("Blob tracker"));
-    ImGui::SeparatorText(T("VÁRIOS"));
+    sectionTitle(T("VÁRIOS"));
     for (auto &[cat, list] : byCat) { // Estilizar, and the categories of downloaded effects
       if (!ImGui::BeginMenu(T(cat.c_str()))) continue;
       for (auto *x : list) {
@@ -3388,7 +3507,7 @@ void Ui::mappingSection(App &app, Layer &layer, float CW, float CH) {
 
     if (si < int(l->slices.size())) {
       Slice &s = l->slices[size_t(si)];
-      ImGui::SeparatorText(s.name.c_str());
+      sectionTitle(s.name.c_str());
       if (inputText(T("Nome da fatia"), s.name)) app.edited();
       // Surface: a mapping shared with other layers.
       {
@@ -3800,7 +3919,7 @@ void Ui::outputInspector(App &app) {
   }
 
   ImGui::PushID(o->id);
-  ImGui::SeparatorText(o->name.c_str());
+  sectionTitle(o->name.c_str());
   if (inputText(T("Nome"), o->name)) app.edited();
   if (ImGui::Checkbox(T("Ativa"), &o->enabled)) app.edited();
   int pat = int(o->pattern);
@@ -3839,7 +3958,7 @@ void Ui::outputInspector(App &app) {
     helpMarker(T("Qual canvas esta saída mostra. Ex.: um canvas 3840×2160 para o processador de LED "
                "e o canvas principal para os projetores."));
   }
-  ImGui::SeparatorText(T("NDI desta saída"));
+  sectionTitle(T("NDI desta saída"));
   {
     bool on = !o->ndiName.empty();
     if (ImGui::Checkbox(T("Enviar por NDI"), &on)) { o->ndiName = on ? T("Lumen ") + o->name : ""; app.edited(); }
@@ -3854,7 +3973,7 @@ void Ui::outputInspector(App &app) {
     helpMarker(T("Envia a imagem final desta saída pela rede (NDI): para outro computador, um "
                "processador de LED, uma mesa de corte ou OBS. Precisa do NDI Runtime (NDI Tools)."));
   }
-  ImGui::SeparatorText(T("Spout desta saída"));
+  sectionTitle(T("Spout desta saída"));
   {
     bool on = !o->spoutName.empty();
     if (ImGui::Checkbox(T("Enviar por Spout"), &on)) {
@@ -3889,7 +4008,7 @@ void Ui::outputInspector(App &app) {
     }
   }
 
-  ImGui::SeparatorText(T("Região do canvas"));
+  sectionTitle(T("Região do canvas"));
   float src[4] = {o->srcX, o->srcY, o->srcW, o->srcH};
   if (ImGui::DragFloat4(T("x y larg alt"), src, 1.0f)) {
     o->srcX = src[0]; o->srcY = src[1];
@@ -3921,7 +4040,7 @@ void Ui::outputInspector(App &app) {
   helpMarker(T("Para projetores fora de uma grade (tamanhos ou posições diferentes): ajuste a região "
              "de cada saída no canvas e o Lumen calcula as bordas suaves de cada sobreposição."));
 
-  ImGui::SeparatorText(T("Warp da saída"));
+  sectionTitle(T("Warp da saída"));
   bool viewing = workspace.viewOutputId == o->id;
   if (ImGui::Checkbox(T("Editar no workspace"), &viewing)) workspace.viewOutputId = viewing ? o->id : -1;
   helpMarker(T("Mostra esta saída no workspace. Use Perspectiva (M) ou Malha (G) para corrigir "
@@ -3946,7 +4065,7 @@ void Ui::outputInspector(App &app) {
 }
 
 void Ui::softEdgeControls(App &app, OutputConfig *o) {
-  ImGui::SeparatorText(T("Soft edge (blend entre projetores)"));
+  sectionTitle(T("Soft edge (blend entre projetores)"));
   bool se = false;
   se |= ImGui::SliderFloat(T("Esquerda"), &o->softEdge.left, 0, 0.5f);
   se |= ImGui::SliderFloat(T("Direita"), &o->softEdge.right, 0, 0.5f);
@@ -3962,7 +4081,7 @@ void Ui::softEdgeControls(App &app, OutputConfig *o) {
 }
 
 void Ui::blackAndColorControls(App &app, OutputConfig *o) {
-  ImGui::SeparatorText(T("Nível de preto"));
+  sectionTitle(T("Nível de preto"));
   {
     float bl[3] = {o->blackLevel.r, o->blackLevel.g, o->blackLevel.b};
     static std::map<int, bool> perChannel; // UI state only
@@ -3988,7 +4107,7 @@ void Ui::blackAndColorControls(App &app, OutputConfig *o) {
                "ficar igual à faixa. Valores típicos: 0.002 a 0.02."));
   }
 
-  ImGui::SeparatorText(T("Cor do projetor"));
+  sectionTitle(T("Cor do projetor"));
   {
     bool c = false;
     c |= ImGui::SliderFloat(T("Brilho##out"), &o->color.brightness, 0, 2);
@@ -4008,7 +4127,7 @@ void Ui::blackAndColorControls(App &app, OutputConfig *o) {
                "todos e reduza o ganho do canal que estiver sobrando."));
   }
 
-  ImGui::SeparatorText(T("Sincronia"));
+  sectionTitle(T("Sincronia"));
   if (ImGui::SliderInt(T("Atraso (quadros)"), &o->delayFrames, 0, 8)) app.edited();
   helpMarker(T("Projetores de modelos diferentes têm latências diferentes. Atrase os mais rápidos "
              "até a imagem andar junta na emenda (filme em câmera lenta com o celular para conferir)."));
@@ -4019,7 +4138,7 @@ void Ui::blackAndColorControls(App &app, OutputConfig *o) {
 }
 
 void Ui::outputMaskControls(App &app, OutputConfig *o, Workspace &ws) {
-  ImGui::SeparatorText(T("Máscaras da saída"));
+  sectionTitle(T("Máscaras da saída"));
   ImGui::TextWrapped("%s", T("Recortam a imagem deste projetor (obstáculos, bordas irregulares, cúpulas). "
                      "Edite no workspace com a saída em vista e a ferramenta Máscara (K)."));
   {
@@ -4041,7 +4160,7 @@ void Ui::outputMaskControls(App &app, OutputConfig *o, Workspace &ws) {
 void Ui::redundancyUi(App &app) {
   Engine &e = app.engine;
   Project &p = e.project;
-  ImGui::SeparatorText(T("Máquina reserva (redundância)"));
+  sectionTitle(T("Máquina reserva (redundância)"));
   // Role, peer and port are settings of this computer (the project is copied
   // to both machines); edited here, applied with the button.
   if (!syncEditInit_) {
@@ -4100,7 +4219,7 @@ void Ui::interactionInspector(App &app) {
   Engine &e = app.engine;
   Project &p = e.project;
   redundancyUi(app);
-  ImGui::SeparatorText(T("Entrada OSC"));
+  sectionTitle(T("Entrada OSC"));
   bool changed = ImGui::Checkbox(T("Ativar OSC"), &p.oscEnabled);
   ImGui::SetNextItemWidth(120);
   changed |= ImGui::InputInt(T("Porta UDP"), &p.oscPort);
@@ -4116,7 +4235,7 @@ void Ui::interactionInspector(App &app) {
   else
     ImGui::TextDisabled("%s", T("Desativado"));
 
-  ImGui::SeparatorText(T("Saída OSC (feedback e ações)"));
+  sectionTitle(T("Saída OSC (feedback e ações)"));
   ImGui::TextWrapped("%s", T("Destinos que recebem /lumen/status/column ao trocar de cue e as ações OSC das "
                      "colunas (botão direito no cabeçalho da coluna)."));
   int removeTarget = -1;
@@ -4149,7 +4268,7 @@ void Ui::interactionInspector(App &app) {
     ImGui::TextDisabled(T("%d mensagens enviadas"), e.oscSent());
   }
 
-  ImGui::SeparatorText(T("MIDI"));
+  sectionTitle(T("MIDI"));
   if (!e.midi().available()) {
     ImGui::TextDisabled("%s", T("Compilado sem suporte a MIDI"));
   } else {
@@ -4163,7 +4282,7 @@ void Ui::interactionInspector(App &app) {
     ImGui::TextDisabled("%s", T("MIDI chega como /midi/cc/<canal>/<n>, /midi/note/<canal>/<nota>: use \"Aprender\"."));
   }
 
-  ImGui::SeparatorText(T("Timecode"));
+  sectionTitle(T("Timecode"));
   {
     TimecodeConfig &tc = p.timecode;
     int src = int(tc.source);
@@ -4255,7 +4374,7 @@ void Ui::interactionInspector(App &app) {
     }
   }
 
-  ImGui::SeparatorText(T("Serial (Arduino)"));
+  sectionTitle(T("Serial (Arduino)"));
   {
     auto &si = p.serialIn;
     bool ch = ImGui::Checkbox(T("Receber da porta serial"), &si.enabled);
@@ -4282,7 +4401,7 @@ void Ui::interactionInspector(App &app) {
                "(Aprender funciona). Exemplo de código em docs/DISPOSITIVOS.md."));
   }
 
-  ImGui::SeparatorText(T("Projetores (PJLink)"));
+  sectionTitle(T("Projetores (PJLink)"));
   {
     int removePj = -1;
     for (size_t i = 0; i < p.projectors.size(); ++i) {
@@ -4334,7 +4453,7 @@ void Ui::interactionInspector(App &app) {
                "pjlink <nome> shutter close... Ex.: a agenda liga os projetores às 9:00."));
   }
 
-  ImGui::SeparatorText(T("Testar um comando"));
+  sectionTitle(T("Testar um comando"));
   {
     static char cmd[256] = "midi note 1 60 127";
     ImGui::SetNextItemWidth(260);
@@ -4348,13 +4467,13 @@ void Ui::interactionInspector(App &app) {
     if (outs.size() > 1) ImGui::SetItemTooltip(T("%zu portas; use midi@nome para escolher"), outs.size());
   }
 
-  ImGui::SeparatorText(T("Teclado"));
+  sectionTitle(T("Teclado"));
   if (ImGui::Checkbox(T("Teclas como entrada (/key/<tecla>)"), &p.keyboardInput)) app.edited();
   helpMarker(T("Cada tecla vira /key/a, /key/1, /key/f1, /key/left... com valor 1 ao apertar e 0 ao "
              "soltar, também com as janelas de saída em foco. Use num mapeamento: ex. a tecla A "
              "dispara a coluna 3. Espaço e B continuam com as funções do programa."));
 
-  ImGui::SeparatorText(T("DMX de entrada (mesa de luz)"));
+  sectionTitle(T("DMX de entrada (mesa de luz)"));
   {
     DmxInputConfig &d = p.dmxInput;
     bool ch = ImGui::Checkbox(T("Receber DMX"), &d.enabled);
@@ -4379,7 +4498,7 @@ void Ui::interactionInspector(App &app) {
                "opacidade de uma layer, ou dispare colunas com um canal (valor acima de 127)."));
   }
 
-  ImGui::SeparatorText(T("Mapeamentos (sensor → parâmetro)"));
+  sectionTitle(T("Mapeamentos (sensor → parâmetro)"));
   ImGui::TextWrapped("%s", T("Ligue qualquer mensagem OSC (TouchOSC, TouchDesigner, Arduino, sensores...) "
                      "a um parâmetro. Clique em \"Aprender\" e envie a mensagem."));
   int remove = -1;
@@ -4482,7 +4601,7 @@ void Ui::interactionInspector(App &app) {
     app.edited();
   }
 
-  ImGui::SeparatorText(T("Agenda (instalações)"));
+  sectionTitle(T("Agenda (instalações)"));
   {
     ImGui::TextWrapped("%s", T("Ações em horários fixos, ex.: liga a coluna 1 às 9:00 e faz blackout às 22:00."));
     int removeEntry = -1;
@@ -4543,7 +4662,7 @@ void Ui::interactionInspector(App &app) {
     }
   }
 
-  ImGui::SeparatorText(T("Monitor OSC"));
+  sectionTitle(T("Monitor OSC"));
   if (ImGui::SmallButton(T("Limpar"))) e.oscLog.clear();
   ImGui::BeginChild("##osclog", {0, 180}, ImGuiChildFlags_Borders);
   for (auto &line : e.oscLog) ImGui::TextUnformatted(line.c_str());
@@ -4556,7 +4675,7 @@ void Ui::ledInspector(App &app) {
   Engine &e = app.engine;
   Project &p = e.project;
 
-  ImGui::SeparatorText(T("Controladores (Art-Net / sACN)"));
+  sectionTitle(T("Controladores (Art-Net / sACN)"));
   for (auto &d : p.dmxDevices) {
     ImGui::PushID(d.id);
     if (ImGui::Checkbox("##en", &d.enabled)) app.edited();
@@ -4598,7 +4717,7 @@ void Ui::ledInspector(App &app) {
     }
   }
 
-  ImGui::SeparatorText(T("Fitas / matrizes de LED"));
+  sectionTitle(T("Fitas / matrizes de LED"));
   int removeId = -1;
   for (auto &m : p.ledMappings) {
     ImGui::PushID(m.id);
@@ -4643,7 +4762,7 @@ void Ui::ledInspector(App &app) {
 
   if (LedMapping *m = p.ledMapping(app.sel.ledId)) {
     ImGui::PushID(m->id);
-    ImGui::SeparatorText(m->name.c_str());
+    sectionTitle(m->name.c_str());
     if (inputText(T("Nome"), m->name)) app.edited();
     if (!p.canvases.empty()) {
       int cid = m->canvasId;
@@ -4712,13 +4831,13 @@ void Ui::ledInspector(App &app) {
     ImGui::PopID();
   }
 
-  ImGui::SeparatorText(T("Geral"));
+  sectionTitle(T("Geral"));
   if (ImGui::SliderFloat(T("DMX master"), &p.dmxMaster, 0, 1)) app.edited();
   ImGui::SetItemTooltip("%s", T("Intensidade de todos os LEDs (0 = blackout das luzes)"));
   for (auto &c : e.leds.conflicts()) ImGui::TextColored({1, 0.5f, 0.4f, 1}, T("Conflito: %s"), c.c_str());
   ImGui::TextDisabled(T("%d pacotes enviados"), e.leds.packetsSent());
 
-  ImGui::SeparatorText(T("Monitor DMX"));
+  sectionTitle(T("Monitor DMX"));
   const auto &unis = e.leds.universes();
   if (unis.empty()) {
     ImGui::TextDisabled("%s", T("Nada sendo enviado"));
@@ -4755,7 +4874,7 @@ void Ui::ledInspector(App &app) {
 
 void Ui::projectInspector(App &app) {
   Project &p = app.engine.project;
-  ImGui::SeparatorText(T("Canvas principal"));
+  sectionTitle(T("Canvas principal"));
   if (inputText(T("Nome##cv0"), p.canvasName)) app.edited();
   int size[2] = {p.canvasW, p.canvasH};
   if (inputInt2Deferred(T("Resolução"), size)) {
@@ -4777,7 +4896,7 @@ void Ui::projectInspector(App &app) {
   }
   if (colorEdit(T("Fundo"), p.background)) app.edited();
 
-  ImGui::SeparatorText(T("Outros canvases (video routing)"));
+  sectionTitle(T("Outros canvases (video routing)"));
   ImGui::TextWrapped("%s", T("Cada canvas tem as suas layers. Uma saída escolhe qual canvas mostra, e um "
                      "canvas pode virar mídia dentro de outro (Biblioteca → + Ao vivo → Canvas). "
                      "Ex.: vários canvases montados num único sinal 4K para o processador de LED."));
@@ -4826,10 +4945,10 @@ void Ui::projectInspector(App &app) {
     workspace.viewOutputId = -1;
     app.edited();
   }
-  ImGui::SeparatorText(T("Show"));
+  sectionTitle(T("Show"));
   if (ImGui::DragFloat(T("Fade padrão (s)"), &p.defaultTransition, 0.05f, 0, 60)) app.edited();
 
-  ImGui::SeparatorText(T("Ao abrir o projeto (instalação)"));
+  sectionTitle(T("Ao abrir o projeto (instalação)"));
   if (ImGui::Checkbox(T("Abrir as saídas"), &p.startOutputs)) app.edited();
   ImGui::SetNextItemWidth(100);
   if (ImGui::InputInt(T("Disparar a coluna (0 = nenhuma)"), &p.startColumn)) {
@@ -4839,7 +4958,7 @@ void Ui::projectInspector(App &app) {
   helpMarker(T("Para uma instalação que liga sozinha: coloque um atalho do Lumen com o projeto "
              "(Lumen.exe show.lumen) na pasta Inicializar do Windows (Win+R, shell:startup)."));
 
-  ImGui::SeparatorText(T("Áudio"));
+  sectionTitle(T("Áudio"));
   Engine &e = app.engine;
   if (ImGui::BeginCombo(T("Saída de áudio"), p.audioDevice.empty() ? T("Padrão do sistema") : p.audioDevice.c_str())) {
     if (ImGui::Selectable(T("Padrão do sistema"), p.audioDevice.empty())) { p.audioDevice.clear(); app.edited(); }
@@ -4894,7 +5013,7 @@ void Ui::projectInspector(App &app) {
   if (ImGui::SliderFloat(T("Volume master"), &p.masterVolume, 0, 2, "%.2f")) app.edited();
   audioMeters(e.audio);
 
-  ImGui::SeparatorText(T("Vídeo"));
+  sectionTitle(T("Vídeo"));
   if (ImGui::Checkbox(T("Decodificação por hardware"), &p.hardwareDecode)) app.edited();
   helpMarker(T("Usa a GPU (D3D11VA/DXVA2 no Windows) para H.264/HEVC/VP9/AV1. Vale para mídias "
              "disparadas depois da mudança. HAP sempre vai direto para a GPU."));
@@ -4904,7 +5023,7 @@ void Ui::projectInspector(App &app) {
                "se aparecerem quadros corrompidos (driver com problema)."));
   ImGui::TextDisabled(T("HAP comprimido na GPU: %s"), FrameUploader::supportsS3tc() ? T("sim") : T("não suportado"));
 
-  ImGui::SeparatorText(T("Spout (enviar o canvas)"));
+  sectionTitle(T("Spout (enviar o canvas)"));
   if (!spoutAvailable()) {
     ImGui::TextDisabled("%s", T("Disponível só no Windows"));
   } else {
@@ -4912,13 +5031,13 @@ void Ui::projectInspector(App &app) {
     if (inputText(T("Nome do sender"), p.spoutName)) app.edited();
     if (!e.spoutStatus().empty()) ImGui::TextDisabled("%s", e.spoutStatus().c_str());
   }
-  ImGui::SeparatorText(T("NDI (enviar o canvas)"));
+  sectionTitle(T("NDI (enviar o canvas)"));
   if (ImGui::Checkbox(T("Enviar canvas por NDI"), &p.ndiSend)) app.edited();
   if (p.ndiSend) {
     if (inputText(T("Nome NDI##canvas"), p.ndiName)) app.edited();
     if (!e.ndiStatus().empty()) ImGui::TextDisabled("%s", e.ndiStatus().c_str());
   }
-  ImGui::SeparatorText(T("Arquivo"));
+  sectionTitle(T("Arquivo"));
   ImGui::TextWrapped("%s", p.filePath.empty() ? T("(projeto não salvo)") : p.filePath.c_str());
   ImGui::Text(T("%zu mídias · %zu layers · %zu colunas · %zu saídas"), p.library.size(),
               p.layers.size(), p.columns.size(), p.outputs.size());
