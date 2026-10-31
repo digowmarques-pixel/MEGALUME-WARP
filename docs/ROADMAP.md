@@ -95,6 +95,11 @@ Ordem pensada para **videomapping** e **instalações interativas**.
 - *Seek* preciso de vídeo e áudio (também por OSC: `/lumen/layer/<l>/time`)
 - Testes de integração no CI (`scripts/test-integration.sh`)
 
+## ✅ v0.10.32
+- **VU de áudio na célula que está tocando** (dashboard): barra vertical à direita da miniatura,
+  em dB (-48 a 0 dBFS), verde / laranja a partir de -9 dB / vermelho a partir de -1 dB, com marca
+  de pico que segura um instante. Só aparece em mídia com áudio
+
 ## ✅ v0.10.31
 - **Configuração da coluna em seções recolhíveis** (como Layer / Mapping / Efeitos): Coluna,
   Transição, Auto-GO, Timeline, Comandos, Timecode, Estados, Organizar e Ações OSC abrem e fecham

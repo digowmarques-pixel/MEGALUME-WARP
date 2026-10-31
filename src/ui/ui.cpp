@@ -187,6 +187,36 @@ void helpMarker(const char *text) {
   }
 }
 
+// Vertical VU meter in dB (-48..0 dBFS) between a (top left) and b (bottom
+// right): green, orange from -9 dB, red from -1 dB, and a peak mark that holds
+// a moment. Smoothed per key (layer) so it does not flicker between frames.
+void vuMeter(ImDrawList *dl, ImVec2 a, ImVec2 b, float peak, int key) {
+  struct Level { float v = 0, hold = 0; double holdAt = 0; };
+  static std::map<int, Level> levels;
+  Level &lv = levels[key];
+  const double now = ImGui::GetTime();
+  const float dt = ImGui::GetIO().DeltaTime;
+  float db = peak > 1e-5f ? 20.0f * std::log10(peak) : -96.0f;
+  float target = std::clamp((db + 48.0f) / 48.0f, 0.0f, 1.0f);
+  lv.v = target > lv.v ? target : std::max(target, lv.v - dt * 1.2f); // fast up, slow down
+  if (lv.v >= lv.hold || now - lv.holdAt > 1.2) { lv.hold = lv.v; lv.holdAt = now; }
+  dl->AddRectFilled(a, b, IM_COL32(12, 12, 14, 230), 2);
+  const float h = b.y - a.y;
+  auto yAt = [&](float f) { return b.y - h * f; };
+  const float orange = (48.0f - 9.0f) / 48.0f, red = (48.0f - 1.0f) / 48.0f;
+  auto seg = [&](float f0, float f1, pal::Rgb c) {
+    if (lv.v <= f0) return;
+    dl->AddRectFilled({a.x + 1, yAt(std::min(lv.v, f1))}, {b.x - 1, yAt(f0)}, pal::u32(c));
+  };
+  seg(0, orange, pal::kGreen);
+  seg(orange, red, pal::kOrange);
+  seg(red, 1, pal::kRed);
+  if (lv.hold > 0.02f) {
+    pal::Rgb hc = lv.hold >= red ? pal::kRed : lv.hold >= orange ? pal::kOrange : pal::kGreen;
+    dl->AddLine({a.x + 1, yAt(lv.hold)}, {b.x - 1, yAt(lv.hold)}, pal::u32(hc), 2);
+  }
+}
+
 // One level meter per output channel of the sound card, numbered.
 void audioMeters(const AudioEngine &audio) {
   int n = audio.channels();
@@ -1938,6 +1968,9 @@ void Ui::dashboard(App &app) {
         dl->PushClipRect(pos, br, true);
         dl->AddText({pos.x + 5, br.y - 18}, IM_COL32(220, 220, 220, 255), m->name.c_str());
         dl->PopClipRect();
+        // Audio meter of the clip on air: a vertical bar at the right of the cell.
+        if (playing && st->current->hasAudio()) vuMeter(dl, {br.x - 14, pos.y + 5}, {br.x - 5, br.y - 22},
+                                                         st->current->audioPeak(), l.id);
         static const char *endMark[] = {"", "1x", "\xe2\x96\xa0", "\xe2\x86\x92"}; // ■ →
         if (cell->endMode != EndMode::Loop)
           dl->AddText({br.x - 16, br.y - 18}, IM_COL32(160, 160, 160, 255), endMark[int(cell->endMode)]);

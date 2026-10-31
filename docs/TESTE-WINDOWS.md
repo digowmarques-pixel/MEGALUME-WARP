@@ -13,7 +13,7 @@ um Arduino e o NDI Tools.
 
 ## 0. Instalação e diagnóstico
 
-- [ ] 0.1 Instale com `Lumen-0.10.31-setup.exe` (ou descompacte o .zip). O atalho
+- [ ] 0.1 Instale com `Lumen-0.10.32-setup.exe` (ou descompacte o .zip). O atalho
       aparece no Menu Iniciar, e arquivos `.lumen` abrem com o Lumen.
 - [ ] 0.2 Menu Iniciar → *Lumen (console de diagnóstico)*. O relatório abre no Bloco
       de Notas (também fica em `%APPDATA%\Lumen\diagnostico.txt`).
@@ -233,6 +233,8 @@ um Arduino e o NDI Tools.
 - [ ] 13.33 Vídeo segue o timecode: Cue 1 em 00:00:00:00 e Cue 2 em 00:00:30:00. Play no Reaper,
       pause: o vídeo pausa junto. Play: continua do mesmo ponto. Leve o cursor para 00:00:40:00 e
       dê play: entra a Cue 2, 10 s adiante. Volte para 00:00:05:00: Cue 1, em 5 s.
+- [ ] 13.48 Dê GO num vídeo com som: a célula no ar mostra um VU à direita que sobe e desce com
+      o áudio (vermelho nos picos perto de 0 dB). Vídeo sem som: sem VU.
 - [ ] 13.47 Engrenagem da coluna: cada seção abre/fecha pela setinha; abra só Timecode, feche e abra
       outra coluna: fica igual. Coluna com timecode ligado mostra um ponto verde em "Timecode".
 - [ ] 13.46 Dê uma cor a uma coluna (engrenagem → Organizar → Cor): o botão da coluna fica nessa
