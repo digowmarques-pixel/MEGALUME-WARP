@@ -399,6 +399,7 @@ void Ui::outputsWindow(App &app) {
         ImGui::SameLine();
       }
       ImGui::BeginChild("##ws", {0, 0});
+      outputsWs_.snap = workspace.snap; // the toolbar magnet applies here too
       outputsWs_.draw(app, ImGui::GetContentRegionAvail());
       ImGui::EndChild();
     } else {
@@ -420,6 +421,7 @@ void Ui::outputsWindow(App &app) {
       // The warp stays adjustable here; the mask tool belongs to its own tab.
       if (outputsWs_.tool != Tool::Mesh) outputsWs_.tool = Tool::Perspective;
       ImGui::BeginChild("##wscolor", {0, 0});
+      outputsWs_.snap = workspace.snap; // the toolbar magnet applies here too
       outputsWs_.draw(app, ImGui::GetContentRegionAvail());
       ImGui::EndChild();
     }

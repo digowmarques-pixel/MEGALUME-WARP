@@ -197,6 +197,17 @@ const char *channelName(int srcChannels, int c) {
   return c < 8 ? surround[c] : "?";
 }
 
+// Shrinks the box [tl, br] to the texture's aspect ratio, centred (thumbnails
+// are never stretched: a square image stays square in a wide cell).
+void fitToTexture(const Texture &tex, ImVec2 &tl, ImVec2 &br) {
+  float bw = br.x - tl.x, bh = br.y - tl.y;
+  if (tex.width() <= 0 || tex.height() <= 0 || bw <= 0 || bh <= 0) return;
+  float s = std::min(bw / float(tex.width()), bh / float(tex.height()));
+  float w = float(tex.width()) * s, h = float(tex.height()) * s;
+  tl = {tl.x + (bw - w) * 0.5f, tl.y + (bh - h) * 0.5f};
+  br = {tl.x + w, tl.y + h};
+}
+
 // Draws a texture fitted inside a box, keeping its aspect ratio.
 void fittedImage(const Texture *tex, ImVec2 box, bool flip = false) {
   ImVec2 cursor = ImGui::GetCursorScreenPos();
@@ -1249,7 +1260,11 @@ void Ui::library(App &app) {
     dl->AddRectFilled(tl, br, IM_COL32(15, 15, 15, 255), 5);
     if (m.type == MediaType::Canvas) // live picture of the canvas (bottom-up texture)
       dl->AddImageRounded(texId(app.engine.canvasTexture(m.canvasRef)), tl, br, {0, 1}, {1, 0}, IM_COL32_WHITE, 5);
-    else if (thumb && !thumb->empty()) dl->AddImageRounded(texId(*thumb), tl, br, {0, 0}, {1, 1}, IM_COL32_WHITE, 5);
+    else if (thumb && !thumb->empty()) {
+      ImVec2 a = tl, b = br;
+      fitToTexture(*thumb, a, b);
+      dl->AddImageRounded(texId(*thumb), a, b, {0, 0}, {1, 1}, IM_COL32_WHITE, 5);
+    }
     else if (m.type == MediaType::Live || m.type == MediaType::Spout || m.type == MediaType::NDI)
       dl->AddText({tl.x + 6, tl.y + 14}, IM_COL32(150, 150, 150, 255), T("parado"));
     else dl->AddText({tl.x + 6, tl.y + 14}, IM_COL32(200, 80, 80, 255), T("erro"));
@@ -1883,6 +1898,8 @@ void Ui::dashboard(App &app) {
         const Texture *thumb = e.cache.thumbnail(*m, e.generators, e.mesh);
         if (thumb && !thumb->empty()) {
           ImVec2 ttl{pos.x + 3, pos.y + 3}, tbr{br.x - 3, br.y - 20};
+          dl->AddRectFilled(ttl, tbr, IM_COL32(10, 10, 12, 255), 5);
+          fitToTexture(*thumb, ttl, tbr);
           dl->AddImageRounded(texId(*thumb), ttl, tbr, {0, 0}, {1, 1}, IM_COL32_WHITE, 5);
         }
         dl->PushClipRect(pos, br, true);
@@ -2064,7 +2081,11 @@ void Ui::timePanel(App &app, const std::vector<TimeRow> &rows, float bodyTop, fl
     float th = std::min(top - 6, 40.0f), tw = th * 16.0f / 9.0f, ty = r.y1 + (top - th) * 0.5f;
     if (m) {
       const Texture *thumb = e.cache.thumbnail(*m, e.generators, e.mesh);
-      if (thumb && !thumb->empty()) dl->AddImageRounded(texId(*thumb), {x0, ty}, {x0 + tw, ty + th}, {0, 0}, {1, 1}, IM_COL32_WHITE, 3);
+      if (thumb && !thumb->empty()) {
+        ImVec2 a{x0, ty}, b{x0 + tw, ty + th};
+        fitToTexture(*thumb, a, b);
+        dl->AddImageRounded(texId(*thumb), a, b, {0, 0}, {1, 1}, IM_COL32_WHITE, 3);
+      }
     }
     float nx = x0 + tw + 6, nw = cx - 6 - nx;
     if (nw > 10) {

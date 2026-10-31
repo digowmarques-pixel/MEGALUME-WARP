@@ -95,6 +95,13 @@ Ordem pensada para **videomapping** e **instalações interativas**.
 - *Seek* preciso de vídeo e áudio (também por OSC: `/lumen/layer/<l>/time`)
 - Testes de integração no CI (`scripts/test-integration.sh`)
 
+## ✅ v0.10.28
+- **Ímã** também nos cantos (Perspectiva) e nos pontos da malha das layers, e nos cantos e na
+  malha do warp da saída (bordas, centro, outras fatias, os outros cantos e os pontos da mesma
+  linha/coluna), com a guia amarela. A janela Saídas segue o botão Ímã; Ctrl inverte
+- **Miniaturas sem esticar**: biblioteca, células do dashboard e timeline mantêm a proporção da
+  imagem/vídeo original (tarja escura nas sobras)
+
 ## ✅ v0.10.27
 - **Engrenagem** ao lado da transição de cada coluna (dashboard): abre a configuração da coluna
   (transição, auto-GO, timeline, comandos, timecode, estados, OSC). Em colunas estreitas a

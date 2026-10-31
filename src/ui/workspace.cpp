@@ -204,9 +204,14 @@ static void snapTargets(const Project &p, int canvas, int layerId, int sliceIdx,
     if (!l.visible || l.canvasId != canvas) continue;
     for (size_t si = 0; si < l.slices.size(); ++si) {
       if (l.id == layerId && (sliceIdx < 0 || int(si) == sliceIdx)) continue;
-      Box b = warpBox(transformedWarp(l, l.slices[si]));
+      Warp tw = transformedWarp(l, l.slices[si]);
+      Box b = warpBox(tw);
       xs.insert(xs.end(), {b.x0, (b.x0 + b.x1) * 0.5f, b.x1});
       ys.insert(ys.end(), {b.y0, (b.y0 + b.y1) * 0.5f, b.y1});
+      for (const Vec2 &c : tw.corners) { // perspective slices: their corners, not only their box
+        xs.push_back(c.x);
+        ys.push_back(c.y);
+      }
     }
   }
 }
@@ -222,6 +227,15 @@ static float snapAxis(const std::vector<float> &features, const std::vector<floa
     }
   shift += adj;
   return hit;
+}
+
+// Moves a dragged point (corner, mesh point) onto the nearest target on each axis.
+static Vec2 snapPoint(Vec2 pt, const std::vector<float> &xs, const std::vector<float> &ys, float thr, float &guideX,
+                      float &guideY) {
+  float dx = 0, dy = 0;
+  guideX = snapAxis({pt.x}, xs, thr, dx);
+  guideY = snapAxis({pt.y}, ys, thr, dy);
+  return {pt.x + dx, pt.y + dy};
 }
 
 void Workspace::beginWarpDrag(const Layer &l, Vec2 mouseCanvas) {
@@ -590,6 +604,7 @@ void Workspace::drawCanvasOverlay(App &app, ImDrawList *dl, ImVec2 origin, float
         } else if (pointInPolygon(mc, warpOutline(tw))) {
           dragging_ = true;
           dragKind_ = 3;
+          beginWarpDrag(*sel, mc);
         } else {
           int si = 0;
           if (Layer *hit = pickLayer(mc, si)) {
@@ -599,12 +614,21 @@ void Workspace::drawCanvasOverlay(App &app, ImDrawList *dl, ImVec2 origin, float
         }
       }
       if (dragging_ && dragKind_ == 1 && app.sel.corner >= 0) {
-        keepInPlace(*sel, [&] { slice.warp.corners[size_t(app.sel.corner)] = untransform(*sel, mc); });
+        Vec2 target = mc;
+        if (snap != io.KeyCtrl) { // canvas, outputs, other slices and this slice's other corners
+          std::vector<float> xs, ys;
+          snapTargets(p, viewCanvas, sel->id, app.sel.slice, xs, ys);
+          for (int c = 0; c < 4; ++c)
+            if (c != app.sel.corner) {
+              xs.push_back(tw.corners[size_t(c)].x);
+              ys.push_back(tw.corners[size_t(c)].y);
+            }
+          target = snapPoint(mc, xs, ys, 8 / scale, guideX, guideY);
+        }
+        keepInPlace(*sel, [&] { slice.warp.corners[size_t(app.sel.corner)] = untransform(*sel, target); });
         app.edited();
-      } else if (dragging_ && dragKind_ == 3 && (io.MouseDelta.x != 0 || io.MouseDelta.y != 0)) {
-        Vec2 d = layerDelta(*sel, {io.MouseDelta.x / scale, io.MouseDelta.y / scale});
-        keepInPlace(*sel, [&] { slice.warp.translate(d); });
-        app.edited();
+      } else if (dragging_ && dragKind_ == 3) {
+        moveDrag();
       }
       break;
     }
@@ -631,7 +655,21 @@ void Workspace::drawCanvasOverlay(App &app, ImDrawList *dl, ImVec2 origin, float
         }
       }
       if (dragging_ && dragKind_ == 2 && app.sel.meshPoint >= 0 && app.sel.meshPoint < int(w.mesh.size())) {
-        w.mesh[size_t(app.sel.meshPoint)] = w.unmapPerspective(untransform(*sel, mc));
+        Vec2 target = mc;
+        if (snap != io.KeyCtrl) { // also the other points of the same row and column
+          std::vector<float> xs, ys;
+          snapTargets(p, viewCanvas, sel->id, app.sel.slice, xs, ys);
+          const int pr = app.sel.meshPoint / w.meshCols, pc = app.sel.meshPoint % w.meshCols;
+          for (int r = 0; r < w.meshRows; ++r)
+            for (int c = 0; c < w.meshCols; ++c)
+              if ((r == pr) != (c == pc)) {
+                Vec2 q = tw.meshPointDest(c, r);
+                xs.push_back(q.x);
+                ys.push_back(q.y);
+              }
+          target = snapPoint(mc, xs, ys, 8 / scale, guideX, guideY);
+        }
+        w.mesh[size_t(app.sel.meshPoint)] = w.unmapPerspective(untransform(*sel, target));
         app.edited();
       }
       // Double click: a new row and column of points through the click.
@@ -785,6 +823,17 @@ void Workspace::drawOutputOverlay(App &app, ImDrawList *dl, ImVec2 origin, ImVec
   bool clicked = ImGui::IsItemHovered() && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !io.KeyAlt;
   if (dragging_ && !ImGui::IsMouseDown(ImGuiMouseButton_Left)) dragging_ = false;
   Warp &w = o->warp;
+  // Magnet in projector space (0..1): the edges, the centre and the other points;
+  // the guides are drawn across the output.
+  auto outputSnap = [&](Vec2 pt, const std::vector<float> &xs, const std::vector<float> &ys) {
+    if (snap == io.KeyCtrl) return pt;
+    float gx = NAN, gy = NAN, dx = 0, dy = 0;
+    gx = snapAxis({pt.x}, xs, 8 / std::max(1.0f, size.x), dx);
+    gy = snapAxis({pt.y}, ys, 8 / std::max(1.0f, size.y), dy);
+    if (!std::isnan(gx)) dl->AddLine(toScreen({gx, 0}), toScreen({gx, 1}), pal::u32(pal::kYellow, 200), 1);
+    if (!std::isnan(gy)) dl->AddLine(toScreen({0, gy}), toScreen({1, gy}), pal::u32(pal::kYellow, 200), 1);
+    return Vec2{pt.x + dx, pt.y + dy};
+  };
 
   auto pts = warpOutline(w);
   std::vector<ImVec2> sp;
@@ -838,7 +887,16 @@ void Workspace::drawOutputOverlay(App &app, ImDrawList *dl, ImVec2 origin, ImVec
       if (best >= 0) { app.sel.meshPoint = best; dragging_ = true; dragKind_ = 7; }
     }
     if (dragging_ && dragKind_ == 7 && app.sel.meshPoint >= 0 && app.sel.meshPoint < int(w.mesh.size())) {
-      w.mesh[size_t(app.sel.meshPoint)] = w.unmapPerspective(mn);
+      std::vector<float> xs = {0, 0.5f, 1}, ys = {0, 0.5f, 1};
+      const int pr = app.sel.meshPoint / w.meshCols, pc = app.sel.meshPoint % w.meshCols;
+      for (int r = 0; r < w.meshRows; ++r)
+        for (int c = 0; c < w.meshCols; ++c)
+          if ((r == pr) != (c == pc)) {
+            Vec2 q = w.meshPointDest(c, r);
+            xs.push_back(q.x);
+            ys.push_back(q.y);
+          }
+      w.mesh[size_t(app.sel.meshPoint)] = w.unmapPerspective(outputSnap(mn, xs, ys));
       app.edited();
     }
     if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
@@ -861,7 +919,13 @@ void Workspace::drawOutputOverlay(App &app, ImDrawList *dl, ImVec2 origin, ImVec
       if (best >= 0) { app.sel.corner = best; dragging_ = true; dragKind_ = 6; }
     }
     if (dragging_ && dragKind_ == 6 && app.sel.corner >= 0) {
-      w.corners[size_t(app.sel.corner)] = mn;
+      std::vector<float> xs = {0, 0.5f, 1}, ys = {0, 0.5f, 1};
+      for (int c = 0; c < 4; ++c)
+        if (c != app.sel.corner) {
+          xs.push_back(w.corners[size_t(c)].x);
+          ys.push_back(w.corners[size_t(c)].y);
+        }
+      w.corners[size_t(app.sel.corner)] = outputSnap(mn, xs, ys);
       app.edited();
     }
   }
