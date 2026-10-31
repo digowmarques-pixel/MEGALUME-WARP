@@ -221,6 +221,13 @@ public:
   // Serial input (Arduino...).
   const SerialReader &serialInput() const { return serialIn_; }
   const std::string &serialError() const { return serialError_; }
+  // Media context for the preview window: no sound card, so a clip checked
+  // there is never heard in the show.
+  MediaContext previewContext() {
+    MediaContext c = context();
+    c.audio = nullptr;
+    return c;
+  }
 
 private:
   void applyMappings(const OscMessage &m);

@@ -95,10 +95,17 @@ Ordem pensada para **videomapping** e **instalações interativas**.
 - *Seek* preciso de vídeo e áudio (também por OSC: `/lumen/layer/<l>/time`)
 - Testes de integração no CI (`scripts/test-integration.sh`)
 
+## ✅ v0.10.34
+- **Preview de um vídeo antes do GO**: duplo clique numa célula do dashboard ou num item da
+  biblioteca (ou botão direito → Pré-visualizar) abre a janela Preview, que toca só aquela mídia,
+  **sem som e fora das saídas** (nada muda no ar nem no som do show; funciona no modo show).
+  Barra de tempo para avançar, Início, ±5 s, Tocar/Pausar e **Últimos 5 s** para conferir o final
+  (para no último quadro; Tocar recomeça)
+
 ## ✅ v0.10.33
 - **Vídeo novo numa célula congela no último quadro** (em vez de loop): ao arrastar da
   biblioteca, importar ou soltar do Explorer. Imagens, geradores e entradas ao vivo seguem em
-  loop; células de projetos já salvos não mudam. O modo continua mudando em Célula → Ao terminar
+  loop; células de projetos já salvos não mudam. O modo continua mudando em Célula → No fim
 
 ## ✅ v0.10.32
 - **VU de áudio na célula que está tocando** (dashboard): barra vertical à direita da miniatura,

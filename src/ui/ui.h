@@ -3,6 +3,7 @@
 
 #include "core/project.h"
 #include "media/decoder.h"
+#include "media/source.h"
 #include "render/gpu.h"
 #include "ui/i18n.h"
 
@@ -106,6 +107,14 @@ private:
   // Conversor HAP.
   bool panelOpen_[6] = {};
   void converterWindow(App &app);
+  // Preview (double click on a cell or a library item, or its menu): plays one
+  // media item in its own window, silent and outside the outputs, to check it
+  // before giving GO.
+  std::unique_ptr<Playback> preview_;
+  int previewMediaId_ = -1;
+  bool previewOpen_ = false;
+  void openPreview(App &app, int mediaId);
+  void previewWindow(App &app);
   // "Converter para HAP...": the library items it applies to, asked in a popup.
   std::vector<int> convertIds_;
   std::vector<std::string> convertFiles_; // files not in the library

@@ -611,6 +611,7 @@ void Ui::draw(App &app) {
     virtualMonitorsWindow(app);
     panelWindows(app);
     convertPopup(app);
+    previewWindow(app);
   }
   recoveryPopup(app);
   if (showRemoveColumns_) removeColumnsWindow(app);
@@ -1295,7 +1296,9 @@ void Ui::library(App &app) {
       ImGui::Text("%s", m.name.c_str());
       ImGui::EndDragDropSource();
     }
+    if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) openPreview(app, m.id);
     if (ImGui::BeginPopupContextItem()) {
+      if (m.type != MediaType::Canvas && ImGui::MenuItem(T("Pré-visualizar"))) openPreview(app, m.id);
       if (m.type == MediaType::Video && ImGui::MenuItem(T("Converter para HAP..."))) {
         convertIds_ = {m.id};
         openConvert_ = true;
@@ -1897,6 +1900,7 @@ void Ui::dashboard(App &app) {
       ImGui::InvisibleButton("##cell", size);
       if (ImGui::IsItemVisible()) dashCells_.push_back({pos.x, pos.y, pos.x + size.x, pos.y + size.y, c, l.id});
       bool hovered = ImGui::IsItemHovered();
+      if (hovered && m && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) openPreview(app, m->id);
       // A click only selects (to edit the cell); it goes on air with the column's
       // play, GO, or "Disparar só esta célula".
       if (ImGui::IsItemClicked(ImGuiMouseButton_Left)) {
@@ -1932,6 +1936,7 @@ void Ui::dashboard(App &app) {
       }
       if (cell && ImGui::BeginPopupContextItem("##cellctx")) {
         if (ImGui::MenuItem(T("\xe2\x96\xb6 Disparar só esta célula"))) e.launchCell(c, l.id); // ▶
+        if (m && ImGui::MenuItem(T("Pré-visualizar (sem ir para as saídas)"))) openPreview(app, m->id);
         if (!locked) {
           sectionTitle(T("No fim da mídia"));
           for (int em = 0; em < int(EndMode::COUNT); ++em) {
@@ -2564,6 +2569,92 @@ void Ui::convertPopup(App &app) {
     ImGui::CloseCurrentPopup();
   }
   ImGui::EndPopup();
+}
+
+// ---------------------------------------------------------------- preview
+// One media item, played on its own: no sound and never on the outputs. It
+// does not change the project, so it also works in show mode.
+void Ui::openPreview(App &app, int mediaId) {
+  const MediaItem *m = app.engine.project.media(mediaId);
+  if (!m || m->type == MediaType::Canvas) return;
+  Cell c;
+  c.mediaId = m->id;
+  c.setEndMode(EndMode::Freeze); // the end can be checked: it stays on the last frame
+  MediaContext ctx = app.engine.previewContext();
+  preview_ = std::make_unique<Playback>(*m, c, ctx);
+  previewMediaId_ = m->id;
+  previewOpen_ = true;
+  ImGui::SetWindowFocus(T("Preview###preview"));
+}
+
+static std::string clockText(double t) {
+  if (t < 0) t = 0;
+  int m = int(t / 60);
+  char buf[32];
+  std::snprintf(buf, sizeof(buf), "%02d:%04.1f", m, t - m * 60.0);
+  return buf;
+}
+
+void Ui::previewWindow(App &app) {
+  if (!previewOpen_ || !preview_) return;
+  const MediaItem *m = app.engine.project.media(previewMediaId_);
+  if (!m) { // removed from the library meanwhile
+    preview_.reset();
+    previewOpen_ = false;
+    return;
+  }
+  ImGuiViewport *vp = ImGui::GetMainViewport();
+  ImGui::SetNextWindowSize({560, 420}, ImGuiCond_FirstUseEver);
+  ImGui::SetNextWindowPos({vp->WorkPos.x + vp->WorkSize.x * 0.5f - 280, vp->WorkPos.y + 90}, ImGuiCond_FirstUseEver);
+  bool open = true;
+  if (ImGui::Begin(T("Preview###preview"), &open, ImGuiWindowFlags_NoCollapse)) {
+    MediaContext ctx = app.engine.previewContext();
+    const Texture *tex = preview_->update(ImGui::GetIO().DeltaTime, *m, ctx);
+    ImGui::Text("%s", m->name.c_str());
+    ImGui::SameLine();
+    ImGui::TextDisabled("%s", T("· sem som, não vai para as saídas"));
+    float controlsH = ImGui::GetFrameHeightWithSpacing() * 2 + 4;
+    ImVec2 avail = ImGui::GetContentRegionAvail();
+    fittedImage(tex, {avail.x, std::max(60.0f, avail.y - controlsH)});
+
+    const double dur = preview_->duration();
+    const bool seekable = preview_->seekable() && dur > 0;
+    if (seekable) {
+      float t = float(std::min(preview_->time(), dur));
+      ImGui::SetNextItemWidth(-1);
+      std::string label = clockText(t) + " / " + clockText(dur);
+      if (ImGui::SliderFloat("##ptime", &t, 0, float(dur), label.c_str())) preview_->seek(t);
+      if (ImGui::Button(T("Início"))) preview_->seek(0);
+      ImGui::SameLine();
+      if (ImGui::Button("-5 s")) preview_->seek(std::max(0.0, preview_->time() - 5));
+      ImGui::SameLine();
+    }
+    // At the end (frozen on the last frame) the button plays again from the start.
+    const bool atEnd = seekable && preview_->time() >= dur - 0.05;
+    if (ImGui::Button(preview_->paused || atEnd ? T("\xe2\x96\xb6 Tocar") : T("Pausar"), {90, 0})) { // ▶
+      if (atEnd) {
+        preview_->seek(0);
+        preview_->paused = false;
+      } else {
+        preview_->paused = !preview_->paused;
+      }
+    }
+    if (seekable) {
+      ImGui::SameLine();
+      if (ImGui::Button("+5 s")) preview_->seek(std::min(dur, preview_->time() + 5));
+      ImGui::SameLine();
+      if (ImGui::Button(T("Últimos 5 s"))) {
+        preview_->seek(std::max(0.0, dur - 5));
+        preview_->paused = false;
+      }
+      ImGui::SetItemTooltip("%s", T("Confere o final do vídeo (ele para no último quadro)"));
+    }
+  }
+  ImGui::End();
+  if (!open) {
+    preview_.reset();
+    previewOpen_ = false;
+  }
 }
 
 void Ui::panelWindows(App &app) {
