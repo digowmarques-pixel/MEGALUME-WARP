@@ -71,6 +71,25 @@ bool section(const char *label, pal::Rgb c) {
   return open;
 }
 
+// A section of the column settings that opens and closes (like Layer / Mapping):
+// open or closed is remembered for every column alike, during the session. A
+// green dot on the title says the section has something set, even closed.
+bool colSection(const char *label, const char *id, pal::Rgb c, bool openByDefault, bool used) {
+  static std::map<std::string, bool> openState;
+  bool &open = openState.try_emplace(id, openByDefault).first->second;
+  char title[160];
+  std::snprintf(title, sizeof(title), "%s###colsec_%s", label, id);
+  ImGui::SetNextItemOpen(open, ImGuiCond_Always);
+  open = section(title, c);
+  if (used) {
+    ImVec2 a = ImGui::GetItemRectMin(), b = ImGui::GetItemRectMax();
+    float x = a.x + ImGui::GetFontSize() + ImGui::GetStyle().FramePadding.x * 3 + ImGui::CalcTextSize(label).x + 14,
+          y = (a.y + b.y) * 0.5f;
+    ImGui::GetWindowDrawList()->AddCircleFilled({x, y}, 3.5f, pal::u32(pal::kGreen));
+  }
+  return open;
+}
+
 // Section title inside panels and menus: light yellow, so the sections stand out.
 void sectionTitle(const char *label) {
   ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.84f, 0.42f, 1));
@@ -1504,82 +1523,83 @@ void Ui::dashboard(App &app) {
     bool popupOpen = !locked && ImGui::BeginPopup("colpop");
     if (!popupOpen && !locked) popupOpen = ImGui::BeginPopupContextItem("colpop");
     if (popupOpen) {
-      sectionTitle(T("Coluna"));
-      ImGui::SetNextItemWidth(220);
-      if (inputText(T("Título"), colRef.name)) app.edited();
-      {
-        char notes[1024];
-        std::snprintf(notes, sizeof(notes), "%s", colRef.notes.c_str());
-        if (ImGui::InputTextMultiline(T("Notas"), notes, sizeof(notes), {220, 54})) {
-          colRef.notes = notes;
+      if (colSection(T("Coluna"), "col", pal::kYellow, true, false)) {
+        ImGui::SetNextItemWidth(220);
+        if (inputText(T("Título"), colRef.name)) app.edited();
+        {
+          char notes[1024];
+          std::snprintf(notes, sizeof(notes), "%s", colRef.notes.c_str());
+          if (ImGui::InputTextMultiline(T("Notas"), notes, sizeof(notes), {220, 54})) {
+            colRef.notes = notes;
+            app.edited();
+          }
+        }
+      }
+      if (colSection(T("Transição"), "trans", pal::kCyan, true, false)) {
+        int tt = int(colRef.transitionType);
+        ImGui::SetNextItemWidth(160);
+        if (ImGui::Combo(T("Tipo"), &tt, TZ("Crossfade\0Corte (sem transição)\0Fade pelo preto\0Shader (ISF)\0"))) {
+          colRef.transitionType = TransitionType(tt);
+          if (colRef.transitionType == TransitionType::Shader && colRef.transitionShader.empty())
+            for (auto &x : e.isfCatalog.builtins())
+              if (x.info.transition) { colRef.transitionShader = x.path; break; }
           app.edited();
         }
-      }
-      sectionTitle(T("Transição"));
-      int tt = int(colRef.transitionType);
-      ImGui::SetNextItemWidth(160);
-      if (ImGui::Combo(T("Tipo"), &tt, TZ("Crossfade\0Corte (sem transição)\0Fade pelo preto\0Shader (ISF)\0"))) {
-        colRef.transitionType = TransitionType(tt);
-        if (colRef.transitionType == TransitionType::Shader && colRef.transitionShader.empty())
-          for (auto &x : e.isfCatalog.builtins())
-            if (x.info.transition) { colRef.transitionShader = x.path; break; }
-        app.edited();
-      }
-      if (colRef.transitionType == TransitionType::Shader) {
-        std::string cur = colRef.transitionShader.empty() ? T("(escolha)") : platform::toUtf8(platform::toPath(colRef.transitionShader).stem());
-        if (cur.rfind("T_", 0) == 0) cur = cur.substr(2);
-        ImGui::SetNextItemWidth(160);
-        if (ImGui::BeginCombo(T("Shader"), cur.c_str())) {
-          for (auto &x : e.isfCatalog.builtins()) {
-            if (!x.info.transition) continue;
-            std::string n = x.name.rfind("T_", 0) == 0 ? x.name.substr(2) : x.name;
-            if (ImGui::Selectable(n.c_str(), x.path == colRef.transitionShader)) { colRef.transitionShader = x.path; app.edited(); }
-            if (!x.info.description.empty()) ImGui::SetItemTooltip("%s", x.info.description.c_str());
-          }
-          if (ImGui::Selectable(T("Abrir arquivo .fs..."))) {
-            auto files = platform::openFileDialog("Transição ISF", "ISF|*.fs|Todos|*.*", false);
-            if (!files.empty()) { colRef.transitionShader = files[0]; app.edited(); }
-          }
-          ImGui::EndCombo();
-        }
-      }
-      if (ImGui::Checkbox(T("Manual (fader)"), &colRef.manualTransition)) app.edited();
-      helpMarker(T("A transição anda com o fader de transição (barra de cima, MIDI ou OSC "
-                 "/lumen/transition). Para assumir, leve o fader a 0 e depois suba até 1."));
-      {
-        const MediaItem *sm = p.media(colRef.stingerMediaId);
-        ImGui::SetNextItemWidth(160);
-        if (ImGui::BeginCombo(T("Stinger"), sm ? sm->name.c_str() : T("(nenhum)"))) {
-          if (ImGui::Selectable(T("(nenhum)"), !sm)) { colRef.stingerMediaId = -1; app.edited(); }
-          for (auto &m : p.library)
-            if (m.type == MediaType::Video && ImGui::Selectable(m.name.c_str(), m.id == colRef.stingerMediaId)) {
-              colRef.stingerMediaId = m.id;
-              app.edited();
-            }
-          ImGui::EndCombo();
-        }
-        helpMarker(T("Vídeo (com transparência, ex. HAP Alpha ou ProRes 4444) tocado por cima de tudo; "
-                   "o cue troca com um corte no meio dele, escondido pela animação."));
-        if (sm) {
+        if (colRef.transitionType == TransitionType::Shader) {
+          std::string cur = colRef.transitionShader.empty() ? T("(escolha)") : platform::toUtf8(platform::toPath(colRef.transitionShader).stem());
+          if (cur.rfind("T_", 0) == 0) cur = cur.substr(2);
           ImGui::SetNextItemWidth(160);
-          if (ImGui::SliderFloat(T("Troca em"), &colRef.stingerCut, 0, 1, T("%.2f do vídeo"))) app.edited();
+          if (ImGui::BeginCombo(T("Shader"), cur.c_str())) {
+            for (auto &x : e.isfCatalog.builtins()) {
+              if (!x.info.transition) continue;
+              std::string n = x.name.rfind("T_", 0) == 0 ? x.name.substr(2) : x.name;
+              if (ImGui::Selectable(n.c_str(), x.path == colRef.transitionShader)) { colRef.transitionShader = x.path; app.edited(); }
+              if (!x.info.description.empty()) ImGui::SetItemTooltip("%s", x.info.description.c_str());
+            }
+            if (ImGui::Selectable(T("Abrir arquivo .fs..."))) {
+              auto files = platform::openFileDialog("Transição ISF", "ISF|*.fs|Todos|*.*", false);
+              if (!files.empty()) { colRef.transitionShader = files[0]; app.edited(); }
+            }
+            ImGui::EndCombo();
+          }
+        }
+        if (ImGui::Checkbox(T("Manual (fader)"), &colRef.manualTransition)) app.edited();
+        helpMarker(T("A transição anda com o fader de transição (barra de cima, MIDI ou OSC "
+                   "/lumen/transition). Para assumir, leve o fader a 0 e depois suba até 1."));
+        {
+          const MediaItem *sm = p.media(colRef.stingerMediaId);
+          ImGui::SetNextItemWidth(160);
+          if (ImGui::BeginCombo(T("Stinger"), sm ? sm->name.c_str() : T("(nenhum)"))) {
+            if (ImGui::Selectable(T("(nenhum)"), !sm)) { colRef.stingerMediaId = -1; app.edited(); }
+            for (auto &m : p.library)
+              if (m.type == MediaType::Video && ImGui::Selectable(m.name.c_str(), m.id == colRef.stingerMediaId)) {
+                colRef.stingerMediaId = m.id;
+                app.edited();
+              }
+            ImGui::EndCombo();
+          }
+          helpMarker(T("Vídeo (com transparência, ex. HAP Alpha ou ProRes 4444) tocado por cima de tudo; "
+                     "o cue troca com um corte no meio dele, escondido pela animação."));
+          if (sm) {
+            ImGui::SetNextItemWidth(160);
+            if (ImGui::SliderFloat(T("Troca em"), &colRef.stingerCut, 0, 1, T("%.2f do vídeo"))) app.edited();
+          }
+        }
+        float &tr = colRef.transition;
+        bool custom = tr >= 0;
+        if (ImGui::Checkbox(T("Duração própria"), &custom)) {
+          tr = custom ? p.defaultTransition : -1;
+          app.edited();
+        }
+        if (custom) {
+          ImGui::SetNextItemWidth(160);
+          if (ImGui::DragFloat(T("Duração (s)"), &tr, 0.05f, 0, 60, "%.2f s")) app.edited();
+        } else {
+          ImGui::SameLine();
+          ImGui::TextDisabled(T("(padrão %.2f s)"), p.defaultTransition);
         }
       }
-      float &tr = colRef.transition;
-      bool custom = tr >= 0;
-      if (ImGui::Checkbox(T("Duração própria"), &custom)) {
-        tr = custom ? p.defaultTransition : -1;
-        app.edited();
-      }
-      if (custom) {
-        ImGui::SetNextItemWidth(160);
-        if (ImGui::DragFloat(T("Duração (s)"), &tr, 0.05f, 0, 60, "%.2f s")) app.edited();
-      } else {
-        ImGui::SameLine();
-        ImGui::TextDisabled(T("(padrão %.2f s)"), p.defaultTransition);
-      }
-      sectionTitle(T("Auto-GO"));
-      {
+      if (colSection(T("Auto-GO"), "auto", pal::kPurple, false, colRef.autoGo >= 0)) {
         bool on = colRef.autoGo >= 0;
         if (ImGui::Checkbox(T("Disparar outra coluna sozinho"), &on)) {
           colRef.autoGo = on ? 10.0f : -1.0f;
@@ -1598,8 +1618,7 @@ void Ui::dashboard(App &app) {
           }
         }
       }
-      sectionTitle(T("Timeline"));
-      {
+      if (colSection(T("Timeline"), "tl", pal::kPurple, false, colRef.timelineId >= 0)) {
         const Timeline *tl = p.timeline(colRef.timelineId);
         ImGui::SetNextItemWidth(180);
         if (ImGui::BeginCombo(T("Ao disparar, tocar"), tl ? tl->name.c_str() : T("(nenhuma)"))) {
@@ -1617,8 +1636,7 @@ void Ui::dashboard(App &app) {
         helpMarker(T("A timeline começa quando a coluna é disparada e para quando outra coluna "
                    "(sem ela) entra. Se a próxima coluna usa a mesma timeline, ela continua."));
       }
-      sectionTitle(T("Comandos para equipamentos"));
-      {
+      if (colSection(T("Comandos para equipamentos"), "cmd", pal::kOrange, false, !colRef.commands.empty())) {
         std::string text;
         for (auto &line : colRef.commands) text += line + "\n";
         char buf[2048];
@@ -1641,8 +1659,7 @@ void Ui::dashboard(App &app) {
                    "tcp|udp <ip>:<porta> <texto>   serial COM3@9600 <texto>\n"
                    "osc <ip>:<porta> /endereco args   wait <segundos>"));
       }
-      sectionTitle(T("Timecode"));
-      {
+      if (colSection(T("Timecode"), "tc", pal::kGreen, false, colRef.timecodeCue >= 0)) {
         bool on = colRef.timecodeCue >= 0;
         if (ImGui::Checkbox(T("Disparar no timecode"), &on)) { colRef.timecodeCue = on ? 0.0f : -1.0f; app.edited(); }
         if (on) {
@@ -1667,8 +1684,7 @@ void Ui::dashboard(App &app) {
                        "e dar play no meio (no Reaper, na mesa...) já entra nesta coluna, no ponto certo."));
         }
       }
-      sectionTitle(T("Estados (animar parâmetros)"));
-      {
+      if (colSection(T("Estados (animar parâmetros)"), "states", pal::kMagenta, false, !colRef.states.empty())) {
         helpMarker(T("Grava o valor atual de parâmetros de uma layer nesta coluna. Ao disparar a "
                    "coluna, eles vão até esse valor durante a transição. Colunas sem valor "
                    "herdam o da coluna anterior."));
@@ -1714,31 +1730,31 @@ void Ui::dashboard(App &app) {
           app.edited();
         }
       }
-      sectionTitle(T("Organizar"));
-      if (ImGui::ColorEdit3(T("Cor"), colRef.color, ImGuiColorEditFlags_NoInputs)) app.edited();
-      // moveDir: distance to the neighbour of the same dashboard.
-      ImGui::BeginDisabled(ci <= 0);
-      if (ImGui::Button(T("\xe2\x97\x80 Mover para a esquerda"))) { // ◀
-        moveColumn = c;
-        moveDir = vis[size_t(ci - 1)] - c;
-        ImGui::CloseCurrentPopup();
+      if (colSection(T("Organizar"), "org", pal::kOrange, false, colRef.color[0] > 0 || colRef.color[1] > 0 || colRef.color[2] > 0)) {
+        if (ImGui::ColorEdit3(T("Cor"), colRef.color, ImGuiColorEditFlags_NoInputs)) app.edited();
+        // moveDir: distance to the neighbour of the same dashboard.
+        ImGui::BeginDisabled(ci <= 0);
+        if (ImGui::Button(T("\xe2\x97\x80 Mover para a esquerda"))) { // ◀
+          moveColumn = c;
+          moveDir = vis[size_t(ci - 1)] - c;
+          ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndDisabled();
+        ImGui::SameLine();
+        ImGui::BeginDisabled(ci + 1 >= ncols);
+        if (ImGui::Button(T("Mover para a direita \xe2\x96\xb6"))) { // ▶
+          moveColumn = c;
+          moveDir = vis[size_t(ci + 1)] - c;
+          ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndDisabled();
+        if (p.boards.size() > 1 && ImGui::BeginMenu(T("Mover para o dashboard"))) {
+          for (size_t b = 0; b < p.boards.size(); ++b)
+            if (int(b) != colRef.board && ImGui::MenuItem(p.boards[b].c_str())) { colRef.board = int(b); app.edited(); }
+          ImGui::EndMenu();
+        }
       }
-      ImGui::EndDisabled();
-      ImGui::SameLine();
-      ImGui::BeginDisabled(ci + 1 >= ncols);
-      if (ImGui::Button(T("Mover para a direita \xe2\x96\xb6"))) { // ▶
-        moveColumn = c;
-        moveDir = vis[size_t(ci + 1)] - c;
-        ImGui::CloseCurrentPopup();
-      }
-      ImGui::EndDisabled();
-      if (p.boards.size() > 1 && ImGui::BeginMenu(T("Mover para o dashboard"))) {
-        for (size_t b = 0; b < p.boards.size(); ++b)
-          if (int(b) != colRef.board && ImGui::MenuItem(p.boards[b].c_str())) { colRef.board = int(b); app.edited(); }
-        ImGui::EndMenu();
-      }
-      sectionTitle(T("Ações OSC ao disparar"));
-      {
+      if (colSection(T("Ações OSC ao disparar"), "osc", pal::kMagenta, false, !colRef.oscActions.empty())) {
         std::string text;
         for (auto &line : p.columns[size_t(c)].oscActions) text += line + "\n";
         char buf[2048];

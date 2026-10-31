@@ -95,6 +95,12 @@ Ordem pensada para **videomapping** e **instalações interativas**.
 - *Seek* preciso de vídeo e áudio (também por OSC: `/lumen/layer/<l>/time`)
 - Testes de integração no CI (`scripts/test-integration.sh`)
 
+## ✅ v0.10.31
+- **Configuração da coluna em seções recolhíveis** (como Layer / Mapping / Efeitos): Coluna,
+  Transição, Auto-GO, Timeline, Comandos, Timecode, Estados, Organizar e Ações OSC abrem e fecham
+  pela setinha; Coluna e Transição vêm abertas. O que fica aberto vale para todas as colunas
+  durante a sessão. Um ponto verde no título mostra a seção que tem algo configurado
+
 ## ✅ v0.10.30
 - **Cor da coluna no botão**: a coluna com cor escolhida (Organizar → Cor) pinta o botão inteiro
   com ela, em vez da faixa fina; no ar fica com a cor cheia e borda branca, fora do ar mais escura.
