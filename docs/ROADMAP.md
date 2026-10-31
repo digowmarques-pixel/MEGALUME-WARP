@@ -95,6 +95,11 @@ Ordem pensada para **videomapping** e **instalações interativas**.
 - *Seek* preciso de vídeo e áudio (também por OSC: `/lumen/layer/<l>/time`)
 - Testes de integração no CI (`scripts/test-integration.sh`)
 
+## ✅ v0.10.27
+- **Engrenagem** ao lado da transição de cada coluna (dashboard): abre a configuração da coluna
+  (transição, auto-GO, timeline, comandos, timecode, estados, OSC). Em colunas estreitas a
+  transição mostra só o tempo ("1.5s"), com o texto completo ao passar o mouse
+
 ## ✅ v0.10.26
 - **Tab passa para o próximo campo** enquanto se digita (ex.: colunas → linhas da malha,
   x → y → largura → altura); Shift+Tab volta. Fora de um campo o Tab continua sem efeito, para

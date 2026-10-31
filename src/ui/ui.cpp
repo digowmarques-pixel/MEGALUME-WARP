@@ -632,6 +632,25 @@ void Ui::recoveryPopup(App &app) {
   }
 }
 
+// A small gear (drawn, so it needs no symbol font): settings buttons.
+static bool gearButton(const char *id, float size) {
+  bool pressed = ImGui::InvisibleButton(id, {size, size});
+  ImVec2 a = ImGui::GetItemRectMin();
+  ImVec2 c{a.x + size * 0.5f, a.y + size * 0.5f};
+  ImU32 col = ImGui::GetColorU32(ImGui::IsItemHovered() ? ImGuiCol_Text : ImGuiCol_TextDisabled);
+  ImDrawList *dl = ImGui::GetWindowDrawList();
+  if (ImGui::IsItemHovered())
+    dl->AddRectFilled(a, {a.x + size, a.y + size}, ImGui::GetColorU32(ImGuiCol_ButtonHovered), 3);
+  float r = size * 0.30f;
+  for (int i = 0; i < 8; ++i) {
+    float t = float(i) * 3.14159265f / 4;
+    dl->AddLine({c.x + std::cos(t) * r * 0.8f, c.y + std::sin(t) * r * 0.8f},
+                {c.x + std::cos(t) * r * 1.38f, c.y + std::sin(t) * r * 1.38f}, col, size * 0.13f);
+  }
+  dl->AddCircle(c, r * 0.72f, col, 16, size * 0.16f);
+  return pressed;
+}
+
 void Ui::relinkDialog(App &app) {
   std::string dir = platform::folderDialog(T("Pasta onde procurar as mídias"));
   if (dir.empty()) return;
@@ -1427,8 +1446,28 @@ void Ui::dashboard(App &app) {
       }
       ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
       ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
-      if (ImGui::SmallButton(tl) && !locked) ImGui::OpenPopup("colpop");
+      // Transition label and, at its right, a gear: both open the column settings.
+      float h = ImGui::GetFrameHeight() - 2 * ImGui::GetStyle().FramePadding.y + 2;
+      float labelW = locked ? cellW - 4 : std::max(20.0f, cellW - 4 - h - 2);
+      ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, {4, 1});
+      ImGui::PushStyleVar(ImGuiStyleVar_ButtonTextAlign, {0, 0.5f});
+      // Narrow columns: only the time ("1.5s"), the full text in the tooltip.
+      std::string shown = tl;
+      if (ImGui::CalcTextSize(tl).x > labelW - 8 && colRef.transitionType != TransitionType::Cut && dur > 0) {
+        char st[64];
+        std::snprintf(st, sizeof(st), "%.1fs%s", dur, tl + std::strcspn(tl, "\xe2"));
+        shown = st;
+      }
+      shown += "##trans";
+      if (ImGui::Button(shown.c_str(), {labelW, h}) && !locked) ImGui::OpenPopup("colpop");
+      if (shown.size() != std::strlen(tl) + 7) ImGui::SetItemTooltip("%s", tl);
+      ImGui::PopStyleVar(2);
       ImGui::PopStyleColor(2);
+      if (!locked) {
+        ImGui::SameLine(0, 2);
+        if (gearButton("##colgear", h)) ImGui::OpenPopup("colpop");
+        ImGui::SetItemTooltip("%s", T("Configurar a coluna (transição, auto-GO, timecode, comandos...)"));
+      }
     }
     bool popupOpen = !locked && ImGui::BeginPopup("colpop");
     if (!popupOpen && !locked) popupOpen = ImGui::BeginPopupContextItem("colpop");

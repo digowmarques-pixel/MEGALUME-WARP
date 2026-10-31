@@ -873,3 +873,4 @@
 {"o arquivo não tem vídeo", "the file has no video"},
 {"Conversão para HAP falhou: ", "HAP conversion failed: "},
 {"Convertido para HAP: ", "Converted to HAP: "},
+{"Configurar a coluna (transição, auto-GO, timecode, comandos...)", "Column settings (transition, auto-GO, timecode, commands...)"},
