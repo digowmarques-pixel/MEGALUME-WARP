@@ -13,7 +13,7 @@ um Arduino e o NDI Tools.
 
 ## 0. Instalação e diagnóstico
 
-- [ ] 0.1 Instale com `Lumen-0.10.25-setup.exe` (ou descompacte o .zip). O atalho
+- [ ] 0.1 Instale com `Lumen-0.10.26-setup.exe` (ou descompacte o .zip). O atalho
       aparece no Menu Iniciar, e arquivos `.lumen` abrem com o Lumen.
 - [ ] 0.2 Menu Iniciar → *Lumen (console de diagnóstico)*. O relatório abre no Bloco
       de Notas (também fica em `%APPDATA%\Lumen\diagnostico.txt`).
@@ -233,6 +233,10 @@ um Arduino e o NDI Tools.
 - [ ] 13.33 Vídeo segue o timecode: Cue 1 em 00:00:00:00 e Cue 2 em 00:00:30:00. Play no Reaper,
       pause: o vídeo pausa junto. Play: continua do mesmo ponto. Leve o cursor para 00:00:40:00 e
       dê play: entra a Cue 2, 10 s adiante. Volte para 00:00:05:00: Cue 1, em 5 s.
+- [ ] 13.42 Saídas → Cor e blend: os controles ficam à esquerda e a imagem da saída à direita.
+      Mude Soft edge → Esquerda e Brilho: a imagem muda na hora (e no projetor).
+- [ ] 13.41 Saídas → Mapping: clique no 1º campo da malha, digite 10, Tab: o cursor vai para o 2º
+      campo. Enter, depois Espaço: dá GO. Sem nenhum campo ativo, Tab não faz nada.
 - [ ] 13.40 Com um vídeo tocando, converta outro vídeo grande: o que está no ar não engasga
       (anote o fps no rodapé antes e durante). Feche o Lumen no meio: não sobra `.part` nem ffmpeg
       no Gerenciador de Tarefas.

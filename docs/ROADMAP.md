@@ -95,6 +95,14 @@ Ordem pensada para **videomapping** e **instalações interativas**.
 - *Seek* preciso de vídeo e áudio (também por OSC: `/lumen/layer/<l>/time`)
 - Testes de integração no CI (`scripts/test-integration.sh`)
 
+## ✅ v0.10.26
+- **Tab passa para o próximo campo** enquanto se digita (ex.: colunas → linhas da malha,
+  x → y → largura → altura); Shift+Tab volta. Fora de um campo o Tab continua sem efeito, para
+  nunca deixar o cursor num campo onde o Espaço digitaria em vez de dar GO
+- **Saídas → Cor e blend ao lado da tela do mapping**: soft edge, nível de preto e cor do
+  projetor numa coluna, com o preview da saída (como vai para o projetor) ao lado; os cantos e a
+  malha continuam ajustáveis ali
+
 ## ✅ v0.10.25
 - **Conversor HAP** dentro do Lumen: botão direito no vídeo → *Converter para HAP...*, botão
   nas propriedades da mídia e *Janela → Conversor HAP* (vários arquivos, ou todos os vídeos do

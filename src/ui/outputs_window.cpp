@@ -402,14 +402,26 @@ void Ui::outputsWindow(App &app) {
       outputsWs_.draw(app, ImGui::GetContentRegionAvail());
       ImGui::EndChild();
     } else {
+      // Color and blend next to the output preview: every change is seen at once
+      // (the preview is the output as sent to the projector, soft edges included).
+      ImGui::BeginChild("##colorblend", {425, 0}, ImGuiChildFlags_Borders);
       int pat = int(sel->pattern);
-      ImGui::SetNextItemWidth(260);
+      ImGui::SetNextItemWidth(220);
       if (ImGui::Combo(T("Padrão de teste"), &pat, TZ("Nenhum (conteúdo)\0Test card da saída\0Grade de blend (contínua)\0Branco\0Preto\0"))) {
         sel->pattern = TestPattern(pat);
         app.edited();
       }
       softEdgeControls(app, sel);
       blackAndColorControls(app, sel);
+      ImGui::EndChild();
+      ImGui::SameLine();
+      outputsWs_.viewOutputId = sel->id;
+      outputsWs_.lockView = true;
+      // The warp stays adjustable here; the mask tool belongs to its own tab.
+      if (outputsWs_.tool != Tool::Mesh) outputsWs_.tool = Tool::Perspective;
+      ImGui::BeginChild("##wscolor", {0, 0});
+      outputsWs_.draw(app, ImGui::GetContentRegionAvail());
+      ImGui::EndChild();
     }
   }
   ImGui::EndChild();

@@ -692,11 +692,13 @@ int App::run(const Options &opts) {
     ImGui_ImplOpenGL3_NewFrame();
     ImGui_ImplGlfw_NewFrame();
     ImGui::NewFrame();
-    // No Tab focus: in a show, a stray Tab would put the cursor in a text field,
-    // where Space types a space instead of giving GO and Delete erases the name.
-    ImGui::PushItemFlag(ImGuiItemFlags_NoTabStop, true);
-
+    // Tab goes to the next field only while a field is being typed in (columns
+    // then rows of the mesh, x then y...). Outside a field a stray Tab must not
+    // put the cursor in one, where Space would type a space instead of giving GO.
+    // Without keyboard navigation Tab only stops on fields, never on buttons.
     ImGuiIO &io = ImGui::GetIO();
+    ImGui::PushItemFlag(ImGuiItemFlags_NoTabStop, !io.WantTextInput);
+
     if (!io.WantTextInput) {
       bool ctrl = io.KeyCtrl, shift = io.KeyShift;
       if (ctrl && shift && ImGui::IsKeyPressed(ImGuiKey_L, false)) {
