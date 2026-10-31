@@ -177,6 +177,7 @@ bool Workspace::editMask(Mask &m, int &point, const std::function<ImVec2(Vec2)> 
 }
 
 // ---- Magnet (snapping) for moving and scaling slices.
+constexpr float kSnapPx = 10; // attraction distance, in screen pixels
 struct Box {
   float x0 = 1e30f, y0 = 1e30f, x1 = -1e30f, y1 = -1e30f;
   void add(Vec2 v) { x0 = std::min(x0, v.x); y0 = std::min(y0, v.y); x1 = std::max(x1, v.x); y1 = std::max(y1, v.y); }
@@ -492,7 +493,7 @@ void Workspace::drawCanvasOverlay(App &app, ImDrawList *dl, ImVec2 origin, float
           }
         std::vector<float> xs, ys;
         snapTargets(p, viewCanvas, l->id, si, xs, ys);
-        float thr = 8 / scale;
+        float thr = kSnapPx / scale;
         guideX = snapAxis({b.x0, (b.x0 + b.x1) * 0.5f, b.x1}, xs, thr, d.x);
         guideY = snapAxis({b.y0, (b.y0 + b.y1) * 0.5f, b.y1}, ys, thr, d.y);
       }
@@ -566,7 +567,7 @@ void Workspace::drawCanvasOverlay(App &app, ImDrawList *dl, ImVec2 origin, float
         if (snap != io.KeyCtrl) { // the dragged handle snaps on its own axes
           std::vector<float> xs, ys;
           snapTargets(p, viewCanvas, sel->id, app.sel.slice, xs, ys);
-          float thr = 8 / scale, dx = 0, dy = 0;
+          float thr = kSnapPx / scale, dx = 0, dy = 0;
           if (onX) guideX = snapAxis({target.x}, xs, thr, dx);
           if (onY) guideY = snapAxis({target.y}, ys, thr, dy);
           target = {target.x + dx, target.y + dy};
@@ -579,7 +580,16 @@ void Workspace::drawCanvasOverlay(App &app, ImDrawList *dl, ImVec2 origin, float
         const Vec2 anchor = h < 4 ? hp[(h + 2) % 4] : hp[4 + (h - 2) % 4], from = hp[h];
         float fx = onX && std::fabs(from.x - anchor.x) > 1e-3f ? (ml.x - anchor.x) / (from.x - anchor.x) : 1;
         float fy = onY && std::fabs(from.y - anchor.y) > 1e-3f ? (ml.y - anchor.y) / (from.y - anchor.y) : 1;
-        if (h < 4 && !io.KeyShift) fx = fy = std::fabs(fx - 1) > std::fabs(fy - 1) ? fx : fy;
+        if (h < 4 && !io.KeyShift) {
+          // Proportional scale: one factor for both axes. The axis the magnet caught
+          // decides it, so that edge lands exactly on the guide (the other guide,
+          // which can no longer be met, is not drawn).
+          bool useX;
+          if (!std::isnan(guideX) != !std::isnan(guideY)) useX = !std::isnan(guideX);
+          else useX = std::fabs(fx - 1) > std::fabs(fy - 1);
+          fx = fy = useX ? fx : fy;
+          (useX ? guideY : guideX) = NAN;
+        }
         auto notFlat = [](float f) { return std::fabs(f) < 0.02f ? (f < 0 ? -0.02f : 0.02f) : f; };
         fx = notFlat(fx);
         fy = notFlat(fy);
@@ -623,7 +633,7 @@ void Workspace::drawCanvasOverlay(App &app, ImDrawList *dl, ImVec2 origin, float
               xs.push_back(tw.corners[size_t(c)].x);
               ys.push_back(tw.corners[size_t(c)].y);
             }
-          target = snapPoint(mc, xs, ys, 8 / scale, guideX, guideY);
+          target = snapPoint(mc, xs, ys, kSnapPx / scale, guideX, guideY);
         }
         keepInPlace(*sel, [&] { slice.warp.corners[size_t(app.sel.corner)] = untransform(*sel, target); });
         app.edited();
@@ -667,7 +677,7 @@ void Workspace::drawCanvasOverlay(App &app, ImDrawList *dl, ImVec2 origin, float
                 xs.push_back(q.x);
                 ys.push_back(q.y);
               }
-          target = snapPoint(mc, xs, ys, 8 / scale, guideX, guideY);
+          target = snapPoint(mc, xs, ys, kSnapPx / scale, guideX, guideY);
         }
         w.mesh[size_t(app.sel.meshPoint)] = w.unmapPerspective(untransform(*sel, target));
         app.edited();
@@ -828,8 +838,8 @@ void Workspace::drawOutputOverlay(App &app, ImDrawList *dl, ImVec2 origin, ImVec
   auto outputSnap = [&](Vec2 pt, const std::vector<float> &xs, const std::vector<float> &ys) {
     if (snap == io.KeyCtrl) return pt;
     float gx = NAN, gy = NAN, dx = 0, dy = 0;
-    gx = snapAxis({pt.x}, xs, 8 / std::max(1.0f, size.x), dx);
-    gy = snapAxis({pt.y}, ys, 8 / std::max(1.0f, size.y), dy);
+    gx = snapAxis({pt.x}, xs, kSnapPx / std::max(1.0f, size.x), dx);
+    gy = snapAxis({pt.y}, ys, kSnapPx / std::max(1.0f, size.y), dy);
     if (!std::isnan(gx)) dl->AddLine(toScreen({gx, 0}), toScreen({gx, 1}), pal::u32(pal::kYellow, 200), 1);
     if (!std::isnan(gy)) dl->AddLine(toScreen({0, gy}), toScreen({1, gy}), pal::u32(pal::kYellow, 200), 1);
     return Vec2{pt.x + dx, pt.y + dy};

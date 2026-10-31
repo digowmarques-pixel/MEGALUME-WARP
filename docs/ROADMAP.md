@@ -95,6 +95,12 @@ Ordem pensada para **videomapping** e **instalações interativas**.
 - *Seek* preciso de vídeo e áudio (também por OSC: `/lumen/layer/<l>/time`)
 - Testes de integração no CI (`scripts/test-integration.sh`)
 
+## ✅ v0.10.29
+- **Ímã preciso no redimensionamento proporcional** (canto sem Shift): a escala única usa o eixo
+  que o ímã pegou, então a borda para exatamente na guia (antes usava o eixo que mudou mais e a
+  borda ficava alguns pixels fora). Distância de atração 10 px de tela. Conferido gravando o
+  projeto: mover, escalar e cantos param nas coordenadas exatas (1000,0; 700,0; 0,0)
+
 ## ✅ v0.10.28
 - **Ímã** também nos cantos (Perspectiva) e nos pontos da malha das layers, e nos cantos e na
   malha do warp da saída (bordas, centro, outras fatias, os outros cantos e os pontos da mesma
