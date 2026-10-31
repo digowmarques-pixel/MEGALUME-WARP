@@ -1913,10 +1913,10 @@ void Ui::dashboard(App &app) {
       }
       if (!locked && ImGui::BeginDragDropTarget()) {
         if (const ImGuiPayload *pl = ImGui::AcceptDragDropPayload("LUMEN_MEDIA")) {
-          Cell nc;
-          nc.mediaId = *static_cast<const int *>(pl->Data);
-          col.cells[l.id] = nc;
-          app.edited();
+          if (const MediaItem *dm = p.media(*static_cast<const int *>(pl->Data))) {
+            col.cells[l.id] = newCell(*dm);
+            app.edited();
+          }
         }
         if (const ImGuiPayload *pl = ImGui::AcceptDragDropPayload("LUMEN_CELL")) {
           const int *src = static_cast<const int *>(pl->Data);

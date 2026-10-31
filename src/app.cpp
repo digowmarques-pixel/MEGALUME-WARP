@@ -374,9 +374,7 @@ void App::importFiles(const std::vector<std::string> &paths, int column, int lay
         }
         column = next;
       }
-      Cell c;
-      c.mediaId = m.id;
-      p.columns[size_t(column)].cells[layerId] = c;
+      p.columns[size_t(column)].cells[layerId] = newCell(m);
       placed = true;
     }
   }

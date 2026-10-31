@@ -95,6 +95,11 @@ Ordem pensada para **videomapping** e **instalações interativas**.
 - *Seek* preciso de vídeo e áudio (também por OSC: `/lumen/layer/<l>/time`)
 - Testes de integração no CI (`scripts/test-integration.sh`)
 
+## ✅ v0.10.33
+- **Vídeo novo numa célula congela no último quadro** (em vez de loop): ao arrastar da
+  biblioteca, importar ou soltar do Explorer. Imagens, geradores e entradas ao vivo seguem em
+  loop; células de projetos já salvos não mudam. O modo continua mudando em Célula → Ao terminar
+
 ## ✅ v0.10.32
 - **VU de áudio na célula que está tocando** (dashboard): barra vertical à direita da miniatura,
   em dB (-48 a 0 dBFS), verde / laranja a partir de -9 dB / vermelho a partir de -1 dB, com marca

@@ -954,6 +954,21 @@ static void testInstaller() {
 #endif
 }
 
+static void testNewCell() {
+  using namespace lumen;
+  MediaItem v;
+  v.id = 7;
+  v.type = MediaType::Video;
+  Cell c = newCell(v);
+  CHECK(c.mediaId == 7 && c.endMode == EndMode::Freeze && !c.loop); // videos hold the last frame
+  MediaItem g;
+  g.type = MediaType::Generator;
+  CHECK(newCell(g).endMode == EndMode::Loop);
+  MediaItem img;
+  img.type = MediaType::Image;
+  CHECK(newCell(img).endMode == EndMode::Loop);
+}
+
 static void testHapConvert() {
   using namespace lumen;
   namespace fs = std::filesystem;
@@ -1146,6 +1161,7 @@ int main() {
   testInstaller();
   testI18n();
   testHapConvert();
+  testNewCell();
   testV09();
   testV08();
   testV07();

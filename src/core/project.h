@@ -187,6 +187,10 @@ struct Cell {
   float speed = 1;
   void setEndMode(EndMode m) { endMode = m; loop = m == EndMode::Loop; }
 };
+// A new cell for a media item: videos hold their last frame when they end (a
+// clip launched in a show must not start again by itself); the rest loops.
+Cell newCell(const MediaItem &m);
+
 
 // Value of a layer parameter recorded in a column ("states" in Millumin): on
 // launch, the parameter moves to it during the column transition. Columns

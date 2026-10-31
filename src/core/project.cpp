@@ -755,6 +755,13 @@ int autoBlendOverlaps(Project &p, int canvasId) {
   return seams;
 }
 
+Cell newCell(const MediaItem &m) {
+  Cell c;
+  c.mediaId = m.id;
+  c.setEndMode(m.type == MediaType::Video ? EndMode::Freeze : EndMode::Loop);
+  return c;
+}
+
 Vec2 layerPivot(const Layer &l) {
   Vec2 c;
   int n = 0;
