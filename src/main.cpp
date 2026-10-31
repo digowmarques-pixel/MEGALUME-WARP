@@ -40,6 +40,15 @@ static void usage() {
       LUMEN_VERSION);
 }
 
+#ifdef _WIN32
+// Laptops with two GPUs (NVIDIA Optimus, AMD switchable graphics) give a
+// program the integrated one unless the program exports these.
+extern "C" {
+__declspec(dllexport) unsigned long NvOptimusEnablement = 1;
+__declspec(dllexport) int AmdPowerXpressRequestHighPerformance = 1;
+}
+#endif
+
 int main(int argc, char **argv) {
 #ifndef _WIN32
   // A device or controller that closes its TCP connection must give an error,
@@ -47,6 +56,7 @@ int main(int argc, char **argv) {
   std::signal(SIGPIPE, SIG_IGN);
 #endif
   lumen::platform::attachConsole();
+  lumen::platform::keepRunningSmoothly();
   lumen::Options opts;
   std::vector<std::string> args = lumen::platform::utf8Args(argc, argv);
   int count = int(args.size());

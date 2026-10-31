@@ -95,6 +95,15 @@ Ordem pensada para **videomapping** e **instalações interativas**.
 - *Seek* preciso de vídeo e áudio (também por OSC: `/lumen/layer/<l>/time`)
 - Testes de integração no CI (`scripts/test-integration.sh`)
 
+## ✅ v0.10.24
+- **Confiabilidade no Windows**: notebooks com duas placas (NVIDIA Optimus / AMD) usam a placa
+  dedicada; o Windows não dorme, não apaga a tela nem liga o protetor de tela com o Lumen
+  aberto; timers de 1 ms; sem *power throttling* (EcoQoS) quando outra janela está na frente;
+  prioridade acima do normal
+- **Diagnóstico** lista as placas do computador e acusa quando o Lumen está na Intel integrada
+  havendo NVIDIA/AMD
+- **Travamento** grava `lumen-crash.dmp` (pasta de configurações) para localizar a causa
+
 ## ✅ v0.10.23
 - **Instalador com o Lumen aberto**: em vez de "Erro ao abrir o arquivo pra gravação:
   avcodec-62.dll", pede para fechar o Lumen (e o console de diagnóstico) e clicar em Repetir.

@@ -4,6 +4,7 @@
 #include <atomic>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <fstream>
 #include <csignal>
 #include <exception>
@@ -240,8 +241,39 @@ static LONG WINAPI onCrash(EXCEPTION_POINTERS *info) {
                 narrow(std::filesystem::path(modName).filename().wstring()).c_str(),
                 static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(r->ExceptionAddress) -
                                                 reinterpret_cast<uintptr_t>(mod)));
+  // A minidump lets the crash be located after the fact (dbghelp is loaded
+  // here, not linked: the crash path must not depend on it).
+  std::wstring dump = widen(settingsDir()) + L"\\lumen-crash.dmp";
+  if (HMODULE dbg = LoadLibraryW(L"dbghelp.dll")) {
+    using WriteDump = BOOL(WINAPI *)(HANDLE, DWORD, HANDLE, int, void *, void *, void *);
+    auto write = reinterpret_cast<WriteDump>(reinterpret_cast<void *>(GetProcAddress(dbg, "MiniDumpWriteDump")));
+    HANDLE f = CreateFileW(dump.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (write && f != INVALID_HANDLE_VALUE) {
+      struct { DWORD thread; EXCEPTION_POINTERS *info; BOOL client; } ex{GetCurrentThreadId(), info, FALSE};
+      if (write(GetCurrentProcess(), GetCurrentProcessId(), f, 0 /* MiniDumpNormal */, &ex, nullptr, nullptr))
+        std::snprintf(msg + std::strlen(msg), sizeof(msg) - std::strlen(msg), "\nRelatório técnico: %s",
+                      narrow(dump).c_str());
+    }
+    if (f != INVALID_HANDLE_VALUE) CloseHandle(f);
+  }
   fatalError(msg);
   return EXCEPTION_EXECUTE_HANDLER;
+}
+
+void keepRunningSmoothly() {
+  SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED | ES_DISPLAY_REQUIRED);
+  // timeBeginPeriod from winmm, loaded so the core library needs no new import.
+  if (HMODULE mm = LoadLibraryW(L"winmm.dll"))
+    if (auto begin = reinterpret_cast<UINT(WINAPI *)(UINT)>(reinterpret_cast<void *>(GetProcAddress(mm, "timeBeginPeriod"))))
+      begin(1);
+  // Windows 11 slows down ("EcoQoS") processes whose window is not in front;
+  // the outputs must keep their frame rate whatever window has the focus.
+  struct { ULONG version, controlMask, stateMask; } throttle{1, 0x1 /* EXECUTION_SPEED */, 0};
+  using SetInfo = BOOL(WINAPI *)(HANDLE, int, void *, DWORD);
+  if (auto set = reinterpret_cast<SetInfo>(
+          reinterpret_cast<void *>(GetProcAddress(GetModuleHandleW(L"kernel32.dll"), "SetProcessInformation"))))
+    set(GetCurrentProcess(), 4 /* ProcessPowerThrottling */, &throttle, sizeof(throttle));
+  SetPriorityClass(GetCurrentProcess(), ABOVE_NORMAL_PRIORITY_CLASS);
 }
 
 void attachConsole() {
@@ -380,6 +412,7 @@ void openInShell(const std::string &path) {
 }
 
 void attachConsole() {}
+void keepRunningSmoothly() {}
 
 std::string logPath() { return ""; }
 

@@ -20,6 +20,11 @@
 #include <filesystem>
 #include <thread>
 
+#ifdef _WIN32
+#include <windows.h>
+#include <dxgi.h>
+#endif
+
 namespace lumen {
 
 namespace {
@@ -112,6 +117,34 @@ std::string App::diagnosticReport() {
       lower.find("software") != std::string::npos || lower.find("basic render") != std::string::npos)
     r.fail("Renderização por software: instale o driver da placa de vídeo (NVIDIA, AMD ou Intel)");
   else r.ok("Aceleração de hardware");
+#ifdef _WIN32
+  {
+    // Every GPU in the machine: with an NVIDIA/AMD card present, drawing on the
+    // integrated Intel one means Windows picked the wrong GPU for Lumen.
+    std::vector<std::string> gpus;
+    bool discrete = false;
+    IDXGIFactory1 *factory = nullptr;
+    if (SUCCEEDED(CreateDXGIFactory1(__uuidof(IDXGIFactory1), reinterpret_cast<void **>(&factory)))) {
+      IDXGIAdapter1 *a = nullptr;
+      for (UINT i = 0; factory->EnumAdapters1(i, &a) != DXGI_ERROR_NOT_FOUND; ++i) {
+        DXGI_ADAPTER_DESC1 d{};
+        a->GetDesc1(&d);
+        a->Release();
+        if (d.Flags & DXGI_ADAPTER_FLAG_SOFTWARE) continue;
+        char name[256];
+        WideCharToMultiByte(CP_UTF8, 0, d.Description, -1, name, sizeof(name), nullptr, nullptr);
+        gpus.push_back(std::string(name) + " (" + std::to_string(d.DedicatedVideoMemory >> 20) + " MB)");
+        if (d.VendorId == 0x10DE || d.VendorId == 0x1002) discrete = true;
+      }
+      factory->Release();
+    }
+    for (auto &g : gpus) r.line("Placa no computador: " + g);
+    bool onIntel = lower.find("intel") != std::string::npos;
+    if (discrete && onIntel)
+      r.fail("O Lumen está desenhando na placa integrada (Intel), não na NVIDIA/AMD. No Windows: "
+             "Configurações → Sistema → Tela → Elementos gráficos → lumen.exe → Alto desempenho");
+  }
+#endif
   if (FrameUploader::supportsS3tc()) r.ok("HAP comprimido direto na GPU (S3TC)");
   else r.warn("A GPU não aceita S3TC: vídeos HAP serão decodificados na CPU");
   r.ok("Shaders do renderizador compilados");

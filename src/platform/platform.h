@@ -32,6 +32,9 @@ std::string settingsDir();
 
 // Windows: reuse the parent terminal for stdout/stderr when there is one.
 void attachConsole();
+// Windows: no sleep, screen saver or display power-off while Lumen runs, 1 ms
+// timers, no power throttling (EcoQoS) and above-normal priority.
+void keepRunningSmoothly();
 // Shows a message box (Windows) and logs it. Used for errors before/without the UI.
 void fatalError(const std::string &message);
 std::string logPath(); // where stdout/stderr go when there is no console
