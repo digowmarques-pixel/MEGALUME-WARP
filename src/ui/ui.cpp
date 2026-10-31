@@ -1435,15 +1435,32 @@ void Ui::dashboard(App &app) {
     ImGui::PushID(p.columns[size_t(c)].id);
     Column &colRef = p.columns[size_t(c)];
     bool active = e.activeColumn() == c;
-    if (active) pushPrimary();
+    // A column with its own colour paints its button with it (instead of the
+    // yellow of the live column): full colour and a white frame when it is on
+    // air, darker when not.
+    const bool colored = colRef.color[0] > 0 || colRef.color[1] > 0 || colRef.color[2] > 0;
+    if (colored) {
+      float k = active ? 1.0f : 0.5f;
+      ImVec4 base{colRef.color[0] * k, colRef.color[1] * k, colRef.color[2] * k, 1};
+      auto lift = [&](float d) { return ImVec4{std::min(1.0f, base.x + d), std::min(1.0f, base.y + d), std::min(1.0f, base.z + d), 1}; };
+      // Text in black on light colours, white on dark ones.
+      float luma = 0.299f * base.x + 0.587f * base.y + 0.114f * base.z;
+      ImGui::PushStyleColor(ImGuiCol_Button, base);
+      ImGui::PushStyleColor(ImGuiCol_ButtonHovered, lift(0.12f));
+      ImGui::PushStyleColor(ImGuiCol_ButtonActive, lift(0.2f));
+      ImGui::PushStyleColor(ImGuiCol_Text, luma > 0.55f ? ImVec4(0.05f, 0.05f, 0.05f, 1) : ImVec4(1, 1, 1, 1));
+      ImGui::PushStyleColor(ImGuiCol_Border, base);
+    } else if (active) {
+      pushPrimary();
+    }
     char label[96];
     std::snprintf(label, sizeof(label), T("%02d  \xe2\x96\xb6  %s"), ci + 1, colRef.name.c_str()); // ▶
     if (ImGui::Button(label, {cellW - 4, 0})) e.launchColumn(c);
-    if (active) popPrimary();
-    if (colRef.color[0] > 0 || colRef.color[1] > 0 || colRef.color[2] > 0) {
+    if (colored || active) ImGui::PopStyleColor(5);
+    if (colored && active) {
       ImVec2 a = ImGui::GetItemRectMin(), b = ImGui::GetItemRectMax();
-      ImGui::GetWindowDrawList()->AddRectFilled({a.x, b.y - 3}, {b.x, b.y},
-          ImGui::GetColorU32(ImVec4(colRef.color[0], colRef.color[1], colRef.color[2], 1)));
+      ImGui::GetWindowDrawList()->AddRect({a.x - 1, a.y - 1}, {b.x + 1, b.y + 1}, IM_COL32(255, 255, 255, 255),
+                                          ImGui::GetStyle().FrameRounding + 1, 0, 2.5f);
     }
     if (!colRef.notes.empty()) ImGui::SetItemTooltip("%s", colRef.notes.c_str());
     // Transition line (click: column window), like Millumin's "no transition ⚙".

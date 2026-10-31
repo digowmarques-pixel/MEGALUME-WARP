@@ -95,6 +95,11 @@ Ordem pensada para **videomapping** e **instalações interativas**.
 - *Seek* preciso de vídeo e áudio (também por OSC: `/lumen/layer/<l>/time`)
 - Testes de integração no CI (`scripts/test-integration.sh`)
 
+## ✅ v0.10.30
+- **Cor da coluna no botão**: a coluna com cor escolhida (Organizar → Cor) pinta o botão inteiro
+  com ela, em vez da faixa fina; no ar fica com a cor cheia e borda branca, fora do ar mais escura.
+  Texto preto ou branco conforme a cor. Coluna sem cor continua cinza / amarela no ar
+
 ## ✅ v0.10.29
 - **Ímã preciso no redimensionamento proporcional** (canto sem Shift): a escala única usa o eixo
   que o ímã pegou, então a borda para exatamente na guia (antes usava o eixo que mudou mais e a
