@@ -95,6 +95,11 @@ Ordem pensada para **videomapping** e **instalações interativas**.
 - *Seek* preciso de vídeo e áudio (também por OSC: `/lumen/layer/<l>/time`)
 - Testes de integração no CI (`scripts/test-integration.sh`)
 
+## ✅ v0.10.23
+- **Instalador com o Lumen aberto**: em vez de "Erro ao abrir o arquivo pra gravação:
+  avcodec-62.dll", pede para fechar o Lumen (e o console de diagnóstico) e clicar em Repetir.
+  O desinstalador faz o mesmo
+
 ## ✅ v0.10.22
 - **Janela própria do Timecode** (*Janela → Timecode (MTC / LTC)*, em seção separada no menu):
   relógio grande com fps e atraso, Receber (MTC/LTC, roda livre, atraso em quadros) e Gerar.

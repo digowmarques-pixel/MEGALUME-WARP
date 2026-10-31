@@ -1,5 +1,5 @@
 ; Lumen installer (NSIS 3). Builds on Windows (CI) or Linux (apt install nsis):
-;   makensis -DVERSION=0.10.22 -DSRCDIR=path\to\Lumen -DOUTFILE=Lumen-setup.exe installer/lumen.nsi
+;   makensis -DVERSION=0.10.23 -DSRCDIR=path\to\Lumen -DOUTFILE=Lumen-setup.exe installer/lumen.nsi
 ; SRCDIR is the packaged folder (lumen.exe, DLLs, effects, examples, docs).
 
 Unicode true
@@ -56,6 +56,44 @@ LangString Need64 ${LANG_PORTUGUESEBR} "O Lumen precisa do Windows 64 bits."
 LangString Need64 ${LANG_ENGLISH} "Lumen requires 64-bit Windows."
 LangString ProjectType ${LANG_PORTUGUESEBR} "Projeto Lumen"
 LangString ProjectType ${LANG_ENGLISH} "Lumen project"
+LangString StillRunning ${LANG_PORTUGUESEBR} "O Lumen está aberto, e o Windows não deixa trocar os arquivos de um programa em uso.$\r$\n$\r$\nSalve o projeto, feche o Lumen (e o console de diagnóstico, se estiver aberto) e clique em Repetir."
+LangString StillRunning ${LANG_ENGLISH} "Lumen is open, and Windows does not let the files of a running program be replaced.$\r$\n$\r$\nSave your project, close Lumen (and the diagnostic console, if open) and click Retry."
+
+; A running Lumen locks its DLLs ("Erro ao abrir o arquivo pra gravação:
+; avcodec-62.dll"), so installing or uninstalling waits until it is closed.
+!macro WAIT_LUMEN_CLOSED un
+; Windows refuses write access to the image of a running program, which needs
+; no process list (tasklist output is localized). FileOpen "a" would create a
+; missing file, hence IfFileExists.
+Function ${un}WaitLumenClosed
+  check:
+  StrCpy $1 "$INSTDIR\lumen.exe"
+  Call ${un}LumenFileBusy
+  StrCmp $0 1 busy
+  StrCpy $1 "$INSTDIR\lumen-console.exe"
+  Call ${un}LumenFileBusy
+  StrCmp $0 1 busy
+  Return
+  busy:
+  MessageBox MB_RETRYCANCEL|MB_ICONEXCLAMATION $(StillRunning) IDRETRY check
+  Abort
+FunctionEnd
+
+; $0 = 1 when the file $1 exists and cannot be opened for writing.
+Function ${un}LumenFileBusy
+  StrCpy $0 0
+  IfFileExists $1 0 free
+  ClearErrors
+  FileOpen $2 $1 a
+  IfErrors 0 +3
+    StrCpy $0 1
+    Return
+  FileClose $2
+  free:
+FunctionEnd
+!macroend
+!insertmacro WAIT_LUMEN_CLOSED ""
+!insertmacro WAIT_LUMEN_CLOSED "un."
 
 Function .onInit
   ${IfNot} ${RunningX64}
@@ -81,6 +119,7 @@ FunctionEnd
 
 Section "Lumen" SecMain
   SectionIn RO
+  Call WaitLumenClosed
   SetOutPath "$INSTDIR"
   ; An update overwrites the shipped effects and keeps the user's own .fs files
   ; (EFEITOS.md tells users to put downloaded effects in this folder).
@@ -118,6 +157,7 @@ Section "$(SecAssoc)" SecAssocFiles
 SectionEnd
 
 Section "Uninstall"
+  Call un.WaitLumenClosed
   Delete "$DESKTOP\Lumen.lnk"
   RMDir /r "$SMPROGRAMS\${APP}"
   ; Only what the installer put there: projects and media saved elsewhere stay,
