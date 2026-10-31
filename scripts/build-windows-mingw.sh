@@ -64,6 +64,8 @@ $CXX -o "$OUT/Lumen/lumen-console.exe" $OBJS -mconsole -static-libgcc -static-li
   -lopengl32 -lgdi32 -lws2_32 -lcomdlg32 -lshell32 -lole32 -loleaut32 -lwinmm -luuid \
   -ld3d11 -ldxgi -ld3d9 -lversion -lcomctl32 -lshlwapi -lpsapi
 cp "$FF"/bin/*.dll "$OUT/Lumen/"
+# The HAP converter runs ffmpeg in its own process (same LGPL build, same DLLs).
+cp "$FF/bin/ffmpeg.exe" "$OUT/Lumen/"
 # MinGW's pthread runtime (std::thread) when it is linked dynamically.
 for d in /usr/x86_64-w64-mingw32/lib /usr/lib/gcc/x86_64-w64-mingw32/*-posix; do
   [ -f "$d/libwinpthread-1.dll" ] && cp "$d/libwinpthread-1.dll" "$OUT/Lumen/" && break

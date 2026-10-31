@@ -100,7 +100,7 @@ código compila para Windows: `./scripts/check-windows-mingw.sh`.
 O instalador (NSIS, também roda no Linux com `sudo apt install nsis`):
 
 ```bash
-cd installer && makensis -DVERSION=0.10.24 -DSRCDIR=../build-mingw/Lumen -DOUTFILE=../Lumen-0.10.24-setup.exe lumen.nsi
+cd installer && makensis -DVERSION=0.10.25 -DSRCDIR=../build-mingw/Lumen -DOUTFILE=../Lumen-0.10.25-setup.exe lumen.nsi
 ```
 
 ## Compilar no Linux (desenvolvimento)
@@ -136,6 +136,9 @@ cmake -S . -B build && cmake --build build -j
 - Para vários vídeos 4K ao mesmo tempo, exporte em **HAP** (ou HAP Q para mais qualidade,
   HAP Alpha com transparência). O After Effects/Media Encoder exporta HAP com o plugin
   gratuito da Vidvox, e o FFmpeg também: `ffmpeg -i in.mov -c:v hap -format hap_q out.mov`.
+- Ou converta **dentro do Lumen**: clique com o botão direito no vídeo da biblioteca →
+  *Converter para HAP...*, ou *Janela → Conversor HAP* para vários arquivos (o projeto passa a
+  usar o arquivo novo). Pela linha de comando: `lumen --convert-hap video.mp4 --hap-variant q`.
 - H.264/HEVC usam a decodificação por hardware da placa de vídeo (*Projeto → Vídeo*).
 - Projetor em monitor: use **Estender** (Win+P), nunca espelhar.
 - A barra de baixo mostra quanto vídeo vai para a placa de vídeo (*GPU: MB/s* e ms por

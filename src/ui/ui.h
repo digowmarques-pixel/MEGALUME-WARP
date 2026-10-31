@@ -102,8 +102,17 @@ private:
   Texture asioLogo_;
   bool asioLogoTried_ = false;
   void asioNotice();
-  // Setup panels in their own windows (Janela menu): Saídas, Interação, Projeto, LED, Timecode.
-  bool panelOpen_[5] = {};
+  // Setup panels in their own windows (Janela menu): Saídas, Interação, Projeto, LED, Timecode,
+  // Conversor HAP.
+  bool panelOpen_[6] = {};
+  void converterWindow(App &app);
+  // "Converter para HAP...": the library items it applies to, asked in a popup.
+  std::vector<int> convertIds_;
+  std::vector<std::string> convertFiles_; // files not in the library
+  bool openConvert_ = false;
+  int convertVariant_ = 0;   // HapVariant
+  bool convertSwap_ = true;  // the project uses the new files
+  void convertPopup(App &app);
   void panelWindows(App &app);
   std::string diagReport_;
   void relinkDialog(App &app);

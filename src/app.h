@@ -3,6 +3,7 @@
 
 #include "engine/engine.h"
 #include "engine/outputs.h"
+#include "media/convert.h"
 
 #include <functional>
 #include <memory>
@@ -137,6 +138,10 @@ public:
   void unlessUnsaved(std::function<void()> action);
   // Redundancy role of this computer, saved in the machine settings.
   void applySync(SyncRole role, const std::string &peer, int port, bool save);
+  // Conversion to HAP in the background (ffmpeg in its own process). With
+  // mediaId >= 0 that library item uses the new file once it is ready.
+  HapConverter converter;
+  bool convertToHap(const std::string &path, int mediaId, HapVariant v, std::string *error = nullptr);
   // System self-test (GPU, shaders, monitors, audio, MIDI, serial, Spout, NDI).
   std::string diagnosticReport();
 
@@ -154,6 +159,7 @@ private:
   void pollKeyboard(bool mainWindowKeys);
   std::vector<bool> keyDown_;
   void updateTitle();
+  void applyConversions();
   bool writePpm(const std::string &path, int w, int h, const std::vector<unsigned char> &rgba,
                 bool flipY);
 

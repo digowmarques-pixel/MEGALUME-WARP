@@ -46,6 +46,7 @@ struct MediaInfo {
   double fps = 0;
   bool hasVideo = false;
   bool hasAudio = false;
+  bool alpha = false; // the video carries transparency (pixel format with alpha)
   std::string codec;
   std::string hwaccel; // name of the hardware decoder in use, if any
 };

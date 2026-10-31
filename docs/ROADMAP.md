@@ -95,6 +95,18 @@ Ordem pensada para **videomapping** e **instalações interativas**.
 - *Seek* preciso de vídeo e áudio (também por OSC: `/lumen/layer/<l>/time`)
 - Testes de integração no CI (`scripts/test-integration.sh`)
 
+## ✅ v0.10.25
+- **Conversor HAP** dentro do Lumen: botão direito no vídeo → *Converter para HAP...*, botão
+  nas propriedades da mídia e *Janela → Conversor HAP* (vários arquivos, ou todos os vídeos do
+  projeto que não são HAP). HAP, HAP Q ou HAP Alpha (escolhido sozinho quando o vídeo tem
+  transparência); áudio mantido (PCM 24 bits); bordas levadas a múltiplos de 4; vários *chunks*
+  em 4K/8K. Fila com progresso e cancelar; o projeto passa a usar o arquivo novo (a layer que já
+  está tocando segue com o antigo até o próximo disparo)
+- A conversão roda no `ffmpeg.exe` (agora no pacote) em **processo separado**, prioridade baixa
+  e no máximo metade dos núcleos: uma falha não derruba o Lumen. Arquivo `.part` até terminar:
+  cancelar ou fechar o Lumen não deixa arquivo pela metade
+- Linha de comando: `lumen --convert-hap ARQ... [--hap-variant q|alpha]`
+
 ## ✅ v0.10.24
 - **Confiabilidade no Windows**: notebooks com duas placas (NVIDIA Optimus / AMD) usam a placa
   dedicada; o Windows não dorme, não apaga a tela nem liga o protetor de tela com o Lumen

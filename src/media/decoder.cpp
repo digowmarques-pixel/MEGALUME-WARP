@@ -189,6 +189,8 @@ struct Pipeline {
     info.hasVideo = true;
     info.width = st->codecpar->width;
     info.height = st->codecpar->height;
+    if (const AVPixFmtDescriptor *pd = av_pix_fmt_desc_get(AVPixelFormat(st->codecpar->format)))
+      info.alpha = pd->flags & AV_PIX_FMT_FLAG_ALPHA;
     info.fps = 1.0 / frameDuration;
     if (!src.live) {
       if (st->duration != AV_NOPTS_VALUE) info.duration = double(st->duration) * timeBase;

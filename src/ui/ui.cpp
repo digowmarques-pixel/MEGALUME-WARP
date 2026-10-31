@@ -550,6 +550,7 @@ void Ui::draw(App &app) {
     sliceEditorWindow(app);
     virtualMonitorsWindow(app);
     panelWindows(app);
+    convertPopup(app);
   }
   recoveryPopup(app);
   if (showRemoveColumns_) removeColumnsWindow(app);
@@ -803,6 +804,8 @@ void Ui::menuBar(App &app) {
     if (workspace.showLed) ImGui::MenuItem(T("LED"), nullptr, &panelOpen_[3]);
     sectionTitle(T("Timecode"));
     ImGui::MenuItem(T("Timecode (MTC / LTC)"), nullptr, &panelOpen_[4]);
+    sectionTitle(T("Ferramentas"));
+    ImGui::MenuItem(T("Conversor HAP"), nullptr, &panelOpen_[5]);
     sectionTitle(T("Propriedades"));
     struct P { const char *name; Inspector id; };
     const P panels[] = {{T("Layer"), Inspector::Layer}, {T("Célula"), Inspector::Cell}, {T("Mídia"), Inspector::Media}};
@@ -1214,6 +1217,10 @@ void Ui::library(App &app) {
       ImGui::EndDragDropSource();
     }
     if (ImGui::BeginPopupContextItem()) {
+      if (m.type == MediaType::Video && ImGui::MenuItem(T("Converter para HAP..."))) {
+        convertIds_ = {m.id};
+        openConvert_ = true;
+      }
       if (ImGui::MenuItem(T("Remover da biblioteca"))) removeId = m.id;
       ImGui::EndPopup();
     }
@@ -2296,18 +2303,156 @@ void Ui::virtualMonitorsWindow(App &app) {
   if (!open) app.outputsOpen = false; // closing it closes the outputs, like Ctrl+P
 }
 
+// Conversor HAP (Janela → Ferramentas): the conversions in progress and done.
+void Ui::converterWindow(App &app) {
+  ImGui::TextWrapped("%s", T("Converte vídeos para HAP, o codec mais leve para show. O arquivo novo fica na mesma "
+                             "pasta do original (nome-hap.mov); o original não é apagado."));
+  if (ImGui::Button(T("Converter arquivos..."))) {
+    convertFiles_ = platform::openFileDialog(T("Converter para HAP"),
+                                             "Vídeo|*.mp4;*.mov;*.mkv;*.avi;*.webm;*.mxf;*.m4v|Todos|*.*", true);
+    convertIds_.clear();
+    openConvert_ = !convertFiles_.empty();
+  }
+  ImGui::SameLine();
+  if (ImGui::Button(T("Vídeos do projeto que não são HAP..."))) {
+    convertIds_.clear();
+    convertFiles_.clear();
+    for (const MediaItem &m : app.engine.project.library) {
+      if (m.type != MediaType::Video || app.mediaMissing(m)) continue;
+      const MediaInfo *info = app.engine.cache.info(m);
+      if (info && info->hasVideo && info->codec.rfind("hap", 0) != 0) convertIds_.push_back(m.id);
+    }
+    if (convertIds_.empty()) app.status(T("Todos os vídeos do projeto já são HAP."));
+    else openConvert_ = true;
+  }
+
+  std::vector<ConvertJob> jobs = app.converter.jobs();
+  if (app.converter.busy()) {
+    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4{1, 0.75f, 0.3f, 1});
+    ImGui::TextWrapped("%s", T("Convertendo: usa bastante processador. Evite converter durante o show."));
+    ImGui::PopStyleColor();
+  }
+  ImGui::Separator();
+  if (jobs.empty()) ImGui::TextDisabled("%s", T("Nenhuma conversão."));
+  bool finished = false;
+  for (const ConvertJob &j : jobs) {
+    ImGui::PushID(j.id);
+    std::string name = platform::toUtf8(platform::toPath(j.source).filename());
+    ImGui::Text("%s  →  %s", name.c_str(), hapVariantName(j.variant));
+    char label[96];
+    ImVec4 color{0.6f, 0.6f, 0.6f, 1};
+    switch (j.state) {
+    case ConvertJob::State::Waiting: std::snprintf(label, sizeof(label), "%s", T("na fila")); break;
+    case ConvertJob::State::Running: std::snprintf(label, sizeof(label), "%.0f %%", j.progress * 100); break;
+    case ConvertJob::State::Done:
+      std::snprintf(label, sizeof(label), "%s", T("pronto"));
+      color = {0.4f, 0.85f, 0.4f, 1};
+      break;
+    case ConvertJob::State::Failed:
+      std::snprintf(label, sizeof(label), "%s", T("falhou"));
+      color = {1, 0.4f, 0.4f, 1};
+      break;
+    case ConvertJob::State::Cancelled: std::snprintf(label, sizeof(label), "%s", T("cancelado")); break;
+    }
+    bool active = j.state == ConvertJob::State::Waiting || j.state == ConvertJob::State::Running;
+    finished |= !active;
+    ImGui::PushStyleColor(ImGuiCol_PlotHistogram, color);
+    ImGui::ProgressBar(j.state == ConvertJob::State::Done ? 1.0f : j.progress, {-90, 0}, label);
+    ImGui::PopStyleColor();
+    ImGui::SameLine();
+    if (active) {
+      if (ImGui::Button(T("Cancelar"), {-1, 0})) app.converter.cancel(j.id);
+    } else if (j.state == ConvertJob::State::Done) {
+      if (ImGui::Button(T("Pasta"), {-1, 0}))
+        platform::openInShell(platform::toUtf8(platform::toPath(j.output).parent_path()));
+      ImGui::SetItemTooltip("%s", j.output.c_str());
+    }
+    if (j.state == ConvertJob::State::Failed) ImGui::TextColored({1, 0.5f, 0.5f, 1}, "%s", j.error.c_str());
+    ImGui::PopID();
+  }
+  if (finished && ImGui::Button(T("Limpar concluídos"))) app.converter.clearFinished();
+}
+
+void Ui::convertPopup(App &app) {
+  const char *title = T("Converter para HAP###convpop");
+  if (openConvert_) {
+    openConvert_ = false;
+    // Transparent videos default to HAP Alpha (the other variants drop it).
+    bool alpha = false;
+    for (int id : convertIds_)
+      if (const MediaItem *m = app.engine.project.media(id))
+        if (const MediaInfo *info = app.engine.cache.info(*m)) alpha |= info->alpha;
+    convertVariant_ = int(alpha ? HapVariant::HapAlpha : HapVariant::Hap);
+    ImGui::OpenPopup(title);
+  }
+  ImGui::SetNextWindowSize({460, 0}, ImGuiCond_Appearing);
+  if (!ImGui::BeginPopupModal(title, nullptr, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings))
+    return;
+  size_t n = convertIds_.size() + convertFiles_.size();
+  if (n == 1) {
+    std::string name = convertFiles_.empty() ? (app.engine.project.media(convertIds_[0])
+                                                    ? app.engine.project.media(convertIds_[0])->name
+                                                    : std::string())
+                                             : platform::toUtf8(platform::toPath(convertFiles_[0]).filename());
+    ImGui::Text("%s", name.c_str());
+  } else {
+    ImGui::Text(T("%d vídeos"), int(n));
+  }
+  ImGui::Spacing();
+  ImGui::RadioButton(T("HAP — padrão, leve e rápido"), &convertVariant_, int(HapVariant::Hap));
+  ImGui::RadioButton(T("HAP Q — mais qualidade (degradês, LED de perto), arquivo ~2× maior"), &convertVariant_,
+                     int(HapVariant::HapQ));
+  ImGui::RadioButton(T("HAP Alpha — mantém a transparência"), &convertVariant_, int(HapVariant::HapAlpha));
+  if (!convertIds_.empty()) {
+    ImGui::Spacing();
+    ImGui::Checkbox(T("Usar o arquivo novo no projeto quando terminar"), &convertSwap_);
+    helpMarker(T("As células passam a usar o arquivo HAP. Uma layer que já está tocando continua com o "
+                 "arquivo antigo até a célula ser disparada de novo."));
+  }
+  ImGui::Spacing();
+  ImGui::TextDisabled("%s", T("Arquivos HAP são grandes (4K: mais de 500 MB por minuto): use um SSD."));
+  ImGui::Separator();
+  if (ImGui::Button(T("Converter"), {120, 0})) {
+    HapVariant v = HapVariant(convertVariant_);
+    int queued = 0;
+    std::string err, firstErr;
+    for (int id : convertIds_)
+      if (const MediaItem *m = app.engine.project.media(id)) {
+        if (app.convertToHap(m->path, convertSwap_ ? id : -1, v, &err)) ++queued;
+        else if (firstErr.empty()) firstErr = m->name + ": " + err;
+      }
+    for (const std::string &f : convertFiles_) {
+      if (app.convertToHap(f, -1, v, &err)) ++queued;
+      else if (firstErr.empty()) firstErr = platform::toUtf8(platform::toPath(f).filename()) + ": " + err;
+    }
+    if (!firstErr.empty()) app.status(std::string(T("Não foi possível converter ")) + firstErr, true);
+    if (queued) panelOpen_[5] = true;
+    convertIds_.clear();
+    convertFiles_.clear();
+    ImGui::CloseCurrentPopup();
+  }
+  ImGui::SameLine();
+  if (ImGui::Button(T("Cancelar"), {120, 0})) {
+    convertIds_.clear();
+    convertFiles_.clear();
+    ImGui::CloseCurrentPopup();
+  }
+  ImGui::EndPopup();
+}
+
 void Ui::panelWindows(App &app) {
   struct W { const char *title; void (Ui::*draw)(App &); };
   const W wins[] = {{T("Propriedades das saídas###pw_out"), &Ui::outputInspector},
                     {T("Interação (OSC, MIDI, DMX, serial)###pw_int"), &Ui::interactionInspector},
                     {T("Projeto###pw_proj"), &Ui::projectInspector},
                     {T("LED mapping###pw_led"), &Ui::ledInspector},
-                    {T("Timecode###pw_tc"), &Ui::timecodeInspector}};
+                    {T("Timecode###pw_tc"), &Ui::timecodeInspector},
+                    {T("Conversor HAP###pw_hap"), &Ui::converterWindow}};
   if (!workspace.showLed) panelOpen_[3] = false;
   ImGuiViewport *vp = ImGui::GetMainViewport();
-  for (int k = 0; k < 5; ++k) {
+  for (int k = 0; k < 6; ++k) {
     if (!panelOpen_[k]) continue;
-    ImGui::SetNextWindowSize({480, k == 4 ? 560 : vp->WorkSize.y * 0.75f}, ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize({480, k == 4 ? 560 : k == 5 ? 440 : vp->WorkSize.y * 0.75f}, ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowPos({vp->WorkPos.x + vp->WorkSize.x - 520 - 30.0f * float(k), vp->WorkPos.y + 70 + 30.0f * float(k)},
                             ImGuiCond_FirstUseEver);
     if (ImGui::Begin(wins[k].title, &panelOpen_[k], ImGuiWindowFlags_NoCollapse)) (this->*wins[k].draw)(app);
@@ -3804,6 +3949,14 @@ void Ui::mediaInspector(App &app) {
         ImGui::Text(T("Codec: %s%s"), info->codec.c_str(), info->hasAudio ? T("   (com áudio)") : "");
         if (info->codec == "hap" && !FrameUploader::supportsS3tc())
           ImGui::TextDisabled("%s", T("Esta GPU não aceita HAP comprimido: decodificando na CPU."));
+        if (info->codec.rfind("hap", 0) != 0) {
+          if (ImGui::SmallButton(T("Converter para HAP..."))) {
+            convertIds_ = {m->id};
+            openConvert_ = true;
+          }
+          ImGui::SameLine();
+          helpMarker(T("HAP é o codec mais leve para show: vai comprimido direto para a placa de vídeo."));
+        }
       }
     } else {
       ImGui::TextColored({1, 0.4f, 0.4f, 1}, "%s", T("Não foi possível abrir este arquivo."));

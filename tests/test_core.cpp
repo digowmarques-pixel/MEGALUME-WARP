@@ -2,6 +2,8 @@
 #include "control/midi.h"
 #include "control/osc.h"
 #include "media/hap.h"
+#include "media/convert.h"
+#include "platform/process.h"
 #include "core/dmx.h"
 #include "core/project.h"
 #include "core/blob.h"
@@ -952,6 +954,66 @@ static void testInstaller() {
 #endif
 }
 
+static void testHapConvert() {
+  using namespace lumen;
+  namespace fs = std::filesystem;
+  fs::path dir = fs::temp_directory_path() / "lumen_hap_test";
+  fs::remove_all(dir);
+  fs::create_directories(dir);
+  std::string src = platform::toUtf8(dir / "clipe ç.mp4");
+  CHECK(hapOutputPath(src, HapVariant::Hap) == platform::toUtf8(dir / "clipe ç-hap.mov"));
+  CHECK(hapOutputPath(src, HapVariant::HapQ) == platform::toUtf8(dir / "clipe ç-hapq.mov"));
+  CHECK(hapOutputPath(src, HapVariant::HapAlpha) == platform::toUtf8(dir / "clipe ç-hapa.mov"));
+  { std::ofstream(dir / "clipe ç-hap.mov") << "x"; }
+  CHECK(hapOutputPath(src, HapVariant::Hap) == platform::toUtf8(dir / "clipe ç-hap (2).mov"));
+  fs::remove_all(dir);
+
+  auto has = [](const std::vector<std::string> &a, const std::string &k, const std::string &v) {
+    for (size_t i = 0; i + 1 < a.size(); ++i)
+      if (a[i] == k && a[i + 1] == v) return true;
+    return false;
+  };
+  std::vector<std::string> a = hapArgs("ffmpeg", "in.mp4", "out.mov.part", HapVariant::HapQ, 3840, 2160);
+  CHECK(a.front() == "ffmpeg" && a.back() == "out.mov.part");
+  CHECK(has(a, "-i", "in.mp4") && has(a, "-c:v", "hap") && has(a, "-format", "hap_q"));
+  CHECK(has(a, "-chunks", "4") && has(a, "-f", "mov") && has(a, "-c:a", "pcm_s24le"));
+  CHECK(has(a, "-vf", "pad=ceil(iw/4)*4:ceil(ih/4)*4"));
+  CHECK(has(hapArgs("f", "i", "o", HapVariant::Hap, 1920, 1080), "-chunks", "1"));
+  CHECK(has(hapArgs("f", "i", "o", HapVariant::Hap, 7680, 4320), "-chunks", "8"));
+  CHECK(has(hapArgs("f", "i", "o", HapVariant::HapAlpha, 640, 360), "-format", "hap_alpha"));
+
+  CHECK(hapProgressSeconds("out_time_us=2500000") == 2.5);
+  CHECK(hapProgressSeconds("out_time_us=N/A") < 0);
+  CHECK(hapProgressSeconds("frame=12") < 0);
+
+#ifndef _WIN32
+  // The child's stdout and stderr arrive as lines, and its exit code.
+  platform::ChildProcess c;
+  CHECK(c.start({"sh", "-c", "echo um; echo dois 1>&2; printf tres; exit 3"}));
+  std::vector<std::string> lines;
+  std::string l;
+  while (c.readLine(l)) lines.push_back(l);
+  CHECK(lines.size() == 3 && lines[0] == "um" && lines[1] == "dois" && lines[2] == "tres");
+  CHECK(c.wait() == 3);
+  platform::ChildProcess missing;
+  CHECK(missing.start({"/nao/existe/ffmpeg"}));
+  while (missing.readLine(l)) {}
+  CHECK(missing.wait() == 127);
+  // Cancelling kills the running child and removes nothing it did not write.
+  HapConverter conv;
+  ConvertJob job;
+  job.source = "/nao/existe.mp4";
+  job.output = platform::toUtf8(fs::temp_directory_path() / "lumen_hap_cancel.mov");
+  int id = conv.add(job);
+  conv.cancel(id);
+  conv.waitAll();
+  ConvertJob r = conv.jobs().front();
+  CHECK(r.state == ConvertJob::State::Cancelled || r.state == ConvertJob::State::Failed);
+  CHECK(!fs::exists(job.output));
+  CHECK(!fs::exists(job.output + ".part"));
+#endif
+}
+
 static void testI18n() {
   using namespace lumen;
   // Every translation keeps the format specifiers of the original, in order:
@@ -1083,6 +1145,7 @@ int main() {
   testParallel();
   testInstaller();
   testI18n();
+  testHapConvert();
   testV09();
   testV08();
   testV07();

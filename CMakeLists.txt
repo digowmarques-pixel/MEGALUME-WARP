@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(Lumen VERSION 0.10.24 LANGUAGES C CXX)
+project(Lumen VERSION 0.10.25 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -151,7 +151,9 @@ add_library(lumen_core OBJECT
   src/core/machine_settings.cpp
   src/ui/workspace.cpp
   src/ui/outputs_window.cpp
-  src/platform/platform.cpp)
+  src/platform/platform.cpp
+  src/platform/process.cpp
+  src/media/convert.cpp)
 
 target_include_directories(lumen_core PUBLIC
   src
@@ -232,7 +234,9 @@ if(LUMEN_BUILD_TESTS)
     src/control/osc.cpp
     src/ui/i18n.cpp
     src/core/machine_settings.cpp
-    src/platform/platform.cpp)
+    src/platform/platform.cpp
+    src/platform/process.cpp
+    src/media/convert.cpp)
   target_include_directories(lumen_tests PRIVATE src third_party)
   target_compile_definitions(lumen_tests PRIVATE LUMEN_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
   target_link_libraries(lumen_tests PRIVATE rtmidi)

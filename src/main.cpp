@@ -1,5 +1,7 @@
 // Lumen — media server for videomapping and interactive installations.
 #include "app.h"
+#include "media/convert.h"
+#include "media/decoder.h"
 #include "platform/platform.h"
 
 #include <csignal>
@@ -8,6 +10,37 @@
 #include <cstring>
 #include <string>
 #include <vector>
+
+// --convert-hap: one file after the other, progress on the terminal.
+static int convertFiles(const std::vector<std::string> &files, lumen::HapVariant v) {
+  int failed = 0;
+  for (const std::string &f : files) {
+    lumen::MediaInfo info;
+    std::string err;
+    if (!lumen::probeMedia(f, info, &err) || !info.hasVideo) {
+      std::fprintf(stderr, "[hap] %s: %s\n", f.c_str(), err.empty() ? "sem vídeo" : err.c_str());
+      ++failed;
+      continue;
+    }
+    lumen::ConvertJob job;
+    job.source = f;
+    job.output = lumen::hapOutputPath(f, v);
+    job.variant = v;
+    job.width = info.width;
+    job.height = info.height;
+    job.duration = info.duration;
+    lumen::HapConverter conv;
+    conv.add(job);
+    conv.waitAll();
+    lumen::ConvertJob r = conv.jobs().front();
+    if (r.state == lumen::ConvertJob::State::Done) std::printf("[hap] %s -> %s\n", f.c_str(), r.output.c_str());
+    else {
+      std::fprintf(stderr, "[hap] %s: %s\n", f.c_str(), r.error.c_str());
+      ++failed;
+    }
+  }
+  return failed ? 1 : 0;
+}
 
 static void usage() {
   std::printf(
@@ -36,7 +69,9 @@ static void usage() {
       "  --screenshot-outputs P  salva todas as saídas em P1.ppm, P2.ppm... (1 px = 1 px do canvas)\n"
       "  --blend CxL:SOBR:LxA    aplica o assistente de blend, ex.: 3x1:0.15:1920x1080\n"
       "  --pattern N             padrão de teste em todas as saídas (0 nenhum, 1 card, 2 grade, 3 branco, 4 preto)\n"
-      "  --black-level V         compensação de preto em todas as saídas\n",
+      "  --black-level V         compensação de preto em todas as saídas\n"
+      "  --convert-hap ARQ...    converte vídeos para HAP (ao lado do original) e sai\n"
+      "  --hap-variant V         hap (padrão), q ou alpha, para --convert-hap\n",
       LUMEN_VERSION);
 }
 
@@ -60,6 +95,8 @@ int main(int argc, char **argv) {
   lumen::Options opts;
   std::vector<std::string> args = lumen::platform::utf8Args(argc, argv);
   int count = int(args.size());
+  std::vector<std::string> convertList;
+  lumen::HapVariant variant = lumen::HapVariant::Hap;
   for (int i = 1; i < count; ++i) {
     std::string a = args[size_t(i)];
     auto next = [&]() -> std::string {
@@ -96,6 +133,13 @@ int main(int argc, char **argv) {
     else if (a == "--screenshot-outputs") opts.screenshotOutputs = next();
     else if (a == "--blend") opts.blend = next();
     else if (a == "--pattern") opts.pattern = std::atoi(next().c_str());
+    else if (a == "--convert-hap") {
+      convertList.push_back(next());
+      while (i + 1 < count && args[size_t(i + 1)][0] != '-') convertList.push_back(args[size_t(++i)]);
+    } else if (a == "--hap-variant") {
+      std::string v = next();
+      variant = v == "q" ? lumen::HapVariant::HapQ : v == "alpha" ? lumen::HapVariant::HapAlpha : lumen::HapVariant::Hap;
+    }
     else if (a == "--black-level") opts.blackLevel = float(std::atof(next().c_str()));
     else if (a == "--size") {
       std::string s = next();
@@ -103,6 +147,7 @@ int main(int argc, char **argv) {
     } else if (!a.empty() && a[0] != '-') opts.projectPath = a;
     else { usage(); return 2; }
   }
+  if (!convertList.empty()) return convertFiles(convertList, variant);
   lumen::App app;
   return app.run(opts);
 }

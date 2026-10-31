@@ -251,6 +251,46 @@ int App::relinkMissing(const std::string &dir) {
   return fixed;
 }
 
+bool App::convertToHap(const std::string &path, int mediaId, HapVariant v, std::string *error) {
+  MediaInfo info;
+  if (!probeMedia(path, info, error)) return false;
+  if (!info.hasVideo) {
+    if (error) *error = T("o arquivo não tem vídeo");
+    return false;
+  }
+  ConvertJob job;
+  job.mediaId = mediaId;
+  job.source = path;
+  job.output = hapOutputPath(path, v);
+  job.variant = v;
+  job.width = info.width;
+  job.height = info.height;
+  job.duration = info.duration;
+  converter.add(job);
+  return true;
+}
+
+// A finished conversion points its library item at the new file. Layers
+// already playing keep the old file until their cell is launched again.
+void App::applyConversions() {
+  for (const ConvertJob &j : converter.jobs()) {
+    if (j.applied || (j.state != ConvertJob::State::Done && j.state != ConvertJob::State::Failed)) continue;
+    if (!converter.markApplied(j.id)) continue;
+    std::string name = platform::toUtf8(platform::toPath(j.source).filename());
+    if (j.state == ConvertJob::State::Failed) {
+      status(std::string(T("Conversão para HAP falhou: ")) + name + " — " + j.error, true);
+      continue;
+    }
+    MediaItem *m = engine.project.media(j.mediaId);
+    if (m && m->path == j.source) {
+      m->path = j.output;
+      engine.cache.invalidate(m->id);
+      edited();
+    }
+    status(std::string(T("Convertido para HAP: ")) + name);
+  }
+}
+
 void App::applySync(SyncRole role, const std::string &peer, int port, bool save) {
   engine.setSync(role, peer, port);
   if (!save) return;
@@ -828,6 +868,7 @@ int App::run(const Options &opts) {
 
     commitIfNeeded();
     if (opts.frames == 0 && opts.quitAfter <= 0) autosave();
+    applyConversions();
     updateTitle();
     if (lastFrame) break;
   }

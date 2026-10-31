@@ -208,10 +208,11 @@ for l in out.splitlines():
         f = dict(x.split("=") for x in l.split()[2:] if "=" in x)
         tr.append((float(f["at"]), int(f["column"]), float(f["t"]), f["paused"] == "1"))
 near = lambda at: min(tr, key=lambda r: abs(r[0] - at)) if tr else (0, 0, -9, False)
-c = near(3.5); check("timecode: play do zero dispara a cue 1 e o vídeo anda junto", c[1] == 1 and abs(c[2] - 2.5) < 0.2 and not c[3], c)
+# Samples come every 0.5 s of real time: the expected video time is taken at the sample's own instant.
+c = near(3.5); check("timecode: play do zero dispara a cue 1 e o vídeo anda junto", c[1] == 1 and abs(c[2] - (c[0] - 1)) < 0.2 and not c[3], c)
 c = near(5.5); check("timecode: parado, o vídeo pausa onde o timecode parou", c[3] and abs(c[2] - 3.0) < 0.2, c)
-c = near(7.5); check("timecode: pulo para 10 s entra na cue 2, 4 s adiante", c[1] == 2 and abs(c[2] - 5.5) < 0.2 and not c[3], c)
-c = near(9.5); check("timecode: volta para 2 s volta para a cue 1, em 3 s", c[1] == 1 and abs(c[2] - 3.0) < 0.2, c)
+c = near(7.5); check("timecode: pulo para 10 s entra na cue 2, 4 s adiante", c[1] == 2 and abs(c[2] - (c[0] - 2)) < 0.2 and not c[3], c)
+c = near(9.5); check("timecode: volta para 2 s volta para a cue 1, em 3 s", c[1] == 1 and abs(c[2] - (c[0] - 6.5)) < 0.2, c)
 # Timecode delay: 6 frames at 30 fps, the video runs 0.2 s behind the timecode received.
 out = run({"format": "lumen", "version": 1, "canvas": {"width": 320, "height": 180}, "timecode": {"source": 1, "delayFrames": 6},
            "library": [tcv(1)], "layers": [{"id": 1, "name": "L1"}],
@@ -233,6 +234,23 @@ check("timecode: ... e o vídeo alcança acelerando", abs(float(c["tc"]) - float
 sys.exit(0 if ok else 1)
 EOF2
 python3 review.py "$LUMEN" "$WORK" || fail=1
+
+echo "== HAP converter (lumen --convert-hap)"
+ffmpeg -v error -y -f lavfi -i testsrc2=size=638x358:rate=30 -f lavfi -i "sine=frequency=440:sample_rate=48000" \
+  -t 2 -c:v libx264 -pix_fmt yuv420p -c:a aac "clipe ç.mp4"
+if "$LUMEN" --convert-hap "clipe ç.mp4" --hap-variant q > conv.log 2>&1 && [ -f "clipe ç-hapq.mov" ] && [ ! -e "clipe ç-hapq.mov.part" ]; then
+  streams=$(ffprobe -v error -show_entries stream=codec_name,codec_tag_string,width,height -of csv=p=0 "clipe ç-hapq.mov" | tr '\n' ' ')
+  case "$streams" in
+    "hap,HapY,640,360 pcm_s24le,in24 ") echo "ok   HAP Q 640x360 (bordas múltiplas de 4) com áudio";;
+    *) echo "FAIL converted streams: $streams"; fail=1;;
+  esac
+  project "clipe ç-hapq.mov" > hap.lumen
+  xvfb-run -a "$LUMEN" hap.lumen --frames 4 --launch 1 --no-outputs --screenshot-canvas hap.ppm > hap.log 2>&1
+  if [ -s hap.ppm ] && grep -q "hap" hap.log -i; then echo "ok   o Lumen toca o arquivo convertido"; else echo "FAIL playing the converted file"; fail=1; fi
+else
+  echo "FAIL --convert-hap"; cat conv.log; fail=1
+fi
+if "$LUMEN" --convert-hap nada.mp4 > conv2.log 2>&1; then echo "FAIL a missing file must fail"; fail=1; else echo "ok   arquivo inexistente falha sem deixar lixo"; fi
 
 [ $fail = 0 ] && echo "integration tests: OK"
 exit $fail
