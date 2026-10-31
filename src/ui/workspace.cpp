@@ -405,6 +405,14 @@ void Workspace::drawCanvasOverlay(App &app, ImDrawList *dl, ImVec2 origin, float
     ImVec2 a = toScreen({o.srcX, o.srcY}), b = toScreen({o.srcX + o.srcW, o.srcY + o.srcH});
     dl->AddRect(a, b, pal::u32(pal::kCyan, 110), 0, 0, 1.0f);
     dl->AddText({a.x + 4, a.y + 2}, pal::u32(pal::kCyan, 160), o.name.c_str());
+    // Its extra slices (parts of the canvas placed elsewhere on the same projector).
+    for (const OutputSlice &sl : o.slices) {
+      if (!sl.enabled) continue;
+      ImVec2 sa = toScreen({sl.srcX, sl.srcY}), sb = toScreen({sl.srcX + sl.srcW, sl.srcY + sl.srcH});
+      dl->AddRect(sa, sb, pal::u32(pal::kCyan, 110), 0, 0, 1);
+      std::string label = o.name + " · " + sl.name;
+      dl->AddText({sa.x + 4, sb.y - 18}, pal::u32(pal::kCyan, 150), label.c_str());
+    }
   }
 
   // Outlines of every slice; selected layer drawn on top.

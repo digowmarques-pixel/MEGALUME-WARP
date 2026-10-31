@@ -304,6 +304,17 @@ struct OutputColor {
 // Values are stored in project files: only append.
 enum class TestPattern { None, Card, BlendGrid, White, Black, COUNT };
 
+// An extra slice of an output (like Resolume's Advanced Output): another part
+// of the canvas, placed with its own warp on the same projector. The output's
+// own source and warp are its first slice ("Slice 1"), which also carries the
+// soft edges of the blend.
+struct OutputSlice {
+  std::string name = "Slice";
+  bool enabled = true;
+  float srcX = 0, srcY = 0, srcW = 1920, srcH = 1080; // canvas region (px)
+  Warp warp;                                          // output-normalised space (0..1)
+};
+
 struct OutputConfig {
   int id = 0;
   std::string name = "Output";
@@ -320,6 +331,11 @@ struct OutputConfig {
   // the brighter black inside them.
   Color blackLevel{0, 0, 0, 1};
   std::vector<Mask> masks;        // output space: points in 0..1, feather in output px
+  std::vector<OutputSlice> slices; // extra slices, drawn after the first one, in order
+  // Not saved: while the Outputs window edits extra slice k, that slice is
+  // swapped with the first one (so every editor works on it); drawing uses
+  // this to keep the real order.
+  int editSwap = 0;
   int delayFrames = 0;            // compensates projectors with different latency
   int canvasId = 0;               // canvas this output shows
   // Spout sender of this output (warp, blend and colour applied), for LED

@@ -166,6 +166,12 @@ private:
   int outputsPage_ = 0;   // 0 layout, 1 mapping of one output
   int outputsSel_ = -1;   // output id shown in the mapping page
   int mappingTab_ = 0;    // slice, mapping, masks, colour
+  // Slice being edited in the Slice and Mapping tabs: 0 = the output's own
+  // (Slice 1), k = its extra slice k-1. While the page is drawn that slice is
+  // swapped into the output's source and warp, so every editor works on it.
+  int outputSlice_ = 0;
+  int outputSliceFor_ = -1;
+  void outputSliceBar(App &app, OutputConfig &o);
   Workspace outputsWs_;   // workspace embedded in the mapping page
   int calibrating_ = -1; // mapping whose input range is being learnt
   float calMin_ = 0, calMax_ = 0;

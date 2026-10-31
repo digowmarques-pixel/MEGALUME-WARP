@@ -4010,6 +4010,16 @@ void Ui::cellInspector(App &app) {
   ImGui::Text(T("Coluna %d · %s"), c + 1, col.name.c_str());
   ImGui::Text(T("Layer: %s"), l->name.c_str());
   ImGui::Text(T("Mídia: %s"), m ? m->name.c_str() : T("(removida)"));
+  // The media's picture, to be sure which clip this cell is (click: preview).
+  if (m && m->type != MediaType::Canvas) {
+    const Texture *thumb = app.engine.cache.thumbnail(*m, app.engine.generators, app.engine.mesh);
+    float w = std::min(ImGui::GetContentRegionAvail().x, 320.0f);
+    ImVec2 at = ImGui::GetCursorScreenPos();
+    fittedImage(thumb, {w, w * 9.0f / 16.0f});
+    ImGui::SetCursorScreenPos(at);
+    if (ImGui::InvisibleButton("##cellthumb", {w, w * 9.0f / 16.0f})) openPreview(app, m->id);
+    ImGui::SetItemTooltip("%s", T("Clique para ver no Preview (sem som, fora das saídas)"));
+  }
   ImGui::Separator();
   {
     int em = int(cell.endMode);

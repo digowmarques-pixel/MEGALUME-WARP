@@ -13,7 +13,7 @@ um Arduino e o NDI Tools.
 
 ## 0. Instalação e diagnóstico
 
-- [ ] 0.1 Instale com `Lumen-0.10.34-setup.exe` (ou descompacte o .zip). O atalho
+- [ ] 0.1 Instale com `Lumen-0.10.35-setup.exe` (ou descompacte o .zip). O atalho
       aparece no Menu Iniciar, e arquivos `.lumen` abrem com o Lumen.
 - [ ] 0.2 Menu Iniciar → *Lumen (console de diagnóstico)*. O relatório abre no Bloco
       de Notas (também fica em `%APPDATA%\Lumen\diagnostico.txt`).
@@ -233,6 +233,10 @@ um Arduino e o NDI Tools.
 - [ ] 13.33 Vídeo segue o timecode: Cue 1 em 00:00:00:00 e Cue 2 em 00:00:30:00. Play no Reaper,
       pause: o vídeo pausa junto. Play: continua do mesmo ponto. Leve o cursor para 00:00:40:00 e
       dê play: entra a Cue 2, 10 s adiante. Volte para 00:00:05:00: Cue 1, em 5 s.
+- [ ] 13.52 Selecione uma célula: Propriedades → Célula mostra a miniatura do vídeo; clique abre o Preview.
+- [ ] 13.51 Saídas → Mapping de um projetor → "+ Slice" (coluna da esquerda): aba Slice, escolha outra
+      parte do canvas; aba Mapping, arraste os cantos do Slice 2 para outro lugar do projetor. No
+      projetor (Tela cheia) aparecem as duas partes. Salve, feche e abra: os slices voltam iguais.
 - [ ] 13.50 Com uma cue no ar, dê duplo clique noutra célula: abre o Preview tocando aquele vídeo;
       o projetor e o som do show não mudam. Arraste a barra, "Últimos 5 s" (para no último quadro),
       ▶ Tocar recomeça. Feche a janela. Também pela biblioteca (duplo clique).

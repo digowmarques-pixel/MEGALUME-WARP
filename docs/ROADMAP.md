@@ -95,6 +95,15 @@ Ordem pensada para **videomapping** e **instalações interativas**.
 - *Seek* preciso de vídeo e áudio (também por OSC: `/lumen/layer/<l>/time`)
 - Testes de integração no CI (`scripts/test-integration.sh`)
 
+## ✅ v0.10.35
+- **Vários slices por saída** (como o Advanced Output do Resolume): em *Saídas*, embaixo do
+  projetor selecionado, a lista Slice 1, Slice 2... e **+ Slice**. Cada slice pega a sua parte do
+  canvas (aba Slice: retângulo ou warping de entrada) e tem o seu warp no projetor (aba Mapping:
+  cantos ou malha, com ímã); são desenhados em ordem, um por cima do outro. Renomear, desligar e
+  remover abaixo da lista. O Slice 1 é a saída de antes (leva o soft edge do blend e o layout);
+  máscaras e cor valem para a saída inteira. O canvas mostra a área de cada slice
+- **Miniatura na aba Célula** (Propriedades): a imagem da mídia da célula; clique abre o Preview
+
 ## ✅ v0.10.34
 - **Preview de um vídeo antes do GO**: duplo clique numa célula do dashboard ou num item da
   biblioteca (ou botão direito → Pré-visualizar) abre a janela Preview, que toca só aquela mídia,

@@ -864,6 +864,25 @@ static void testV09() {
   q.removeLayer(q.layers[0].id);
   CHECK(q.timelines[0].tracks.empty());
 
+  // Output slices (several parts of the canvas on one projector).
+  {
+    Project ps = Project::makeDefault();
+    if (ps.outputs.empty()) ps.outputs.push_back(OutputConfig{});
+    OutputSlice sl;
+    sl.name = "Teto";
+    sl.enabled = false;
+    sl.srcX = 960; sl.srcY = 10; sl.srcW = 960; sl.srcH = 540;
+    sl.warp.setRect({0.5f, 0.1f}, {0.4f, 0.3f});
+    ps.outputs[0].slices.push_back(sl);
+    Project qs;
+    CHECK(deserializeProject(serializeProject(ps, ""), "", qs));
+    CHECK(qs.outputs.size() == ps.outputs.size() && qs.outputs[0].slices.size() == 1);
+    const OutputSlice &r = qs.outputs[0].slices[0];
+    CHECK(r.name == "Teto" && !r.enabled && r.srcX == 960 && r.srcY == 10 && r.srcW == 960 && r.srcH == 540);
+    CHECK(std::fabs(r.warp.corners[2].x - 0.9f) < 1e-5f && std::fabs(r.warp.corners[2].y - 0.4f) < 1e-5f);
+    CHECK(qs.outputs[0].editSwap == 0); // never saved
+  }
+
   // Timecode: labels <-> seconds (with drop frame).
   Timecode a = Timecode::fromSeconds(3723.48, 25);
   CHECK(a.h == 1 && a.m == 2 && a.s == 3 && a.f == 12 && std::fabs(a.seconds() - 3723.48) < 0.001);

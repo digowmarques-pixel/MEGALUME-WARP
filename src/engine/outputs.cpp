@@ -508,11 +508,35 @@ void OutputManager::draw(const Project &p, const OutputConfig &o, int index,
   if (mask) mask->bind(1);
   canvas.bind(0);
 
-  Warp warp = o.warp;
-  for (auto &c : warp.corners) c = {c.x * float(w), c.y * float(h)};
-  std::vector<float> verts;
-  warp.tessellate(warp.hasMesh() ? 48 : 24, 0, 0, 1, 1, verts);
-  mesh.draw(verts);
+  auto drawWarp = [&](const Warp &src) {
+    Warp warp = src;
+    for (auto &c : warp.corners) c = {c.x * float(w), c.y * float(h)};
+    std::vector<float> verts;
+    warp.tessellate(warp.hasMesh() ? 48 : 24, 0, 0, 1, 1, verts);
+    mesh.draw(verts);
+  };
+  // Extra slices: other parts of the canvas, each with its own warp, on top in
+  // order. The soft edges belong to the first slice (the projector blend).
+  const int swap = o.editSwap > 0 && o.editSwap <= int(o.slices.size()) ? o.editSwap : 0;
+  if (swap == 0) {
+    drawWarp(o.warp);
+  } else { // the real first slice is parked in slices[swap - 1]
+    const OutputSlice &first = o.slices[size_t(swap - 1)];
+    shader_.set("uRect", first.srcX / cw, first.srcY / ch, first.srcW / cw, first.srcH / ch);
+    drawWarp(first.warp);
+  }
+  if (!o.slices.empty()) {
+    shader_.set("uSoft", 0.0f, 0.0f, 0.0f, 0.0f);
+    for (size_t i = 0; i < o.slices.size(); ++i) {
+      const bool edited = swap > 0 && int(i) == swap - 1; // its data is in the output's own fields
+      const OutputSlice &sl = o.slices[i];
+      float x = edited ? o.srcX : sl.srcX, y = edited ? o.srcY : sl.srcY;
+      float sw = edited ? o.srcW : sl.srcW, sh = edited ? o.srcH : sl.srcH;
+      if (!sl.enabled || sw <= 0 || sh <= 0) continue;
+      shader_.set("uRect", x / cw, y / ch, sw / cw, sh / ch);
+      drawWarp(edited ? o.warp : sl.warp);
+    }
+  }
 }
 
 void OutputManager::render(const Project &p, const CanvasLookup &canvases, double time, bool blackout,

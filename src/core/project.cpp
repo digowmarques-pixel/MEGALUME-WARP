@@ -1024,6 +1024,12 @@ std::string serializeProject(const Project &p, const std::string &baseDir) {
          {"blackLevel", toJson(o.blackLevel)},
          {"masks", masksToJson(o.masks)}, {"delay", o.delayFrames}, {"canvas", o.canvasId},
          {"spout", o.spoutName}, {"windowless", o.windowless}, {"ndi", o.ndiName}});
+    if (!o.slices.empty()) {
+      json &jo = j["outputs"].back();
+      for (auto &sl : o.slices)
+        jo["slices"].push_back({{"name", sl.name}, {"enabled", sl.enabled},
+                                {"source", {sl.srcX, sl.srcY, sl.srcW, sl.srcH}}, {"warp", toJson(sl.warp)}});
+    }
   }
 
   for (auto &m : p.mappings)
@@ -1403,6 +1409,18 @@ bool deserializeProject(const std::string &text, const std::string &baseDir, Pro
       }
       o.warp.setRect({0, 0}, {1, 1});
       if (jo.contains("warp")) fromJson(jo["warp"], o.warp);
+      for (auto &js : jo.value("slices", json::array())) {
+        OutputSlice sl;
+        sl.name = js.value("name", std::string("Slice"));
+        sl.enabled = js.value("enabled", true);
+        if (js.contains("source") && js["source"].size() == 4) {
+          auto &s = js["source"];
+          sl.srcX = s[0]; sl.srcY = s[1]; sl.srcW = s[2]; sl.srcH = s[3];
+        }
+        sl.warp.setRect({0, 0}, {1, 1});
+        if (js.contains("warp")) fromJson(js["warp"], sl.warp);
+        o.slices.push_back(sl);
+      }
       if (jo.contains("softEdge")) {
         auto &s = jo["softEdge"];
         o.softEdge.left = s.value("left", 0.0f);

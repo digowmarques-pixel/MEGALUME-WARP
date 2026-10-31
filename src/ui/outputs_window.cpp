@@ -38,6 +38,62 @@ bool pxField(const char *id, int &v, int hi) {
 
 } // namespace
 
+// The slices of the selected output, listed under it in the left column (like
+// Resolume's Advanced Output): Slice 1, Slice 2... and "+ Slice". The selected
+// extra slice can be renamed, switched off or removed below the list.
+void Ui::outputSliceBar(App &app, OutputConfig &o) {
+  ImGui::Indent(14);
+  for (int k = 0; k <= int(o.slices.size()); ++k) {
+    ImGui::PushID(k);
+    std::string nm = k == 0 ? std::string("Slice 1") : o.slices[size_t(k - 1)].name;
+    if (k > 0 && !o.slices[size_t(k - 1)].enabled) nm += T(" (desligada)");
+    bool on = outputSlice_ == k && outputsPage_ == 1 && mappingTab_ <= 1;
+    if (on) ImGui::PushStyleColor(ImGuiCol_Header, ImVec4(0.25f, 0.75f, 0.55f, 0.55f));
+    if (ImGui::Selectable(nm.c_str(), on)) {
+      outputSlice_ = k;
+      outputsPage_ = 1;
+      if (mappingTab_ >= 2) mappingTab_ = 1; // slices are edited in Slice and Mapping
+    }
+    if (on) ImGui::PopStyleColor();
+    ImGui::PopID();
+  }
+  if (ImGui::SmallButton(T("+ Slice"))) {
+    OutputSlice sl;
+    sl.name = "Slice " + std::to_string(o.slices.size() + 2);
+    const auto &p = app.engine.project;
+    sl.srcW = float(p.canvasWidth(o.canvasId));
+    sl.srcH = float(p.canvasHeight(o.canvasId));
+    sl.warp.setRect({0.25f, 0.25f}, {0.5f, 0.5f}); // in the middle of the projector, half size
+    o.slices.push_back(sl);
+    outputSlice_ = int(o.slices.size());
+    outputsPage_ = 1;
+    if (mappingTab_ >= 2) mappingTab_ = 0;
+    app.edited();
+  }
+  ImGui::SetItemTooltip("%s", T("Mais uma parte do canvas neste projetor, com seu próprio warp (como as slices do Resolume)"));
+  ImGui::Unindent(14);
+  if (outputSlice_ > 0 && outputSlice_ <= int(o.slices.size())) {
+    OutputSlice &sl = o.slices[size_t(outputSlice_ - 1)];
+    ImGui::Spacing();
+    char nameBuf[64];
+    std::snprintf(nameBuf, sizeof(nameBuf), "%s", sl.name.c_str());
+    ImGui::SetNextItemWidth(-1);
+    if (ImGui::InputText("##slname", nameBuf, sizeof(nameBuf))) {
+      sl.name = nameBuf;
+      app.edited();
+    }
+    if (ImGui::Checkbox(T("ligada##slice"), &sl.enabled)) app.edited();
+    ImGui::SameLine();
+    if (ImGui::SmallButton(T("Remover##slice"))) {
+      o.slices.erase(o.slices.begin() + (outputSlice_ - 1));
+      outputSlice_ = 0;
+      app.edited();
+    }
+  } else if (!o.slices.empty()) {
+    ImGui::TextDisabled("%s", T("Slice 1 leva o soft edge"));
+  }
+}
+
 void Ui::outputsWindow(App &app) {
   if (!showOutputs_) return;
   Project &p = app.engine.project;
@@ -54,7 +110,7 @@ void Ui::outputsWindow(App &app) {
   if (outputsPage_ == 1 && !sel) outputsPage_ = 0;
 
   // ---------------------------------------------------------------- left column
-  ImGui::BeginChild("##left", {170, -ImGui::GetFrameHeightWithSpacing() * 2.6f}, ImGuiChildFlags_Borders);
+  ImGui::BeginChild("##left", {190, -ImGui::GetFrameHeightWithSpacing() * 2.6f}, ImGuiChildFlags_Borders);
   ImGui::TextDisabled("%s", T("Canvas"));
   ImGui::Text("%d × %d", p.canvasW, p.canvasH);
   ImGui::Separator();
@@ -67,6 +123,15 @@ void Ui::outputsWindow(App &app) {
     if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
       outputsSel_ = o.id;
       outputsPage_ = 1;
+    }
+    if (outputsSel_ == o.id) {
+      ImGui::PushID(o.id);
+      if (outputSliceFor_ != o.id) {
+        outputSliceFor_ = o.id;
+        outputSlice_ = 0;
+      }
+      outputSliceBar(app, o);
+      ImGui::PopID();
     }
   }
   ImGui::EndChild();
@@ -255,6 +320,29 @@ void Ui::outputsWindow(App &app) {
       return;
     }
 
+    // Several slices on this projector (Resolume's Advanced Output): the bar
+    // picks the one the Slice and Mapping tabs edit.
+    if (outputSliceFor_ != sel->id) {
+      outputSliceFor_ = sel->id;
+      outputSlice_ = 0;
+    }
+    if (mappingTab_ >= 2) outputSlice_ = 0; // masks and colour belong to the whole output
+    else if (!sel->slices.empty()) {
+      ImGui::TextDisabled(T("Editando: %s"), outputSlice_ == 0 ? "Slice 1"
+                                              : sel->slices[size_t(std::min(outputSlice_, int(sel->slices.size())) - 1)].name.c_str());
+    }
+    outputSlice_ = std::clamp(outputSlice_, 0, int(sel->slices.size()));
+    OutputSlice *swapped = outputSlice_ > 0 ? &sel->slices[size_t(outputSlice_ - 1)] : nullptr;
+    auto swapSlice = [&] {
+      std::swap(sel->srcX, swapped->srcX);
+      std::swap(sel->srcY, swapped->srcY);
+      std::swap(sel->srcW, swapped->srcW);
+      std::swap(sel->srcH, swapped->srcH);
+      std::swap(sel->warp, swapped->warp);
+      sel->editSwap = sel->editSwap ? 0 : outputSlice_;
+    };
+    if (swapped) swapSlice();
+
     if (mappingTab_ == 0) {
       // Slice: the portion of the canvas this projector shows.
       ImGui::TextDisabled("%s", T("A fatia (slice) é a parte do canvas usada por este projetor. Arraste o retângulo ou os cantos."));
@@ -287,6 +375,15 @@ void Ui::outputsWindow(App &app) {
         dl->AddRect({o0.x + o.srcX * k, o0.y + o.srcY * k}, {o0.x + (o.srcX + o.srcW) * k, o0.y + (o.srcY + o.srcH) * k},
                     IM_COL32(90, 160, 255, 90));
         dl->AddText({o0.x + o.srcX * k + 6, o0.y + o.srcY * k + 4}, IM_COL32(150, 190, 255, 200), o.name.c_str());
+      }
+      // The other slices of this output, dimmed (the first one is "Slice 1").
+      for (size_t si = 0; si < sel->slices.size(); ++si) {
+        const OutputSlice &os = sel->slices[si];
+        if (int(si) + 1 == outputSlice_) continue; // it is the one being edited (swapped)
+        const char *nm = (outputSlice_ > 0 && int(si) == outputSlice_ - 1) ? "Slice 1" : os.name.c_str();
+        dl->AddRect({o0.x + os.srcX * k, o0.y + os.srcY * k}, {o0.x + (os.srcX + os.srcW) * k, o0.y + (os.srcY + os.srcH) * k},
+                    IM_COL32(120, 230, 180, 120));
+        dl->AddText({o0.x + os.srcX * k + 6, o0.y + os.srcY * k + 4}, IM_COL32(150, 240, 200, 210), nm);
       }
       ImVec2 ra{o0.x + sel->srcX * k, o0.y + sel->srcY * k};
       ImVec2 rb{o0.x + (sel->srcX + sel->srcW) * k, o0.y + (sel->srcY + sel->srcH) * k};
@@ -354,16 +451,19 @@ void Ui::outputsWindow(App &app) {
         sel->srcX = src[0]; sel->srcY = src[1]; sel->srcW = std::max(1.0f, src[2]); sel->srcH = std::max(1.0f, src[3]);
         app.edited();
       }
-      ImGui::SameLine();
-      if (ImGui::Button(T("reset"))) apply();
-      ImGui::SetItemTooltip("%s", T("Volta a fatia de todas as saídas ao cálculo do layout"));
-      ImGui::SameLine();
-      if (ImGui::Button(T("blend automático"))) {
-        int n = autoBlendOverlaps(p, sel->canvasId);
-        app.status(std::to_string(n) + T(" emenda(s) com soft edge calculado pelas sobreposições"));
-        app.edited();
+      // Layout and blend work on the projectors' first slices only.
+      if (outputSlice_ == 0) {
+        ImGui::SameLine();
+        if (ImGui::Button(T("reset"))) apply();
+        ImGui::SetItemTooltip("%s", T("Volta a fatia de todas as saídas ao cálculo do layout"));
+        ImGui::SameLine();
+        if (ImGui::Button(T("blend automático"))) {
+          int n = autoBlendOverlaps(p, sel->canvasId);
+          app.status(std::to_string(n) + T(" emenda(s) com soft edge calculado pelas sobreposições"));
+          app.edited();
+        }
+        ImGui::SetItemTooltip("%s", T("Projetores fora de grade: as bordas suaves saem das sobreposições das fatias"));
       }
-      ImGui::SetItemTooltip("%s", T("Projetores fora de grade: as bordas suaves saem das sobreposições das fatias"));
     } else if (mappingTab_ == 1 || mappingTab_ == 2) {
       // Warp (corners / mesh) and masks, edited on the output preview.
       outputsWs_.viewOutputId = sel->id;
@@ -425,6 +525,7 @@ void Ui::outputsWindow(App &app) {
       outputsWs_.draw(app, ImGui::GetContentRegionAvail());
       ImGui::EndChild();
     }
+    if (swapped) swapSlice(); // the slice goes back to its place
   }
   ImGui::EndChild();
 
