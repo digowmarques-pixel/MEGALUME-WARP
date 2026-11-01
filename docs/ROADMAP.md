@@ -95,6 +95,14 @@ Ordem pensada para **videomapping** e **instalações interativas**.
 - *Seek* preciso de vídeo e áudio (também por OSC: `/lumen/layer/<l>/time`)
 - Testes de integração no CI (`scripts/test-integration.sh`)
 
+## ✅ v0.10.39
+- **Mais contraste no tema**: painéis mais escuros, campos quase pretos (afundados), botões
+  claros com contorno mais visível — botão, campo e fundo bem diferentes
+- **Máscaras: Shift deixa a linha reta** (horizontal, vertical ou 45°) até o ponto vizinho, com
+  guia amarela; mover a máscara inteira passou para **Ctrl+arraste**
+- **Nomes com acento separado** (arquivos vindos de Mac: "SAFADA?O") aparecem certos
+  ("SAFADÃO"); o arquivo no disco não muda
+
 ## ✅ v0.10.38
 - **Lista de telas e slices como no Resolume** (coluna esquerda de Saídas): botão **+**
   (Slice, Máscara de saída), "Projetor → dispositivo (resolução) → slices", o de cima primeiro,

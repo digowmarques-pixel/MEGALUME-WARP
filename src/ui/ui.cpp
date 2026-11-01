@@ -437,12 +437,13 @@ void Ui::setup() {
 
   // Mid-dark greys (lighter than black, easier on the eyes for long sessions), few
   // lines: the yellow and the colours per kind still stand out.
-  const ImVec4 black{pal::kBackdrop[0], pal::kBackdrop[1], pal::kBackdrop[2], 1}, panel{0.215f, 0.215f, 0.225f, 1},
-      inset{0.185f, 0.185f, 0.195f, 1};
-  const ImVec4 frame{0.29f, 0.29f, 0.30f, 1}, frameHi{0.35f, 0.35f, 0.365f, 1}, line{0.29f, 0.29f, 0.30f, 1};
-  // Fields (text, numbers, lists) are sunken and dark; buttons are raised and light.
-  const ImVec4 field{0.13f, 0.13f, 0.14f, 1}, fieldHi{0.17f, 0.17f, 0.18f, 1};
-  const ImVec4 button{0.40f, 0.40f, 0.42f, 1}, buttonHi{0.50f, 0.50f, 0.52f, 1};
+  // Three clearly different levels: panels dark, fields (text, numbers, lists)
+  // sunken almost black, buttons raised and light with a bright outline.
+  const ImVec4 black{pal::kBackdrop[0], pal::kBackdrop[1], pal::kBackdrop[2], 1}, panel{0.155f, 0.155f, 0.165f, 1},
+      inset{0.115f, 0.115f, 0.125f, 1};
+  const ImVec4 frame{0.31f, 0.31f, 0.33f, 1}, frameHi{0.40f, 0.40f, 0.42f, 1}, line{0.32f, 0.32f, 0.34f, 1};
+  const ImVec4 field{0.045f, 0.045f, 0.055f, 1}, fieldHi{0.085f, 0.085f, 0.10f, 1};
+  const ImVec4 button{0.34f, 0.34f, 0.37f, 1}, buttonHi{0.46f, 0.46f, 0.49f, 1};
   const ImVec4 y = kAccent;
   auto ya = [&](float a) { return ImVec4(y.x, y.y, y.z, a); };
   ImVec4 *c = s.Colors;
@@ -450,8 +451,8 @@ void Ui::setup() {
   c[ImGuiCol_TextDisabled] = {0.72f, 0.72f, 0.70f, 1};
   c[ImGuiCol_WindowBg] = panel;
   c[ImGuiCol_ChildBg] = inset;
-  c[ImGuiCol_PopupBg] = {0.24f, 0.24f, 0.25f, 0.98f};
-  c[ImGuiCol_Border] = {0.46f, 0.46f, 0.48f, 1}; // outline of fields and buttons
+  c[ImGuiCol_PopupBg] = {0.18f, 0.18f, 0.19f, 0.99f};
+  c[ImGuiCol_Border] = {0.56f, 0.56f, 0.60f, 1}; // outline of fields and buttons: clearly visible
   c[ImGuiCol_BorderShadow] = {0, 0, 0, 0};
   c[ImGuiCol_MenuBarBg] = black;
   c[ImGuiCol_TitleBg] = c[ImGuiCol_TitleBgActive] = c[ImGuiCol_TitleBgCollapsed] = panel;
@@ -461,8 +462,8 @@ void Ui::setup() {
   c[ImGuiCol_Button] = button;
   c[ImGuiCol_ButtonHovered] = buttonHi;
   c[ImGuiCol_ButtonActive] = ya(0.85f);
-  c[ImGuiCol_Header] = {0.27f, 0.27f, 0.28f, 1};
-  c[ImGuiCol_HeaderHovered] = {0.33f, 0.33f, 0.345f, 1};
+  c[ImGuiCol_Header] = {0.26f, 0.26f, 0.285f, 1};
+  c[ImGuiCol_HeaderHovered] = {0.36f, 0.36f, 0.39f, 1};
   c[ImGuiCol_HeaderActive] = ya(0.35f);
   c[ImGuiCol_CheckMark] = y;
   c[ImGuiCol_SliderGrab] = y;
@@ -480,12 +481,12 @@ void Ui::setup() {
   c[ImGuiCol_TabDimmed] = inset;
   c[ImGuiCol_TabDimmedSelected] = frame;
   c[ImGuiCol_ScrollbarBg] = {0, 0, 0, 0};
-  c[ImGuiCol_ScrollbarGrab] = {0.36f, 0.36f, 0.37f, 1};
-  c[ImGuiCol_ScrollbarGrabHovered] = {0.44f, 0.44f, 0.45f, 1};
+  c[ImGuiCol_ScrollbarGrab] = {0.40f, 0.40f, 0.43f, 1};
+  c[ImGuiCol_ScrollbarGrabHovered] = {0.52f, 0.52f, 0.55f, 1};
   c[ImGuiCol_ScrollbarGrabActive] = ya(0.7f);
   c[ImGuiCol_TableHeaderBg] = inset;
   c[ImGuiCol_TableBorderStrong] = line;
-  c[ImGuiCol_TableBorderLight] = {0.26f, 0.26f, 0.27f, 1};
+  c[ImGuiCol_TableBorderLight] = {0.24f, 0.24f, 0.26f, 1};
   c[ImGuiCol_TableRowBg] = {0, 0, 0, 0};
   c[ImGuiCol_TableRowBgAlt] = {1, 1, 1, 0.015f};
   c[ImGuiCol_TextSelectedBg] = ya(0.35f);
@@ -2905,7 +2906,7 @@ void Ui::maskList(App &app, std::vector<Mask> &masks, int &sel, int &selPoint, V
   if (ImGui::SmallButton(T("Tudo reto"))) { m.tanIn.clear(); m.tanOut.clear(); app.edited(); }
   ImGui::SameLine();
   if (ImGui::SmallButton(T("Limpar pontos"))) { m.points.clear(); m.tanIn.clear(); m.tanOut.clear(); selPoint = -1; app.edited(); }
-  ImGui::TextDisabled("%s", T("Alt+clique num ponto: curva / canto. Arraste as alças (Shift: só uma)."));
+  ImGui::TextDisabled("%s", T("Alt+clique num ponto: curva / canto. Arraste as alças (Shift: só uma). Shift ao arrastar um ponto: linha reta. Ctrl+arraste: a máscara inteira."));
   ImGui::PopID();
 }
 

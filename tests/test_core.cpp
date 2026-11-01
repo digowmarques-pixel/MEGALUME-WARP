@@ -998,6 +998,29 @@ static void testInstaller() {
 #endif
 }
 
+static void testComposeAccents() {
+  using namespace lumen;
+  // "A" + combining tilde (U+0303) -> "Ã"; "c" + cedilla -> "ç"; the rest unchanged.
+  CHECK(composeAccents("SAFADA\xcc\x83O.MP4") == "SAFAD\xc3\x83O.MP4");
+  CHECK(composeAccents("Abertura c\xcc\xa7" "a\xcc\x83" "o") == "Abertura \xc3\xa7\xc3\xa3" "o");
+  CHECK(composeAccents("j\xc3\xa1 composto") == "j\xc3\xa1 composto");
+  CHECK(composeAccents("plain.mov") == "plain.mov");
+}
+
+static void testConstrain45() {
+  using namespace lumen;
+  Vec2 a{100, 100};
+  Vec2 h = constrain45(a, {300, 108}, 1, 1); // almost horizontal -> horizontal
+  CHECK(std::fabs(h.y - 100) < 1e-3f && std::fabs(h.x - 300) < 0.5f);
+  Vec2 v = constrain45(a, {95, 400}, 1, 1); // almost vertical
+  CHECK(std::fabs(v.x - 100) < 1e-3f);
+  Vec2 d = constrain45(a, {200, 190}, 1, 1); // near 45 degrees
+  CHECK(std::fabs((d.x - 100) - (d.y - 100)) < 1e-3f);
+  // Non-square units (an output's 0..1 on a wide screen): straight on screen.
+  Vec2 u = constrain45({0.1f, 0.5f}, {0.6f, 0.51f}, 1920, 1080);
+  CHECK(std::fabs(u.y - 0.5f) < 1e-5f);
+}
+
 static void testExpr() {
   using namespace lumen;
   double v = 0;
@@ -1225,6 +1248,8 @@ int main() {
   testHapConvert();
   testNewCell();
   testExpr();
+  testComposeAccents();
+  testConstrain45();
   testV09();
   testV08();
   testV07();

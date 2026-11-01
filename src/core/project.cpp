@@ -25,6 +25,56 @@ static const char *kTargetNames[] = {"Opacity",    "Position X", "Position Y",  
                                      "Blackout",   "DMX master", "Transition fader"};
 
 const char *generatorName(GeneratorKind k) { return kGeneratorNames[int(k)]; }
+
+std::string composeAccents(const std::string &in) {
+  // Decode UTF-8 (invalid bytes are kept as they are).
+  std::vector<uint32_t> cps;
+  for (size_t i = 0; i < in.size();) {
+    unsigned char c = static_cast<unsigned char>(in[i]);
+    int n = c < 0x80 ? 1 : (c >> 5) == 0x6 ? 2 : (c >> 4) == 0xE ? 3 : (c >> 3) == 0x1E ? 4 : 0;
+    if (n == 0 || i + size_t(n) > in.size()) { cps.push_back(c); ++i; continue; }
+    uint32_t cp = n == 1 ? c : n == 2 ? (c & 0x1F) : n == 3 ? (c & 0x0F) : (c & 0x07);
+    for (int k = 1; k < n; ++k) cp = (cp << 6) | (static_cast<unsigned char>(in[i + size_t(k)]) & 0x3F);
+    cps.push_back(cp);
+    i += size_t(n);
+  }
+  // Base letter + combining mark -> precomposed Latin-1 letter.
+  struct Pair { char base; uint32_t mark, out; };
+  static const Pair table[] = {
+      {'A', 0x300, 0xC0}, {'A', 0x301, 0xC1}, {'A', 0x302, 0xC2}, {'A', 0x303, 0xC3}, {'A', 0x308, 0xC4},
+      {'C', 0x327, 0xC7}, {'E', 0x300, 0xC8}, {'E', 0x301, 0xC9}, {'E', 0x302, 0xCA}, {'E', 0x308, 0xCB},
+      {'I', 0x300, 0xCC}, {'I', 0x301, 0xCD}, {'I', 0x302, 0xCE}, {'I', 0x308, 0xCF}, {'N', 0x303, 0xD1},
+      {'O', 0x300, 0xD2}, {'O', 0x301, 0xD3}, {'O', 0x302, 0xD4}, {'O', 0x303, 0xD5}, {'O', 0x308, 0xD6},
+      {'U', 0x300, 0xD9}, {'U', 0x301, 0xDA}, {'U', 0x302, 0xDB}, {'U', 0x308, 0xDC}, {'Y', 0x301, 0xDD},
+      {'a', 0x300, 0xE0}, {'a', 0x301, 0xE1}, {'a', 0x302, 0xE2}, {'a', 0x303, 0xE3}, {'a', 0x308, 0xE4},
+      {'c', 0x327, 0xE7}, {'e', 0x300, 0xE8}, {'e', 0x301, 0xE9}, {'e', 0x302, 0xEA}, {'e', 0x308, 0xEB},
+      {'i', 0x300, 0xEC}, {'i', 0x301, 0xED}, {'i', 0x302, 0xEE}, {'i', 0x308, 0xEF}, {'n', 0x303, 0xF1},
+      {'o', 0x300, 0xF2}, {'o', 0x301, 0xF3}, {'o', 0x302, 0xF4}, {'o', 0x303, 0xF5}, {'o', 0x308, 0xF6},
+      {'u', 0x300, 0xF9}, {'u', 0x301, 0xFA}, {'u', 0x302, 0xFB}, {'u', 0x308, 0xFC}, {'y', 0x301, 0xFD},
+      {'y', 0x308, 0xFF}};
+  std::vector<uint32_t> outCps;
+  for (uint32_t cp : cps) {
+    if (cp >= 0x300 && cp <= 0x36F && !outCps.empty()) {
+      bool joined = false;
+      for (const Pair &t : table)
+        if (outCps.back() == uint32_t(static_cast<unsigned char>(t.base)) && t.mark == cp) {
+          outCps.back() = t.out;
+          joined = true;
+          break;
+        }
+      if (joined) continue;
+    }
+    outCps.push_back(cp);
+  }
+  std::string out;
+  for (uint32_t cp : outCps) {
+    if (cp < 0x80) out += char(cp);
+    else if (cp < 0x800) { out += char(0xC0 | (cp >> 6)); out += char(0x80 | (cp & 0x3F)); }
+    else if (cp < 0x10000) { out += char(0xE0 | (cp >> 12)); out += char(0x80 | ((cp >> 6) & 0x3F)); out += char(0x80 | (cp & 0x3F)); }
+    else { out += char(0xF0 | (cp >> 18)); out += char(0x80 | ((cp >> 12) & 0x3F)); out += char(0x80 | ((cp >> 6) & 0x3F)); out += char(0x80 | (cp & 0x3F)); }
+  }
+  return out;
+}
 const char *blendName(BlendMode b) { return kBlendNames[int(b)]; }
 const char *mappingTargetName(MappingTarget t) { return kTargetNames[int(t)]; }
 
@@ -231,7 +281,7 @@ MediaItem &Project::addMedia(const std::string &path) {
   MediaItem m;
   m.id = newId();
   m.path = path;
-  m.name = platform::toUtf8(platform::toPath(path).filename());
+  m.name = composeAccents(platform::toUtf8(platform::toPath(path).filename()));
   m.type = isImagePath(path) ? MediaType::Image : MediaType::Video;
   library.push_back(m);
   return library.back();
@@ -390,7 +440,7 @@ MediaItem &Project::addShader(const std::string &path) {
   m.id = newId();
   m.type = MediaType::Shader;
   m.path = path;
-  m.name = platform::toUtf8(platform::toPath(path).stem());
+  m.name = composeAccents(platform::toUtf8(platform::toPath(path).stem()));
   library.push_back(m);
   return library.back();
 }
@@ -1262,7 +1312,7 @@ bool deserializeProject(const std::string &text, const std::string &baseDir, Pro
     for (auto &jm : j.value("library", json::array())) {
       MediaItem m;
       m.id = jm.value("id", 0);
-      m.name = jm.value("name", "");
+      m.name = composeAccents(jm.value("name", "")); // names saved before the composition
       m.type = enumFrom(jm, "type", MediaType::Video, 9);
       if (m.type == MediaType::Generator) {
         m.generator = enumFrom(jm, "generator", GeneratorKind::TestCard, int(GeneratorKind::COUNT));

@@ -126,7 +126,7 @@ bool Workspace::editMask(Mask &m, int &point, const std::function<ImVec2(Vec2)> 
       point = nearIdx;
       dragging_ = true;
       dragKind_ = base;
-    } else if (io.KeyShift && n >= 3 && pointInPolygon(mouse, maskOutline(m))) {
+    } else if (io.KeyCtrl && n >= 3 && pointInPolygon(mouse, maskOutline(m))) { // Ctrl+drag: the whole mask
       dragging_ = true;
       dragKind_ = base + 1;
       dragLast_ = mouse;
@@ -154,7 +154,30 @@ bool Workspace::editMask(Mask &m, int &point, const std::function<ImVec2(Vec2)> 
   if (dragging_ && point >= 0 && point < int(m.points.size())) {
     size_t i = size_t(point);
     if (dragKind_ == base) {
-      m.points[i] = mouse;
+      Vec2 target = mouse;
+      // Shift: a straight line to a neighbour point (horizontal, vertical or
+      // 45°, measured on screen: an output's 0..1 is not square).
+      if (io.KeyShift && m.points.size() >= 2) {
+        const size_t cnt = m.points.size();
+        const ImVec2 o0 = toScreen({0, 0}), ox = toScreen({1, 0}), oy = toScreen({0, 1});
+        const float sx = ox.x - o0.x, sy = oy.y - o0.y;
+        const ImVec2 ms = toScreen(mouse);
+        float best = 1e30f;
+        size_t from = i;
+        for (size_t q : {(i + cnt - 1) % cnt, (i + 1) % cnt}) {
+          if (q == i || std::fabs(sx) < 1e-6f || std::fabs(sy) < 1e-6f) continue;
+          Vec2 c = constrain45(m.points[q], mouse, sx, sy);
+          ImVec2 cs = toScreen(c);
+          float d = std::hypot(cs.x - ms.x, cs.y - ms.y);
+          if (d < best) {
+            best = d;
+            from = q;
+            target = c;
+          }
+        }
+        if (from != i) dl->AddLine(toScreen(m.points[from]), toScreen(target), IM_COL32(255, 220, 60, 220), 1.5f);
+      }
+      m.points[i] = target;
       changed = true;
     } else if (dragKind_ == base + 2 || dragKind_ == base + 3) {
       // Handles move symmetrically; Shift moves one alone (a sharp curve).
@@ -298,7 +321,7 @@ void Workspace::draw(App &app, ImVec2 size) {
   const char *hints[] = {T("Clique para selecionar · arraste para mover a fatia (Shift: layer inteira)"),
                          T("Arraste os cantos para encaixar a imagem na superfície"),
                          T("Arraste os pontos da malha para curvar a imagem · duplo clique adiciona linha e coluna"),
-                         T("Clique adiciona ponto · arraste move · botão direito apaga · Alt+clique: curva · Shift+arraste: máscara inteira"),
+                         T("Clique adiciona ponto · arraste move (Shift: linha reta) · botão direito apaga · Alt+clique: curva · Ctrl+arraste: máscara inteira"),
                          T("LED: clique numa fita · arraste os cantos ou o meio para posicionar sobre a imagem"),
                          T("Arraste os cantos para mudar o tamanho (Shift: livre) · os lados esticam · o meio move")};
   if (float hw = ImGui::GetContentRegionAvail().x; hw > 60) {
@@ -883,7 +906,7 @@ void Workspace::drawOutputOverlay(App &app, ImDrawList *dl, ImVec2 origin, ImVec
     if (editMask(m, app.sel.outMaskPoint, toScreen, mn, std::max(1.0f, size.x), dl, pal::u32(pal::kMagenta), 30))
       app.edited();
     dl->AddText({origin.x + 8, origin.y + 8}, IM_COL32(255, 255, 255, 220),
-                maskAddPoints ? T("Máscara da saída: clique adiciona ponto, arraste move, botão direito apaga, Alt+clique faz curva.")
+                maskAddPoints ? T("Máscara da saída: clique adiciona ponto, arraste move (Shift: linha reta), botão direito apaga, Alt+clique faz curva, Ctrl+arraste move a máscara.")
                               : T("Máscara da saída: arraste os pontos; ligue \"Adicionar pontos\" para criar novos."));
     return;
   }

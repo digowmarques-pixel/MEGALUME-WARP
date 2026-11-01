@@ -90,6 +90,17 @@ private:
   Vec2 baseMap(Vec2 uv) const; // corners only: perspective, or bilinear fallback
 };
 
+// Shift-drag of a point: the position on a line from `anchor` at a multiple of
+// 45° (horizontal, vertical, diagonal) closest to `p`. sx, sy: screen pixels
+// per unit on each axis, so the angles are right on screen.
+inline Vec2 constrain45(Vec2 anchor, Vec2 p, float sx, float sy) {
+  float vx = (p.x - anchor.x) * sx, vy = (p.y - anchor.y) * sy;
+  const float step = 3.14159265f / 4;
+  float a = std::round(std::atan2(vy, vx) / step) * step;
+  float len = vx * std::cos(a) + vy * std::sin(a);
+  return {anchor.x + std::cos(a) * len / sx, anchor.y + std::sin(a) * len / sy};
+}
+
 inline bool pointInPolygon(Vec2 p, const std::vector<Vec2> &poly) {
   bool inside = false;
   for (size_t i = 0, j = poly.size() - 1; i < poly.size(); j = i++) {

@@ -24,6 +24,10 @@ struct Color {
 enum class MediaType { Video, Image, Generator, Live, Spout, Canvas, Shader, Text, NDI };
 enum class GeneratorKind { TestCard, Solid, Gradient, Grid, Plasma, Stripes, COUNT };
 const char *generatorName(GeneratorKind k);
+// Joins a letter followed by a separate accent ("A" + combining tilde, as file
+// names from macOS store them) into the single character ("Ã"): the interface
+// font has no separate accents. Names only; paths stay as they are on disk.
+std::string composeAccents(const std::string &utf8);
 
 struct MediaItem {
   int id = 0;
