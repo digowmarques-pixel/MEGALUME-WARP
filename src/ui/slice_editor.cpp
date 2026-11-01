@@ -4,10 +4,12 @@
 // slice of the output (click one to select it, drag it to move it), a toolbar
 // (zoom, undo, hand, magnet, Transform / Edit Points) and a properties panel.
 #include "app.h"
+#include "core/expr.h"
 #include "core/machine_settings.h"
 #include "engine/outputs.h"
 #include "ui/palette.h"
 #include "ui/ui.h"
+#include "platform/platform.h"
 
 #include <imgui.h>
 
@@ -24,6 +26,7 @@ namespace {
 constexpr float kPi = 3.14159265f;
 constexpr float kSquare = 7;  // half size of a square handle (screen px)
 constexpr float kRing = 16;   // radius of a ring handle
+constexpr float kBig = 11;    // half size of a perspective corner (Edit Points, output)
 constexpr float kSnapPx = 10; // magnet distance (screen px)
 
 ImTextureID texId(const Texture &t) { return ImTextureID(intptr_t(t.id())); }
@@ -104,19 +107,54 @@ void squareHandle(ImDrawList *dl, ImVec2 p, bool hot, ImU32 col) {
   dl->AddRect({p.x - r, p.y - r}, {p.x + r, p.y + r}, col, 0, 0, 1.6f);
 }
 
+// Perspective corner of Edit Points (Resolume's big corner square); the mesh
+// corner point is the small square inside it.
+void bigSquare(ImDrawList *dl, ImVec2 p, bool hot, ImU32 col) {
+  float r = hot ? kBig + 1 : kBig;
+  dl->AddRectFilled({p.x - r, p.y - r}, {p.x + r, p.y + r}, (col & 0x00FFFFFF) | (hot ? 0x60000000u : 0x26000000u));
+  dl->AddRect({p.x - r, p.y - r}, {p.x + r, p.y + r}, hot ? IM_COL32(255, 255, 255, 255) : col, 0, 0, hot ? 2.5f : 2.0f);
+}
+
 void ringHandle(ImDrawList *dl, ImVec2 p, bool hot, ImU32 col) {
   dl->AddCircleFilled(p, kRing, (col & 0x00FFFFFF) | (hot ? 0x60000000u : 0x22000000u));
   dl->AddCircle(p, kRing, hot ? IM_COL32(255, 255, 255, 255) : col, 0, hot ? 3.0f : 2.0f);
 }
 
-// "Label   [ value ] [-] [+]" row of the properties panel.
-bool propRow(const char *label, float &v, float step, float speed, const char *fmt) {
+// "Label   [ value ] [-] [+]" row of the properties panel. The value is typed
+// (with arithmetic, as in Resolume: "1920/3", "/3", "+100") and applied when
+// the field is left (Enter, Tab or a click elsewhere).
+bool propRow(const char *label, float &v, float step, float /*speed*/, const char *fmt) {
+  static ImGuiID editing = 0; // the field being typed in, and its text
+  static char text[64];
   ImGui::PushID(label);
   ImGui::AlignTextToFramePadding();
   ImGui::TextUnformatted(label);
-  ImGui::SameLine(96);
+  ImGui::SameLine(112);
   ImGui::SetNextItemWidth(std::max(60.0f, ImGui::GetContentRegionAvail().x - 54));
-  bool changed = ImGui::DragFloat("##v", &v, speed, 0, 0, fmt);
+  const ImGuiID id = ImGui::GetID("##v");
+  char shown[64];
+  std::snprintf(shown, sizeof(shown), fmt, v);
+  char *buf = editing == id ? text : shown;
+  ImGui::InputText("##v", buf, sizeof(text), ImGuiInputTextFlags_AutoSelectAll);
+  if (ImGui::IsItemActivated()) {
+    editing = id;
+    std::snprintf(text, sizeof(text), "%s", shown);
+  }
+  bool changed = false;
+  if (ImGui::IsItemDeactivated() && editing == id) {
+    if (ImGui::IsItemDeactivatedAfterEdit()) {
+      std::string t;
+      for (const char *c = text; *c; ++c)
+        if (static_cast<unsigned char>(*c) < 0x80) t += *c; // drops "°" and other units
+      double r;
+      if (evalNumber(t, v, r)) {
+        v = float(r);
+        changed = true;
+      }
+    }
+    editing = 0;
+  }
+  ImGui::SetItemTooltip("%s", T("Aceita contas: 1920/3 · /3 · *2 · +100"));
   ImGui::SameLine(0, 2);
   if (ImGui::Button("-", {24, 0})) { v -= step; changed = true; }
   ImGui::SameLine(0, 2);
@@ -136,7 +174,33 @@ bool toggleButton(const char *label, bool on, ImVec2 size = {0, 0}) {
   return hit;
 }
 
+// Size of an output in pixels: its monitor's, or its window's.
+void outputSize(const OutputConfig &o, float &ow, float &oh) {
+  ow = float(o.winW);
+  oh = float(o.winH);
+  auto mons = OutputManager::monitors();
+  if (o.monitor >= 0 && o.monitor < int(mons.size())) {
+    ow = float(mons[size_t(o.monitor)].w);
+    oh = float(mons[size_t(o.monitor)].h);
+  }
+  ow = std::max(16.0f, ow);
+  oh = std::max(16.0f, oh);
+}
+
 } // namespace
+
+void Ui::matchOutputShape(App &app, OutputConfig &o, int k) {
+  float ow, oh;
+  outputSize(o, ow, oh);
+  SliceRef s = sliceRef(o, k);
+  Box b = warpBox(s.warp);
+  s.x = b.x0 * ow;
+  s.y = b.y0 * oh;
+  s.w = std::max(1.0f, (b.x1 - b.x0) * ow);
+  s.h = std::max(1.0f, (b.y1 - b.y0) * oh);
+  s.inRot = 0;
+  app.edited();
+}
 
 void Ui::sliceEditor(App &app, OutputConfig &o, bool out) {
   Project &p = app.engine.project;
@@ -145,20 +209,12 @@ void Ui::sliceEditor(App &app, OutputConfig &o, bool out) {
   const int side = out ? 1 : 0;
   StageView &view = stageView_[side];
   const int n = int(o.slices.size()) + 1;
-  outputSlice_ = std::clamp(outputSlice_, 0, n - 1);
+  outputSlice_ = std::clamp(outputSlice_, -1, n - 1); // -1: the screen itself
   int &sel = outputSlice_;
 
   const float cw = float(p.canvasWidth(o.canvasId)), ch = float(p.canvasHeight(o.canvasId));
-  float ow = float(o.winW), oh = float(o.winH);
-  {
-    auto mons = OutputManager::monitors();
-    if (o.monitor >= 0 && o.monitor < int(mons.size())) {
-      ow = float(mons[size_t(o.monitor)].w);
-      oh = float(mons[size_t(o.monitor)].h);
-    }
-    ow = std::max(16.0f, ow);
-    oh = std::max(16.0f, oh);
-  }
+  float ow, oh;
+  outputSize(o, ow, oh);
   const float contentW = out ? ow : cw, contentH = out ? oh : ch;
   bool &editPoints = stageEditPoints_[side];
 
@@ -199,7 +255,7 @@ void Ui::sliceEditor(App &app, OutputConfig &o, bool out) {
     float right = ImGui::GetContentRegionAvail().x;
     ImGui::SameLine(ImGui::GetCursorPosX() + std::max(0.0f, right - 250));
     if (toggleButton(T("+ Editar pontos"), editPoints, {120, 0})) editPoints = true;
-    ImGui::SetItemTooltip("%s", out ? T("Bolas: perspectiva (cantos) · quadrados: pontos da malha · duplo clique adiciona linha e coluna")
+    ImGui::SetItemTooltip("%s", out ? T("Quadrados grandes: perspectiva (cantos) · pequenos: pontos da malha · duplo clique adiciona linha e coluna")
                                     : T("Deforma a parte do canvas (warping de entrada): arraste os pontos"));
     ImGui::SameLine(0, 2);
     if (toggleButton(T("Transformar"), !editPoints, {120, 0})) editPoints = false;
@@ -263,6 +319,19 @@ void Ui::sliceEditor(App &app, OutputConfig &o, bool out) {
       if (p.outputs[i].id == o.id) index = int(i);
     app.outputs.renderPreview(p, o, index, e.canvasTexture(o.canvasId), stagePreview_, e.mesh, e.time(), false);
     dl->AddImage(texId(stagePreview_.texture()), origin, cMax, {0, 1}, {1, 0});
+    // Output guide: a picture of the surface over the output, here only.
+    if (guideLoaded_ != o.guideImage) {
+      guideLoaded_ = o.guideImage;
+      guideTex_.reset();
+      VideoFrame f;
+      if (!o.guideImage.empty() && decodeStill(o.guideImage, f) && f.width > 0) {
+        guideTex_ = std::make_unique<Texture>();
+        guideTex_->upload(f.rgba().data(), f.width, f.height, f.stride[0]);
+      }
+    }
+    if (!o.guideImage.empty() && guideTex_ && !guideTex_->empty())
+      dl->AddImage(texId(*guideTex_), origin, cMax, {0, 0}, {1, 1},
+                   IM_COL32(255, 255, 255, int(std::clamp(o.guideOpacity, 0.0f, 1.0f) * 255)));
   }
   dl->AddRect(origin, cMax, IM_COL32(120, 120, 128, 255));
 
@@ -302,13 +371,16 @@ void Ui::sliceEditor(App &app, OutputConfig &o, bool out) {
     Vec2 c{0, 0};
     for (const Vec2 &v : pts) c += v;
     c = c * (1.0f / float(std::max<size_t>(1, pts.size())));
-    const char *nm = sliceName(o, k);
-    ImVec2 ts = ImGui::CalcTextSize(nm), cs = toScreen(c);
-    dl->AddText({cs.x - ts.x * 0.5f, cs.y - ts.y * 0.5f}, k == sel ? accent : dim, nm);
+    if (k == sel) { // only the selected slice is named (as in Resolume)
+      const char *nm = sliceName(o, k);
+      ImVec2 ts = ImGui::CalcTextSize(nm), cs = toScreen(c);
+      dl->AddText({cs.x - ts.x * 0.5f, cs.y - ts.y * 0.5f}, accent, nm);
+    }
   }
 
   // ---- the selected slice: handles, hover, drags
-  SliceRef s = sliceRef(o, sel);
+  const bool screenSel = sel < 0; // the screen is selected: no slice handles
+  SliceRef s = sliceRef(o, std::max(sel, 0));
   auto dist = [&](ImVec2 a) { return std::hypot(io.MousePos.x - a.x, io.MousePos.y - a.y); };
   Vec2 handles[8];
   if (!out) {
@@ -323,7 +395,7 @@ void Ui::sliceEditor(App &app, OutputConfig &o, bool out) {
   // perspective corners (rings) and mesh points (squares).
   std::vector<Vec2> points;   // squares / circles (content coordinates)
   std::vector<Vec2> corners4; // output perspective corners
-  if (editPoints) {
+  if (editPoints && !screenSel) {
     if (!out) {
       s.warp.ensureUvMesh();
       for (const Vec2 &uv : s.warp.uvMesh) points.push_back(regionPoint(s, uv.x, uv.y));
@@ -336,7 +408,9 @@ void Ui::sliceEditor(App &app, OutputConfig &o, bool out) {
   // What is under the mouse (when not already dragging).
   int hoverSquare = -1, hoverRing = -1, hoverPoint = -1, hoverCorner = -1, hoverSlice = -1;
   if (hovered && stageDrag_ == 0 && !stageHand_) {
-    if (!editPoints) {
+    if (screenSel) {
+      // only the slices themselves can be picked
+    } else if (!editPoints) {
       float best = kSquare + 3;
       for (int h = 0; h < 8; ++h)
         if (float d = dist(toScreen(handles[h])); d < best) { best = d; hoverSquare = h; }
@@ -349,7 +423,7 @@ void Ui::sliceEditor(App &app, OutputConfig &o, bool out) {
         if (float d = dist(toScreen(points[i])); d < best) { best = d; hoverPoint = int(i); }
       if (hoverPoint < 0)
         for (size_t c = 0; c < corners4.size(); ++c)
-          if (dist(toScreen(corners4[c])) < kRing + 3) { hoverCorner = int(c); break; }
+          if (dist(toScreen(corners4[c])) < kBig + 4) { hoverCorner = int(c); break; }
     }
     if (hoverSquare < 0 && hoverRing < 0 && hoverPoint < 0 && hoverCorner < 0)
       for (int k = n - 1; k >= 0; --k) { // the top one (drawn last) first
@@ -518,12 +592,12 @@ void Ui::sliceEditor(App &app, OutputConfig &o, bool out) {
     app.edited();
   }
   // Double click in Edit Points (output): a new row and column of mesh points.
-  if (out && editPoints && hovered && stageDrag_ == 0 && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
+  if (out && editPoints && !screenSel && hovered && stageDrag_ == 0 && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
     Vec2 uv;
     if (s.warp.unmap({mouse.x / ow, mouse.y / oh}, uv) && s.warp.insertLines(uv.x, uv.y)) app.edited();
   }
   // Arrow keys nudge the selected slice (Shift: 10 px).
-  if (hovered && !io.WantTextInput) {
+  if (hovered && !io.WantTextInput && !screenSel) {
     float step = io.KeyShift ? 10.0f : 1.0f;
     Vec2 d{0, 0};
     if (ImGui::IsKeyPressed(ImGuiKey_LeftArrow)) d.x -= step;
@@ -539,7 +613,7 @@ void Ui::sliceEditor(App &app, OutputConfig &o, bool out) {
   }
 
   // ---- draw the handles of the selected slice (after any change this frame)
-  {
+  if (!screenSel) {
     SliceRef cur = sliceRef(o, sel);
     if (!editPoints) {
       Vec2 hp[8];
@@ -580,7 +654,7 @@ void Ui::sliceEditor(App &app, OutputConfig &o, bool out) {
           if (r + 1 < w.meshRows) dl->AddLine(toScreen(outPx(w.meshPointDest(c, r))), toScreen(outPx(w.meshPointDest(c, r + 1))), dim, 1);
         }
       for (int c = 0; c < 4; ++c)
-        ringHandle(dl, toScreen(outPx(w.corners[size_t(c)])), c == hoverCorner || (stageDrag_ == 5 && stageHandle_ == c), accent);
+        bigSquare(dl, toScreen(outPx(w.corners[size_t(c)])), c == hoverCorner || (stageDrag_ == 5 && stageHandle_ == c), accent);
       for (int r = 0; r < w.meshRows; ++r)
         for (int c = 0; c < w.meshCols; ++c) {
           int i = r * w.meshCols + c;
@@ -602,7 +676,7 @@ void Ui::sliceEditor(App &app, OutputConfig &o, bool out) {
   // Hint at the bottom of the stage.
   {
     const char *hint = editPoints
-        ? (out ? T("Editar pontos: bolas = perspectiva · quadrados = malha · duplo clique adiciona linha e coluna")
+        ? (out ? T("Editar pontos: quadrados grandes = perspectiva · pequenos = malha · duplo clique adiciona linha e coluna")
                : T("Editar pontos: arraste os pontos para deformar a parte do canvas"))
         : T("Clique num slice para selecionar e arraste para mover · quadrados: tamanho · bolas: girar · setas: 1 px");
     dl->AddText({sp.x + 8, sp.y + ss.y - ImGui::GetTextLineHeight() - 6}, IM_COL32(200, 200, 205, 200), hint);
@@ -617,6 +691,10 @@ void Ui::sliceEditor(App &app, OutputConfig &o, bool out) {
 }
 
 void Ui::slicePanel(App &app, OutputConfig &o, bool out, float ow, float oh) {
+  if (outputSlice_ < 0) {
+    screenPanel(app, o, ow, oh);
+    return;
+  }
   Project &p = app.engine.project;
   const int sel = std::clamp(outputSlice_, 0, int(o.slices.size()));
   SliceRef s = sliceRef(o, sel);
@@ -656,6 +734,9 @@ void Ui::slicePanel(App &app, OutputConfig &o, bool out, float ow, float oh) {
       ImGui::SetItemTooltip("%s", T("Projetores fora de grade: as bordas suaves saem das sobreposições das fatias"));
       ImGui::SameLine();
     }
+    if (ImGui::Button(T("Igualar à saída"))) matchOutputShape(app, o, sel);
+    ImGui::SetItemTooltip("%s", T("Match Output Shape: a parte do canvas fica com o tamanho e a posição que o slice tem no projetor (pixel a pixel)"));
+    ImGui::SameLine();
     if (ImGui::Button(T("Canvas inteiro"))) {
       s.x = 0;
       s.y = 0;
@@ -696,7 +777,7 @@ void Ui::slicePanel(App &app, OutputConfig &o, bool out, float ow, float oh) {
     }
     ImGui::AlignTextToFramePadding();
     ImGui::TextUnformatted(T("Espelhar"));
-    ImGui::SameLine(96);
+    ImGui::SameLine(112);
     if (toggleButton("\xe2\x86\x94", s.flipX, {40, 0})) { s.flipX = !s.flipX; app.edited(); } // ↔
     ImGui::SameLine(0, 2);
     if (toggleButton("\xe2\x86\x95", s.flipY, {40, 0})) { s.flipY = !s.flipY; app.edited(); } // ↕
@@ -708,21 +789,23 @@ void Ui::slicePanel(App &app, OutputConfig &o, bool out, float ow, float oh) {
       ImGui::PushID(r.label);
       ImGui::AlignTextToFramePadding();
       ImGui::TextUnformatted(r.label);
-      ImGui::SameLine(96);
+      ImGui::SameLine(112);
       ImGui::SetNextItemWidth(-1);
       if (ImGui::SliderFloat("##t", r.v, -1, 1, "%+.2f")) app.edited();
       if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) { *r.v = 0; app.edited(); }
       ImGui::PopID();
     }
     ImGui::TextDisabled("%s", T("Duplo clique zera"));
-    header(T("Warping (malha)"));
-    int grid[2] = {s.warp.meshCols, s.warp.meshRows};
-    ImGui::SetNextItemWidth(-1);
-    if (ImGui::InputInt2("##mesh", grid)) {
-      s.warp.resampleMesh(std::clamp(grid[0], 2, 32), std::clamp(grid[1], 2, 32));
+    header(T("Warping"));
+    // Resolume's subdivisions: points added between the corners (0 = only the corners).
+    float subX = float(s.warp.meshCols - 2), subY = float(s.warp.meshRows - 2);
+    bool resample = propRow(T("Subdivisões X"), subX, 1, 1, "%.0f");
+    resample |= propRow(T("Subdivisões Y"), subY, 1, 1, "%.0f");
+    if (resample) {
+      s.warp.resampleMesh(std::clamp(int(std::lround(subX)), 0, 30) + 2, std::clamp(int(std::lround(subY)), 0, 30) + 2);
+      stageEditPoints_[1] = true;
       app.edited();
     }
-    ImGui::TextDisabled("%s", T("colunas × linhas"));
     if (ImGui::Button(T("Editar pontos##out"))) stageEditPoints_[1] = true;
     ImGui::SameLine();
     if (ImGui::Button(T("Resetar warp"))) {
@@ -731,6 +814,93 @@ void Ui::slicePanel(App &app, OutputConfig &o, bool out, float ow, float oh) {
       s.outRot = 0;
       app.edited();
     }
+  }
+}
+
+} // namespace lumen
+
+namespace lumen {
+
+// The screen (projector) itself, as Resolume's "Screen 1" panel: device, size,
+// colour of the whole output and the output guide.
+void Ui::screenPanel(App &app, OutputConfig &o, float ow, float oh) {
+  auto header = [](const char *t) {
+    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.84f, 0.42f, 1));
+    ImGui::SeparatorText(t);
+    ImGui::PopStyleColor();
+  };
+  char buf[96];
+  std::snprintf(buf, sizeof(buf), "%s", o.name.c_str());
+  ImGui::SetNextItemWidth(-1);
+  if (ImGui::InputText("##scrname", buf, sizeof(buf))) { o.name = buf; app.edited(); }
+  header(T("Tela"));
+  auto mons = OutputManager::monitors();
+  const char *noDisplay = app.outputs.virtualMonitors ? T("(monitor virtual)") : T("(janela)");
+  std::string cur = o.monitor < 0 ? noDisplay : T("Tela ") + std::to_string(o.monitor + 1);
+  if (o.monitor >= 0 && o.monitor < int(mons.size())) cur += " · " + mons[size_t(o.monitor)].name;
+  ImGui::AlignTextToFramePadding();
+  ImGui::TextUnformatted(T("Dispositivo"));
+  ImGui::SameLine(112);
+  ImGui::SetNextItemWidth(-1);
+  if (ImGui::BeginCombo("##dev", cur.c_str())) {
+    if (ImGui::Selectable(noDisplay, o.monitor < 0)) { o.monitor = -1; app.edited(); }
+    for (size_t i = 0; i < mons.size(); ++i) {
+      std::string l = T("Tela ") + std::to_string(i + 1) + " · " + mons[i].name + " (" + std::to_string(mons[i].w) +
+                      "×" + std::to_string(mons[i].h) + ")";
+      if (ImGui::Selectable(l.c_str(), o.monitor == int(i))) { o.monitor = int(i); app.edited(); }
+    }
+    ImGui::EndCombo();
+  }
+  if (o.monitor < 0) {
+    float w = float(o.winW), h = float(o.winH);
+    if (propRow(T("Largura"), w, 1, 1, "%.0f")) { o.winW = std::max(16, int(w)); app.edited(); }
+    if (propRow(T("Altura"), h, 1, 1, "%.0f")) { o.winH = std::max(16, int(h)); app.edited(); }
+  } else {
+    ImGui::TextDisabled(T("Resolução: %.0f × %.0f (do monitor)"), ow, oh);
+  }
+  {
+    float d = float(o.delayFrames);
+    if (propRow(T("Atraso (quadros)"), d, 1, 1, "%.0f")) {
+      o.delayFrames = std::clamp(int(std::lround(d)), 0, 30);
+      app.edited();
+    }
+  }
+  if (ImGui::Checkbox(T("Tela ligada"), &o.enabled)) app.edited(); // off: its window closes
+  ImGui::SameLine();
+  bool live = !o.muted;
+  if (ImGui::Checkbox(T("Imagem"), &live)) { o.muted = !live; app.edited(); }
+  ImGui::SetItemTooltip("%s", T("Desligada: a tela mostra preto, com a janela aberta (como a caixinha da lista)"));
+  header(T("Cor da tela"));
+  struct Row { const char *label; float *v; };
+  Row rows[] = {{T("Opacidade"), &o.opacity}, {T("Brilho"), &o.color.brightness}, {T("Contraste"), &o.color.contrast},
+                {T("Vermelho"), &o.color.gain.r},    {T("Verde"), &o.color.gain.g}, {T("Azul"), &o.color.gain.b}};
+  for (auto &r : rows) {
+    ImGui::PushID(r.label);
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextUnformatted(r.label);
+    ImGui::SameLine(112);
+    ImGui::SetNextItemWidth(-1);
+    if (ImGui::SliderFloat("##c", r.v, 0, r.v == &o.opacity ? 1.0f : 2.0f, "%.2f")) app.edited();
+    if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) { *r.v = 1; app.edited(); }
+    ImGui::PopID();
+  }
+  ImGui::TextDisabled("%s", T("Duplo clique volta a 1"));
+  header(T("Guia de saída"));
+  ImGui::TextWrapped("%s", T("Uma foto ou planta da superfície, por cima do palco da Transformação de saída "
+                             "para encaixar os slices. Nunca vai para o projetor."));
+  if (ImGui::Button(T("Carregar imagem..."))) {
+    auto files = platform::openFileDialog(T("Guia de saída"), "Imagem|*.png;*.jpg;*.jpeg;*.bmp;*.tif;*.tiff;*.webp", false);
+    if (!files.empty()) { o.guideImage = files[0]; app.edited(); }
+  }
+  if (!o.guideImage.empty()) {
+    ImGui::SameLine();
+    if (ImGui::Button(T("Remover##guide"))) { o.guideImage.clear(); app.edited(); }
+    ImGui::TextDisabled("%s", platform::toUtf8(platform::toPath(o.guideImage).filename()).c_str());
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextUnformatted(T("Opacidade"));
+    ImGui::SameLine(112);
+    ImGui::SetNextItemWidth(-1);
+    if (ImGui::SliderFloat("##gop", &o.guideOpacity, 0, 1, "%.2f")) app.edited();
   }
 }
 

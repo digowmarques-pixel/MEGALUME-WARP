@@ -95,6 +95,24 @@ Ordem pensada para **videomapping** e **instalações interativas**.
 - *Seek* preciso de vídeo e áudio (também por OSC: `/lumen/layer/<l>/time`)
 - Testes de integração no CI (`scripts/test-integration.sh`)
 
+## ✅ v0.10.38
+- **Lista de telas e slices como no Resolume** (coluna esquerda de Saídas): botão **+**
+  (Slice, Máscara de saída), "Projetor → dispositivo (resolução) → slices", o de cima primeiro,
+  caixinha liga/desliga em cada slice e **x** para remover o selecionado
+- **Painel da tela** (clique no projetor): dispositivo, largura/altura, **cor da tela** (brilho,
+  contraste, RGB) e **Guia de saída** — uma imagem da superfície por cima do palco da Transformação
+  de saída, com opacidade, só para encaixar (nunca vai para o projetor; salva no projeto)
+- No palco só o slice selecionado mostra o nome
+- Conforme o manual do Resolume:
+  - **Editar pontos** na saída: quadrados grandes nos cantos = perspectiva, quadrados pequenos =
+    malha; painel **Warping → Subdivisões X / Y** (−/+)
+  - **Contas nos campos** do painel: `1920/3`, `/3`, `*2`, `+100` (Enter, Tab ou clique fora)
+  - **Igualar à saída (Match Output Shape)**: no botão direito do slice e no painel da entrada
+  - **Caixinha da tela** na lista (desligada = preto, janela aberta), **Opacidade** e **Atraso**
+    no painel da tela
+  - **Presets de saída**: menu no alto à esquerda — salvar, carregar e abrir a pasta; só as telas e
+    os slices, num arquivo `.lumenout`, para usar em qualquer projeto
+
 ## ✅ v0.10.37
 - **Editor de slices refeito no modelo do Advanced Output do Resolume** (Saídas → projetor):
   abas **Seleção de entrada** e **Transformação de saída**, com

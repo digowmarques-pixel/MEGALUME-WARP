@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(Lumen VERSION 0.10.37 LANGUAGES C CXX)
+project(Lumen VERSION 0.10.38 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -145,6 +145,7 @@ add_library(lumen_core OBJECT
   src/io/serial.cpp
   src/core/md5.cpp
   src/core/timecode.cpp
+  src/core/expr.cpp
   src/control/mapping.cpp
   src/ui/ui.cpp
   src/ui/i18n.cpp
@@ -228,6 +229,7 @@ if(LUMEN_BUILD_TESTS)
     src/core/blob.cpp
     src/core/md5.cpp
     src/core/timecode.cpp
+    src/core/expr.cpp
     src/core/parallel.cpp
     src/core/audio_route.cpp
     src/control/devices.cpp

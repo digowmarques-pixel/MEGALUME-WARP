@@ -4,10 +4,13 @@
 #include "app.h"
 #include "engine/outputs.h"
 #include "ui/ui.h"
+#include "platform/platform.h"
 
 #include <imgui.h>
 
 #include <algorithm>
+#include <cstring>
+#include <filesystem>
 #include <cmath>
 #include <cstdio>
 
@@ -40,93 +43,72 @@ bool pxField(const char *id, int &v, int hi) {
 // Resolume's Advanced Output): Slice 1, Slice 2... and "+ Slice". The selected
 // extra slice can be renamed, switched off or removed below the list.
 void Ui::outputSliceBar(App &app, OutputConfig &o) {
-  ImGui::Indent(14);
-  for (int k = 0; k <= int(o.slices.size()); ++k) {
+  // Topmost first, as drawn (Resolume's order): the last slice is on top.
+  for (int k = int(o.slices.size()); k >= 0; --k) {
     ImGui::PushID(k);
-    std::string nm = k == 0 ? std::string("Slice 1") : o.slices[size_t(k - 1)].name;
-    if (k > 0 && !o.slices[size_t(k - 1)].enabled) nm += T(" (desligada)");
-    bool on = outputSlice_ == k && outputsPage_ == 1 && mappingTab_ <= 1;
-    if (on) ImGui::PushStyleColor(ImGuiCol_Header, ImVec4(0.25f, 0.75f, 0.55f, 0.55f));
-    if (ImGui::Selectable(nm.c_str(), on)) {
+    bool on = k == 0 || o.slices[size_t(k - 1)].enabled;
+    ImGui::BeginDisabled(k == 0); // Slice 1 is always on
+    if (ImGui::Checkbox("##on", &on) && k > 0) {
+      o.slices[size_t(k - 1)].enabled = on;
+      app.edited();
+    }
+    ImGui::EndDisabled();
+    ImGui::SameLine(0, 4);
+    const char *nm = k == 0 ? "Slice 1" : o.slices[size_t(k - 1)].name.c_str();
+    const bool selected = outputSlice_ == k && outputsPage_ == 1 && mappingTab_ <= 1;
+    if (selected) ImGui::PushStyleColor(ImGuiCol_Header, ImVec4(0.30f, 0.85f, 0.70f, 0.55f));
+    float xw = (selected && k > 0) ? 26.0f : 0.0f;
+    if (ImGui::Selectable(nm, selected, 0, {ImGui::GetContentRegionAvail().x - xw, 0})) {
       outputSlice_ = k;
       outputsPage_ = 1;
-      if (mappingTab_ >= 2) mappingTab_ = 1; // slices are edited in Slice and Mapping
+      if (mappingTab_ >= 2) mappingTab_ = 1; // slices are edited in the input and output tabs
     }
-    if (on) ImGui::PopStyleColor();
-    // Right click: duplicate, order (extra slices are drawn in list order, over Slice 1), remove.
+    if (selected) ImGui::PopStyleColor();
+    bool removed = false;
     if (ImGui::BeginPopupContextItem("##slctx")) {
       if (ImGui::MenuItem(T("Duplicar"))) {
         OutputSlice copy;
         if (k == 0) {
           copy.srcX = o.srcX; copy.srcY = o.srcY; copy.srcW = o.srcW; copy.srcH = o.srcH;
           copy.warp = o.warp; copy.flipX = o.flipX; copy.flipY = o.flipY;
+          copy.inRotation = o.inRotation; copy.outRotation = o.outRotation; copy.tone = o.tone;
         } else {
           copy = o.slices[size_t(k - 1)];
         }
         copy.name = "Slice " + std::to_string(o.slices.size() + 2);
         copy.enabled = true;
-        o.slices.insert(o.slices.begin() + k, copy); // right after the original
+        o.slices.insert(o.slices.begin() + k, copy); // right above the original
         outputSlice_ = k + 1;
         app.edited();
       }
+      if (ImGui::MenuItem(T("Igualar à saída (Match Output Shape)"))) matchOutputShape(app, o, k);
       if (k > 0) {
-        if (ImGui::MenuItem(T("Subir"), nullptr, false, k > 1)) {
-          std::swap(o.slices[size_t(k - 1)], o.slices[size_t(k - 2)]);
-          outputSlice_ = k - 1;
-          app.edited();
-        }
-        if (ImGui::MenuItem(T("Descer"), nullptr, false, k < int(o.slices.size()))) {
+        if (ImGui::MenuItem(T("Subir"), nullptr, false, k < int(o.slices.size()))) { // drawn later = on top
           std::swap(o.slices[size_t(k - 1)], o.slices[size_t(k)]);
           outputSlice_ = k + 1;
           app.edited();
         }
-        if (ImGui::MenuItem(T("Remover##slctx"))) {
-          o.slices.erase(o.slices.begin() + (k - 1));
-          outputSlice_ = 0;
+        if (ImGui::MenuItem(T("Descer"), nullptr, false, k > 1)) {
+          std::swap(o.slices[size_t(k - 1)], o.slices[size_t(k - 2)]);
+          outputSlice_ = k - 1;
           app.edited();
-          ImGui::EndPopup();
-          ImGui::PopID();
-          break;
         }
+        if (ImGui::MenuItem(T("Remover##slctx"))) removed = true;
       }
       ImGui::EndPopup();
     }
+    if (selected && k > 0) {
+      ImGui::SameLine(0, 2);
+      if (ImGui::SmallButton("x")) removed = true;
+      ImGui::SetItemTooltip("%s", T("Remover slice"));
+    }
     ImGui::PopID();
-  }
-  if (ImGui::SmallButton(T("+ Slice"))) {
-    OutputSlice sl;
-    sl.name = "Slice " + std::to_string(o.slices.size() + 2);
-    const auto &p = app.engine.project;
-    sl.srcW = float(p.canvasWidth(o.canvasId));
-    sl.srcH = float(p.canvasHeight(o.canvasId));
-    sl.warp.setRect({0.25f, 0.25f}, {0.5f, 0.5f}); // in the middle of the projector, half size
-    o.slices.push_back(sl);
-    outputSlice_ = int(o.slices.size());
-    outputsPage_ = 1;
-    if (mappingTab_ >= 2) mappingTab_ = 0;
-    app.edited();
-  }
-  ImGui::SetItemTooltip("%s", T("Mais uma parte do canvas neste projetor, com seu próprio warp (como as slices do Resolume)"));
-  ImGui::Unindent(14);
-  if (outputSlice_ > 0 && outputSlice_ <= int(o.slices.size())) {
-    OutputSlice &sl = o.slices[size_t(outputSlice_ - 1)];
-    ImGui::Spacing();
-    char nameBuf[64];
-    std::snprintf(nameBuf, sizeof(nameBuf), "%s", sl.name.c_str());
-    ImGui::SetNextItemWidth(-1);
-    if (ImGui::InputText("##slname", nameBuf, sizeof(nameBuf))) {
-      sl.name = nameBuf;
+    if (removed) {
+      o.slices.erase(o.slices.begin() + (k - 1));
+      outputSlice_ = std::min(k - 1, int(o.slices.size()));
       app.edited();
+      break;
     }
-    if (ImGui::Checkbox(T("ligada##slice"), &sl.enabled)) app.edited();
-    ImGui::SameLine();
-    if (ImGui::SmallButton(T("Remover##slice"))) {
-      o.slices.erase(o.slices.begin() + (outputSlice_ - 1));
-      outputSlice_ = 0;
-      app.edited();
-    }
-  } else if (!o.slices.empty()) {
-    ImGui::TextDisabled("%s", T("Slice 1 leva o soft edge"));
   }
 }
 
@@ -146,29 +128,154 @@ void Ui::outputsWindow(App &app) {
   if (outputsPage_ == 1 && !sel) outputsPage_ = 0;
 
   // ---------------------------------------------------------------- left column
-  ImGui::BeginChild("##left", {190, -ImGui::GetFrameHeightWithSpacing() * 2.6f}, ImGuiChildFlags_Borders);
-  ImGui::TextDisabled("%s", T("Canvas"));
-  ImGui::Text("%d × %d", p.canvasW, p.canvasH);
+  ImGui::BeginChild("##left", {220, -ImGui::GetFrameHeightWithSpacing() * 2.6f}, ImGuiChildFlags_Borders);
+  // Presets (Resolume's screen setups): the outputs in a file of their own,
+  // in <settings>/presets/saidas, to reuse a venue's setup with any project.
+  {
+    namespace fs = std::filesystem;
+    const fs::path dir = platform::toPath(platform::settingsDir()) / "presets" / "saidas";
+    static std::string presetName = T("Presets");
+    static char newName[64] = "";
+    bool openSave = false;
+    ImGui::SetNextItemWidth(-1);
+    if (ImGui::BeginCombo("##presets", presetName.c_str())) {
+      std::error_code ec;
+      std::vector<fs::path> files;
+      for (auto &f : fs::directory_iterator(dir, ec))
+        if (f.path().extension() == ".lumenout") files.push_back(f.path());
+      std::sort(files.begin(), files.end());
+      if (files.empty()) ImGui::TextDisabled("%s", T("(nenhum preset salvo)"));
+      for (auto &f : files) {
+        std::string nm = platform::toUtf8(f.stem());
+        if (ImGui::Selectable(nm.c_str(), nm == presetName)) {
+          std::string text, err;
+          if (platform::readFile(platform::toUtf8(f), text) &&
+              loadOutputSetup(text, platform::toUtf8(dir), p, &err)) {
+            presetName = nm;
+            outputsSel_ = p.outputs.empty() ? -1 : p.outputs[0].id;
+            outputSlice_ = 0;
+            app.edited();
+            app.status(T("Preset de saída carregado: ") + nm);
+          } else {
+            app.status(T("Não foi possível carregar o preset: ") + err, true);
+          }
+        }
+      }
+      ImGui::Separator();
+      if (ImGui::Selectable(T("Salvar como..."))) openSave = true;
+      if (ImGui::Selectable(T("Carregar arquivo..."))) {
+        auto picked = platform::openFileDialog(T("Preset de saída"), "Preset de saída|*.lumenout", false);
+        std::string text, err;
+        if (!picked.empty() && platform::readFile(picked[0], text) &&
+            loadOutputSetup(text, platform::toUtf8(platform::toPath(picked[0]).parent_path()), p, &err)) {
+          presetName = platform::toUtf8(platform::toPath(picked[0]).stem());
+          outputsSel_ = p.outputs.empty() ? -1 : p.outputs[0].id;
+          outputSlice_ = 0;
+          app.edited();
+        } else if (!picked.empty()) {
+          app.status(T("Não foi possível carregar o preset: ") + err, true);
+        }
+      }
+      if (ImGui::Selectable(T("Abrir pasta dos presets"))) {
+        fs::create_directories(dir, ec);
+        platform::openInShell(platform::toUtf8(dir));
+      }
+      ImGui::EndCombo();
+    }
+    ImGui::SetItemTooltip("%s", T("Presets de saída: as telas e os slices num arquivo próprio, para usar em qualquer projeto"));
+    if (openSave) {
+      std::snprintf(newName, sizeof(newName), "%s", presetName == T("Presets") ? "" : presetName.c_str());
+      ImGui::OpenPopup("##savepreset");
+    }
+    if (ImGui::BeginPopup("##savepreset")) {
+      ImGui::TextUnformatted(T("Nome do preset"));
+      ImGui::SetNextItemWidth(220);
+      if (ImGui::IsWindowAppearing()) ImGui::SetKeyboardFocusHere();
+      bool enter = ImGui::InputText("##pname", newName, sizeof(newName), ImGuiInputTextFlags_EnterReturnsTrue);
+      if ((enter || ImGui::Button(T("Salvar"))) && newName[0]) {
+        std::string nm = newName;
+        for (char &c : nm)
+          if (std::strchr("\\/:*?\"<>|", c)) c = '_'; // not allowed in file names
+        std::error_code ec;
+        fs::create_directories(dir, ec);
+        std::string file = platform::toUtf8(dir / platform::toPath(nm + ".lumenout"));
+        if (platform::writeFile(file, serializeOutputSetup(p, platform::toUtf8(dir)))) {
+          presetName = nm;
+          app.status(T("Preset de saída salvo: ") + nm);
+        } else {
+          app.status(T("Não foi possível salvar o preset"), true);
+        }
+        ImGui::CloseCurrentPopup();
+      }
+      ImGui::EndPopup();
+    }
+  }
+  // "+" (Resolume's): a slice on the selected projector, or an output mask.
+  if (ImGui::Button(T("+  \xe2\x96\xbe##add"), {60, 0})) ImGui::OpenPopup("##addmenu"); // ▾
+  if (ImGui::BeginPopup("##addmenu")) {
+    OutputConfig *cur = p.output(outputsSel_);
+    if (ImGui::MenuItem(T("Slice"), nullptr, false, cur != nullptr)) {
+      OutputSlice sl;
+      sl.name = "Slice " + std::to_string(cur->slices.size() + 2);
+      sl.srcW = float(p.canvasWidth(cur->canvasId));
+      sl.srcH = float(p.canvasHeight(cur->canvasId));
+      sl.warp.setRect({0.25f, 0.25f}, {0.5f, 0.5f}); // in the middle of the projector, half size
+      cur->slices.push_back(sl);
+      outputSliceFor_ = cur->id;
+      outputSlice_ = int(cur->slices.size());
+      outputsPage_ = 1;
+      if (mappingTab_ >= 2) mappingTab_ = 0;
+      app.edited();
+    }
+    if (ImGui::MenuItem(T("Máscara de saída"), nullptr, false, cur != nullptr)) {
+      outputsPage_ = 1;
+      mappingTab_ = 2;
+    }
+    ImGui::EndPopup();
+  }
+  ImGui::TextDisabled(T("Canvas %d × %d"), p.canvasW, p.canvasH);
   ImGui::Separator();
-  ImGui::TextDisabled("%s", T("Projetores"));
+  auto mons = OutputManager::monitors();
   for (size_t i = 0; i < p.outputs.size(); ++i) {
     auto &o = p.outputs[i];
+    ImGui::PushID(o.id);
+    const bool selOut = outputsSel_ == o.id;
     char label[160];
-    std::snprintf(label, sizeof(label), T("%zu  %s"), i + 1, o.name.c_str());
-    if (ImGui::Selectable(label, outputsSel_ == o.id)) outputsSel_ = o.id;
+    std::snprintf(label, sizeof(label), "%s  %s", selOut ? "\xe2\x96\xbe" : "\xe2\x96\xb8", o.name.c_str()); // ▾ ▸
+    // Resolume's screen toggle: off = the screen shows black (its window stays open).
+    bool live = !o.muted;
+    if (ImGui::Checkbox("##scron", &live)) {
+      o.muted = !live;
+      app.edited();
+    }
+    ImGui::SetItemTooltip("%s", T("Liga/desliga a imagem desta tela (desligada = preto)"));
+    ImGui::SameLine(0, 4);
+    // The projector row selects the screen itself (its properties on the right).
+    bool screenOn = selOut && outputsPage_ == 1 && outputSlice_ < 0 && mappingTab_ <= 1;
+    if (ImGui::Selectable(label, screenOn || (selOut && outputsPage_ == 0))) {
+      outputsSel_ = o.id;
+      outputSliceFor_ = o.id;
+      outputSlice_ = -1;
+      if (outputsPage_ == 1 && mappingTab_ >= 2) mappingTab_ = 1;
+    }
     if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
       outputsSel_ = o.id;
       outputsPage_ = 1;
     }
-    if (outputsSel_ == o.id) {
-      ImGui::PushID(o.id);
+    if (selOut) {
       if (outputSliceFor_ != o.id) {
         outputSliceFor_ = o.id;
         outputSlice_ = 0;
       }
+      int w = o.winW, h = o.winH;
+      std::string dev = o.monitor < 0 ? T("janela") : T("Tela ") + std::to_string(o.monitor + 1);
+      if (o.monitor >= 0 && o.monitor < int(mons.size())) { w = mons[size_t(o.monitor)].w; h = mons[size_t(o.monitor)].h; }
+      ImGui::Indent(14);
+      ImGui::TextDisabled("%s (%d×%d)", dev.c_str(), w, h);
       outputSliceBar(app, o);
-      ImGui::PopID();
+      ImGui::Unindent(14);
     }
+    ImGui::PopID();
   }
   ImGui::EndChild();
   ImGui::SameLine();
@@ -362,12 +469,7 @@ void Ui::outputsWindow(App &app) {
       outputSliceFor_ = sel->id;
       outputSlice_ = 0;
     }
-    if (mappingTab_ >= 2) outputSlice_ = 0; // masks and colour belong to the whole output
-    else if (!sel->slices.empty()) {
-      ImGui::TextDisabled(T("Editando: %s"), outputSlice_ == 0 ? "Slice 1"
-                                              : sel->slices[size_t(std::min(outputSlice_, int(sel->slices.size())) - 1)].name.c_str());
-    }
-    outputSlice_ = std::clamp(outputSlice_, 0, int(sel->slices.size()));
+    outputSlice_ = std::clamp(outputSlice_, -1, int(sel->slices.size()));
 
     if (mappingTab_ <= 1) {
       // Input Selection / Output Transformation, as in Resolume's Advanced Output.

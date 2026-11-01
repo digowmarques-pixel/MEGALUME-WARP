@@ -10,6 +10,7 @@
 #include "core/isf.h"
 #include "core/md5.h"
 #include "core/timecode.h"
+#include "core/expr.h"
 #include "control/devices.h"
 #include "core/svg.h"
 #include "core/warp.h"
@@ -880,6 +881,8 @@ static void testV09() {
     sl.tone.contrast = -0.5f;
     ps.outputs[0].slices.push_back(sl);
     ps.outputs[0].inRotation = 3;
+    ps.outputs[0].guideImage = "/shows/sala/foto.png";
+    ps.outputs[0].guideOpacity = 0.3f;
     ps.outputs[0].tone.blue = -0.75f;
     ps.outputs[0].flipY = true;
     Project qs;
@@ -892,6 +895,17 @@ static void testV09() {
     CHECK(r.flipX && !r.flipY && qs.outputs[0].flipY && !qs.outputs[0].flipX);
     CHECK(r.inRotation == 12.5f && r.outRotation == -30 && r.tone.red == 0.25f && r.tone.contrast == -0.5f);
     CHECK(qs.outputs[0].inRotation == 3 && qs.outputs[0].tone.blue == -0.75f);
+    CHECK(qs.outputs[0].guideImage == "/shows/sala/foto.png" && qs.outputs[0].guideOpacity == 0.3f);
+    // Output preset: only the outputs, loaded into another project.
+    std::string preset = serializeOutputSetup(ps, "");
+    Project other = Project::makeDefault();
+    other.outputs.clear();
+    CHECK(loadOutputSetup(preset, "", other));
+    CHECK(other.outputs.size() == ps.outputs.size() && other.outputs[0].slices.size() == 1);
+    CHECK(other.outputs[0].slices[0].name == "Teto" && other.outputs[0].guideOpacity == 0.3f);
+    CHECK(other.layers.size() == Project::makeDefault().layers.size()); // the rest is untouched
+    std::string err;
+    CHECK(!loadOutputSetup("{\"format\":\"lumen\"}", "", other, &err) && !err.empty());
   }
 
   // Timecode: labels <-> seconds (with drop frame).
@@ -982,6 +996,24 @@ static void testInstaller() {
   }
   CHECK(n > 20);
 #endif
+}
+
+static void testExpr() {
+  using namespace lumen;
+  double v = 0;
+  CHECK(evalNumber("1920/3", 0, v) && v == 640);
+  CHECK(evalNumber(" (1080 - 40) * 2 ", 0, v) && v == 2080);
+  CHECK(evalNumber("/3", 1920, v) && v == 640);      // on the current value
+  CHECK(evalNumber("*2", 300, v) && v == 600);
+  CHECK(evalNumber("+100", 50, v) && v == 150);
+  CHECK(evalNumber("-10", 50, v) && v == -10);        // a negative number, not 50 - 10
+  CHECK(evalNumber("12,5", 0, v) && v == 12.5);       // decimal comma
+  CHECK(evalNumber("2+3*4", 0, v) && v == 14);
+  CHECK(evalNumber("1920x2", 0, v) && v == 3840);
+  CHECK(!evalNumber("abc", 7, v));
+  CHECK(!evalNumber("5/0", 7, v));
+  CHECK(!evalNumber("", 7, v));
+  CHECK(!evalNumber("(1+2", 7, v));
 }
 
 static void testNewCell() {
@@ -1192,6 +1224,7 @@ int main() {
   testI18n();
   testHapConvert();
   testNewCell();
+  testExpr();
   testV09();
   testV08();
   testV07();

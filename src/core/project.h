@@ -335,6 +335,8 @@ struct OutputConfig {
   float srcX = 0, srcY = 0, srcW = 1920, srcH = 1080; // canvas region (px)
   Warp warp;                      // output-normalised space (0..1)
   bool flipX = false, flipY = false; // Slice 1 mirrored on the projector
+  bool muted = false;   // Resolume's screen toggle: the screen shows black, its window stays open
+  float opacity = 1;    // of the whole screen (0..1)
   float inRotation = 0, outRotation = 0; // Slice 1 (see OutputSlice)
   SliceTone tone;                        // Slice 1
   SoftEdge softEdge;
@@ -346,6 +348,10 @@ struct OutputConfig {
   Color blackLevel{0, 0, 0, 1};
   std::vector<Mask> masks;        // output space: points in 0..1, feather in output px
   std::vector<OutputSlice> slices; // extra slices, drawn after the first one, in order
+  // Output guide (Resolume's): a picture of the surface shown under the slices
+  // in the Outputs window only, to place them. Never sent to the projector.
+  std::string guideImage;
+  float guideOpacity = 0.5f;
   // Not saved: while the Outputs window edits extra slice k, that slice is
   // swapped with the first one (so every editor works on it); drawing uses
   // this to keep the real order.
@@ -630,6 +636,11 @@ void softEdgeSpans(const Project &p, const OutputConfig &o, float span[4][2]);
 int autoBlendOverlaps(Project &p, int canvasId);
 
 std::string serializeProject(const Project &p, const std::string &baseDir);
+// Output presets (Resolume's screen setups): only the outputs, in a file of
+// their own, to reuse a venue's setup with any project.
+std::string serializeOutputSetup(const Project &p, const std::string &baseDir);
+// Replaces the outputs of `p` with the preset's; false (and `error`) if invalid.
+bool loadOutputSetup(const std::string &text, const std::string &baseDir, Project &p, std::string *error = nullptr);
 bool deserializeProject(const std::string &json, const std::string &baseDir, Project &out,
                         std::string *error = nullptr);
 bool saveProject(Project &p, const std::string &path, std::string *error = nullptr);

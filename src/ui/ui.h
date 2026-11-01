@@ -189,6 +189,12 @@ private:
   float stageStart_[6] = {};
   Warp stageStartWarp_;
   Framebuffer stagePreview_;
+  std::string guideLoaded_; // output guide picture currently in guideTex_
+  std::unique_ptr<Texture> guideTex_;
+  void screenPanel(App &app, OutputConfig &o, float outW, float outH);
+  // Resolume's "Match Output Shape": slice k takes from the canvas the same
+  // place and size it has on the projector (pixel-perfect pixel maps).
+  void matchOutputShape(App &app, OutputConfig &o, int k);
   void sliceEditor(App &app, OutputConfig &o, bool output);
   void slicePanel(App &app, OutputConfig &o, bool output, float outW, float outH);
   Workspace outputsWs_;   // workspace embedded in the mapping page

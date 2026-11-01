@@ -30,7 +30,7 @@ uniform int uIndex;
 uniform vec2 uRes;
 uniform float uTime;
 uniform float uBlack;     // blackout
-uniform vec4 uColorAdj;   // brightness, contrast, gamma, -
+uniform vec4 uColorAdj;   // brightness, contrast, gamma, opacity of the screen
 uniform vec3 uGain;
 uniform vec3 uBlackLevel; // projector black leak (linear)
 
@@ -118,6 +118,7 @@ void main() {
   // Per-projector colour matching.
   col = clamp((col - 0.5) * uColorAdj.y + 0.5, 0.0, 1.0) * uColorAdj.x * uGain;
   col = pow(max(col, vec3(0.0)), vec3(1.0 / max(uColorAdj.z, 0.05)));
+  col *= uColorAdj.w;
 
   // Each ramp only where that edge has a neighbour (its span along the edge).
   vec2 fpx = 0.5 / uRes;
@@ -500,7 +501,7 @@ void OutputManager::draw(const Project &p, const OutputConfig &o, int index,
   auto setSlice = [&](float inRotation, const SliceTone &t) {
     float a = inRotation * 3.14159265f / 180.0f;
     shader_.set("uRot", std::cos(a), std::sin(a));
-    shader_.set("uColorAdj", o.color.brightness * (1 + t.brightness), o.color.contrast * (1 + t.contrast), o.color.gamma, 0.0f);
+    shader_.set("uColorAdj", o.color.brightness * (1 + t.brightness), o.color.contrast * (1 + t.contrast), o.color.gamma, o.opacity);
     shader_.set("uGain", o.color.gain.r * (1 + t.red), o.color.gain.g * (1 + t.green), o.color.gain.b * (1 + t.blue));
   };
   setRect(o.srcX, o.srcY, o.srcW, o.srcH, o.flipX, o.flipY);
@@ -516,8 +517,8 @@ void OutputManager::draw(const Project &p, const OutputConfig &o, int index,
   shader_.set("uRes", float(w), float(h));
   shader_.set("uCanvasPx", cw, ch);
   shader_.set("uTime", float(time));
-  shader_.set("uBlack", blackout ? 1.0f : 0.0f);
-  shader_.set("uColorAdj", o.color.brightness, o.color.contrast, o.color.gamma, 0.0f);
+  shader_.set("uBlack", blackout || o.muted ? 1.0f : 0.0f); // the screen toggle shows black
+  shader_.set("uColorAdj", o.color.brightness, o.color.contrast, o.color.gamma, o.opacity);
   shader_.set("uGain", o.color.gain.r, o.color.gain.g, o.color.gain.b);
   shader_.set("uBlackLevel", o.blackLevel.r, o.blackLevel.g, o.blackLevel.b);
   shader_.set("uMask", 1);

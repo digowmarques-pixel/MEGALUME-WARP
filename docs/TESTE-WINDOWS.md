@@ -13,7 +13,7 @@ um Arduino e o NDI Tools.
 
 ## 0. Instalação e diagnóstico
 
-- [ ] 0.1 Instale com `Lumen-0.10.37-setup.exe` (ou descompacte o .zip). O atalho
+- [ ] 0.1 Instale com `Lumen-0.10.38-setup.exe` (ou descompacte o .zip). O atalho
       aparece no Menu Iniciar, e arquivos `.lumen` abrem com o Lumen.
 - [ ] 0.2 Menu Iniciar → *Lumen (console de diagnóstico)*. O relatório abre no Bloco
       de Notas (também fica em `%APPDATA%\Lumen\diagnostico.txt`).
@@ -233,6 +233,16 @@ um Arduino e o NDI Tools.
 - [ ] 13.33 Vídeo segue o timecode: Cue 1 em 00:00:00:00 e Cue 2 em 00:00:30:00. Play no Reaper,
       pause: o vídeo pausa junto. Play: continua do mesmo ponto. Leve o cursor para 00:00:40:00 e
       dê play: entra a Cue 2, 10 s adiante. Volte para 00:00:05:00: Cue 1, em 5 s.
+- [ ] 13.61 Presets (alto à esquerda) → Salvar como... "Sala A". Abra outro projeto, Presets → Sala A:
+      as telas e slices voltam iguais; o resto do projeto não muda.
+- [ ] 13.60 Na Largura digite "/2" + Enter: metade. "1920/3" dá 640. Botão direito no slice →
+      Igualar à saída: a entrada pega o tamanho/posição da saída.
+- [ ] 13.59 Transformação de saída → + Editar pontos: quadrados grandes nos cantos (perspectiva),
+      pequenos (malha); Subdivisões X +1 cria pontos no meio. Desmarque a caixinha do projetor: preto.
+- [ ] 13.58 Clique em "Projetor 1" na lista: o painel mostra Dispositivo, tamanho, Cor da tela e Guia
+      de saída. Carregue uma foto da superfície: aparece por cima do palco da saída (Opacidade), não
+      no projetor. Salve e abra: o guia volta.
+- [ ] 13.57 Botão + → Slice cria um slice; a caixinha desliga/liga; o x remove o selecionado.
 - [ ] 13.56 Saídas → projetor → Transformação de saída: clique num slice e arraste (move); puxe um
       quadrado (tamanho), uma bola (gira); Editar pontos: bolas = perspectiva, quadrados = malha.
       Painel: mude X, Largura, Rotação, Brilho, Vermelho. ↶ desfaz sem fechar o programa.

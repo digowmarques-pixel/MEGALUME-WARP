@@ -1031,6 +1031,12 @@ std::string serializeProject(const Project &p, const std::string &baseDir) {
          {"masks", masksToJson(o.masks)}, {"delay", o.delayFrames}, {"canvas", o.canvasId},
          {"spout", o.spoutName}, {"windowless", o.windowless}, {"ndi", o.ndiName}});
     if (o.flipX || o.flipY) j["outputs"].back()["flip"] = {o.flipX, o.flipY};
+    if (o.muted) j["outputs"].back()["muted"] = true;
+    if (o.opacity != 1) j["outputs"].back()["opacity"] = o.opacity;
+    if (!o.guideImage.empty()) {
+      j["outputs"].back()["guide"] = makeRelative(o.guideImage, baseDir);
+      j["outputs"].back()["guideOpacity"] = o.guideOpacity;
+    }
     if (o.inRotation != 0) j["outputs"].back()["rotation"] = o.inRotation;
     if (o.outRotation != 0) j["outputs"].back()["outRotation"] = o.outRotation;
     if (!o.tone.isZero())
@@ -1427,6 +1433,10 @@ bool deserializeProject(const std::string &text, const std::string &baseDir, Pro
         o.flipX = jo["flip"][0];
         o.flipY = jo["flip"][1];
       }
+      if (jo.contains("guide")) o.guideImage = makeAbsolute(jo.value("guide", std::string()), baseDir);
+      o.guideOpacity = jo.value("guideOpacity", 0.5f);
+      o.muted = jo.value("muted", false);
+      o.opacity = jo.value("opacity", 1.0f);
       o.inRotation = jo.value("rotation", 0.0f);
       o.outRotation = jo.value("outRotation", 0.0f);
       readTone(jo, o.tone);
@@ -1538,6 +1548,42 @@ bool loadProject(const std::string &path, Project &out, std::string *error) {
   std::string baseDir = platform::toUtf8(platform::toPath(path).parent_path());
   if (!deserializeProject(text, baseDir, out, error)) return false;
   out.filePath = path;
+  return true;
+}
+
+} // namespace lumen
+
+namespace lumen {
+
+std::string serializeOutputSetup(const Project &p, const std::string &baseDir) {
+  json full = json::parse(serializeProject(p, baseDir));
+  json out = {{"format", "lumen-outputs"}, {"version", 1}, {"outputs", full.value("outputs", json::array())}};
+  return out.dump(2);
+}
+
+bool loadOutputSetup(const std::string &text, const std::string &baseDir, Project &p, std::string *error) {
+  json preset = json::parse(text, nullptr, false);
+  if (preset.is_discarded() || preset.value("format", std::string()) != "lumen-outputs" ||
+      !preset.contains("outputs") || !preset["outputs"].is_array()) {
+    if (error) *error = "not a Lumen output preset";
+    return false;
+  }
+  // Read through the project loader (same rules as a project file), with the
+  // current project around it.
+  json full = json::parse(serializeProject(p, baseDir));
+  full["outputs"] = preset["outputs"];
+  Project tmp;
+  if (!deserializeProject(full.dump(), baseDir, tmp)) {
+    if (error) *error = "invalid output preset";
+    return false;
+  }
+  for (OutputConfig &o : tmp.outputs) {
+    bool known = o.canvasId == 0;
+    for (const auto &c : p.canvases) known |= c.id == o.canvasId;
+    if (!known) o.canvasId = 0; // a canvas this project does not have
+  }
+  p.outputs = tmp.outputs;
+  p.nextId = std::max(p.nextId, tmp.nextId);
   return true;
 }
 
