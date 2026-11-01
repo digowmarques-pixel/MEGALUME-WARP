@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(Lumen VERSION 0.10.42 LANGUAGES C CXX)
+project(Lumen VERSION 0.10.43 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -153,6 +153,7 @@ add_library(lumen_core OBJECT
   src/ui/workspace.cpp
   src/ui/outputs_window.cpp
   src/ui/slice_editor.cpp
+  src/ui/icons.cpp
   src/platform/platform.cpp
   src/platform/process.cpp
   src/media/convert.cpp)

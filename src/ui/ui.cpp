@@ -1,5 +1,6 @@
 #include "ui/palette.h"
 #include "ui/ui.h"
+#include "ui/icons.h"
 
 #include "app.h"
 #include "core/svg.h"
@@ -1058,16 +1059,18 @@ void Ui::toolbar(App &app) {
     if (tb.tool == Tool::Led && !workspace.showLed) continue; // LED only when LED mapping is shown
     bool active = workspace.tool == tb.tool;
     if (active) pushPrimary();
-    if (ImGui::Button(tb.label, {0, 30})) workspace.tool = tb.tool;
+    bool hit = tb.tool == Tool::Hand ? iconButton("##handtool", Icon::Hand, {34, 30}) : ImGui::Button(tb.label, {0, 30});
+    if (hit) workspace.tool = tb.tool;
     if (active) popPrimary();
-    ImGui::SetItemTooltip(T("Tecla %s"), tb.key);
+    if (tb.tool == Tool::Hand) ImGui::SetItemTooltip(T("Mão: arrastar move a vista · tecla %s"), tb.key);
+    else ImGui::SetItemTooltip(T("Tecla %s"), tb.key);
     ImGui::SameLine();
   }
   // Magnet: moved and scaled slices snap to edges and centres.
   ImGui::SameLine(0, 8);
   const bool snapOn = workspace.snap;
   if (snapOn) pushPrimary();
-  if (ImGui::Button(T("Ímã"), {0, 30})) {
+  if (iconButton("##magnet", Icon::Magnet, {34, 30})) {
     workspace.snap = !workspace.snap;
     setMachineSetting("snap", workspace.snap ? 1 : 0);
   }

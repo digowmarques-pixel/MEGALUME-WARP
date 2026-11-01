@@ -95,6 +95,11 @@ Ordem pensada para **videomapping** e **instalações interativas**.
 - *Seek* preciso de vídeo e áudio (também por OSC: `/lumen/layer/<l>/time`)
 - Testes de integração no CI (`scripts/test-integration.sh`)
 
+## ✅ v0.10.43
+- **Ícones de mão e de ímã** no lugar das palavras "Mão" e "Ímã" (barra do workspace e editor
+  de slices das Saídas); desenhados pelo Lumen, iguais em qualquer Windows; o nome aparece ao
+  passar o mouse
+
 ## ✅ v0.10.42
 - **Escala da máscara leva os pontos junto** (layers e saídas): o campo Escala aplica o fator nos
   pontos e nas curvas (começa em 1×: arraste ou digite 2 = dobro); projetos antigos com escala

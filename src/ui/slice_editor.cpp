@@ -9,6 +9,7 @@
 #include "engine/outputs.h"
 #include "ui/palette.h"
 #include "ui/ui.h"
+#include "ui/icons.h"
 #include "platform/platform.h"
 
 #include <imgui.h>
@@ -163,6 +164,17 @@ bool propRow(const char *label, float &v, float step, float /*speed*/, const cha
   return changed;
 }
 
+bool toggleIcon(const char *id, Icon icon, bool on) {
+  if (on) {
+    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.22f, 0.70f, 0.62f, 0.95f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.30f, 0.80f, 0.70f, 1));
+    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.03f, 0.08f, 0.07f, 1));
+  }
+  bool hit = iconButton(id, icon, {30, ImGui::GetFrameHeight()});
+  if (on) ImGui::PopStyleColor(3);
+  return hit;
+}
+
 bool toggleButton(const char *label, bool on, ImVec2 size = {0, 0}) {
   if (on) {
     ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.22f, 0.70f, 0.62f, 0.95f));
@@ -244,10 +256,10 @@ void Ui::sliceEditor(App &app, OutputConfig &o, bool out) {
     if (ImGui::Button(T("\xe2\x86\xb7##redo"))) pendingHistory_ = 1; // ↷
     ImGui::SetItemTooltip("%s", T("Refazer (Ctrl+Shift+Z)"));
     ImGui::SameLine();
-    if (toggleButton(T("M\xc3\xa3o"), stageHand_)) stageHand_ = !stageHand_; // Mão
+    if (toggleIcon("##stagehand", Icon::Hand, stageHand_)) stageHand_ = !stageHand_;
     ImGui::SetItemTooltip("%s", T("Arrastar a vista do palco"));
     ImGui::SameLine();
-    if (toggleButton(T("\xc3\x8dm\xc3\xa3"), workspace.snap)) { // Ímã
+    if (toggleIcon("##stagemagnet", Icon::Magnet, workspace.snap)) {
       workspace.snap = !workspace.snap;
       setMachineSetting("snap", workspace.snap ? 1 : 0);
     }
