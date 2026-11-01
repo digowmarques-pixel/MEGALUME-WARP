@@ -95,6 +95,11 @@ Ordem pensada para **videomapping** e **instalações interativas**.
 - *Seek* preciso de vídeo e áudio (também por OSC: `/lumen/layer/<l>/time`)
 - Testes de integração no CI (`scripts/test-integration.sh`)
 
+## ✅ v0.10.45
+- **Abas e janelas que não se confundem** em todo o programa: aba escolhida clara com linha amarela
+  em cima, as outras escuras e contornadas; título das janelas (Saídas, Preview...) numa faixa
+  própria — dourada na janela em uso — e borda nas janelas que abrem por cima
+
 ## ✅ v0.10.44
 - **Máscaras: botão direito num ponto arredonda (bezier) / deixa reto** — não apaga mais.
   Para apagar: selecione o ponto e use **Remover ponto** no painel da máscara (ou a tecla

@@ -420,11 +420,12 @@ void Ui::setup() {
   s.GrabRounding = 6;
   s.TabRounding = 6;
   s.ScrollbarRounding = 8;
-  s.WindowBorderSize = 0;
+  s.WindowBorderSize = 1; // floating windows (Saídas, Preview...) stand out from what is behind
   s.ChildBorderSize = 1;
   s.PopupBorderSize = 1;
   s.FrameBorderSize = 1; // fields and buttons outlined: easy to tell from the text around them
-  s.TabBarOverlineSize = 2;
+  s.TabBarOverlineSize = 3;
+  s.TabBorderSize = 1; // each tab outlined
   s.WindowPadding = {10, 8};
   s.FramePadding = {8, 4};
   s.ItemSpacing = {7, 6};
@@ -456,7 +457,10 @@ void Ui::setup() {
   c[ImGuiCol_Border] = {0.56f, 0.56f, 0.60f, 1}; // outline of fields and buttons: clearly visible
   c[ImGuiCol_BorderShadow] = {0, 0, 0, 0};
   c[ImGuiCol_MenuBarBg] = black;
-  c[ImGuiCol_TitleBg] = c[ImGuiCol_TitleBgActive] = c[ImGuiCol_TitleBgCollapsed] = panel;
+  // Window titles: a band of their own (the window in use in dark gold), never
+  // the colour of the panel under them.
+  c[ImGuiCol_TitleBg] = c[ImGuiCol_TitleBgCollapsed] = {0.25f, 0.25f, 0.28f, 1};
+  c[ImGuiCol_TitleBgActive] = {0.36f, 0.30f, 0.10f, 1};
   c[ImGuiCol_FrameBg] = field;
   c[ImGuiCol_FrameBgHovered] = fieldHi;
   c[ImGuiCol_FrameBgActive] = {0.21f, 0.19f, 0.12f, 1};
@@ -475,12 +479,15 @@ void Ui::setup() {
   c[ImGuiCol_ResizeGrip] = ya(0.15f);
   c[ImGuiCol_ResizeGripHovered] = ya(0.5f);
   c[ImGuiCol_ResizeGripActive] = y;
-  c[ImGuiCol_Tab] = inset;
-  c[ImGuiCol_TabHovered] = frameHi;
-  c[ImGuiCol_TabSelected] = frame;
+  // Tabs: the chosen one clearly lighter, with a yellow line on top; the others
+  // dark, with dimmed text so they do not look chosen.
+  c[ImGuiCol_Tab] = {0.085f, 0.085f, 0.095f, 1};
+  c[ImGuiCol_TabHovered] = {0.40f, 0.40f, 0.43f, 1};
+  c[ImGuiCol_TabSelected] = {0.46f, 0.46f, 0.50f, 1};
   c[ImGuiCol_TabSelectedOverline] = y;
-  c[ImGuiCol_TabDimmed] = inset;
-  c[ImGuiCol_TabDimmedSelected] = frame;
+  c[ImGuiCol_TabDimmed] = {0.085f, 0.085f, 0.095f, 1};
+  c[ImGuiCol_TabDimmedSelected] = {0.40f, 0.40f, 0.44f, 1};
+  c[ImGuiCol_TabDimmedSelectedOverline] = y;
   c[ImGuiCol_ScrollbarBg] = {0, 0, 0, 0};
   c[ImGuiCol_ScrollbarGrab] = {0.40f, 0.40f, 0.43f, 1};
   c[ImGuiCol_ScrollbarGrabHovered] = {0.52f, 0.52f, 0.55f, 1};
