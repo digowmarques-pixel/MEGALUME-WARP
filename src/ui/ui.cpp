@@ -606,6 +606,10 @@ void Ui::draw(App &app) {
 
   if (!locked) {
     outputsWindow(app);
+    if (pendingHistory_ != 0) { // after the windows: undo/redo replaces the project
+      pendingHistory_ < 0 ? app.undo() : app.redo();
+      pendingHistory_ = 0;
+    }
     inputMeshWindow(app);
     sliceEditorWindow(app);
     virtualMonitorsWindow(app);

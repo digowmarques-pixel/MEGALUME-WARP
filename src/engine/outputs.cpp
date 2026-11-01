@@ -18,6 +18,7 @@ uniform sampler2D uCanvas;
 uniform sampler2D uMask;
 uniform int uUseMask;
 uniform vec4 uRect;       // canvas region, normalised: x y w h (y down)
+uniform vec2 uRot;        // cos, sin: the region turned around its centre
 uniform vec2 uCanvasPx;   // canvas size in pixels
 uniform vec4 uSoft;       // left right top bottom (fraction)
 uniform vec4 uSpanLR;     // blended part of the left and right edges (from, to; along y)
@@ -101,12 +102,17 @@ vec3 blendGrid(vec2 cuv) {
 }
 
 void main() {
-  vec2 cuv = uRect.xy + vUV * uRect.zw;
+  // Point of the (possibly turned) canvas region, in canvas pixels around its centre.
+  vec2 local = (vUV - 0.5) * uRect.zw * uCanvasPx;
+  vec2 cuv = uRect.xy + 0.5 * uRect.zw + vec2(local.x * uRot.x - local.y * uRot.y,
+                                              local.x * uRot.y + local.y * uRot.x) / uCanvasPx;
   vec3 col;
   if (uPattern == 1) col = testCard(vUV);
   else if (uPattern == 2) col = blendGrid(cuv);
   else if (uPattern == 3) col = vec3(1.0);
   else if (uPattern == 4) col = vec3(0.0);
+  else if (any(lessThan(cuv, vec2(-0.0005))) || any(greaterThan(cuv, vec2(1.0005))))
+    col = vec3(0.0); // a turned region reaching outside the canvas: black, not the stretched edge
   else col = texture(uCanvas, vec2(cuv.x, 1.0 - cuv.y)).rgb;
 
   // Per-projector colour matching.
@@ -490,6 +496,13 @@ void OutputManager::draw(const Project &p, const OutputConfig &o, int index,
   auto setRect = [&](float x, float y, float rw, float rh, bool fx, bool fy) {
     shader_.set("uRect", (fx ? x + rw : x) / cw, (fy ? y + rh : y) / ch, (fx ? -rw : rw) / cw, (fy ? -rh : rh) / ch);
   };
+  // Turn of the region and the slice's own colour on top of the projector's.
+  auto setSlice = [&](float inRotation, const SliceTone &t) {
+    float a = inRotation * 3.14159265f / 180.0f;
+    shader_.set("uRot", std::cos(a), std::sin(a));
+    shader_.set("uColorAdj", o.color.brightness * (1 + t.brightness), o.color.contrast * (1 + t.contrast), o.color.gamma, 0.0f);
+    shader_.set("uGain", o.color.gain.r * (1 + t.red), o.color.gain.g * (1 + t.green), o.color.gain.b * (1 + t.blue));
+  };
   setRect(o.srcX, o.srcY, o.srcW, o.srcH, o.flipX, o.flipY);
   shader_.set("uSoft", o.softEdge.left, o.softEdge.right, o.softEdge.top, o.softEdge.bottom);
   float span[4][2];
@@ -523,10 +536,12 @@ void OutputManager::draw(const Project &p, const OutputConfig &o, int index,
   // order. The soft edges belong to the first slice (the projector blend).
   const int swap = o.editSwap > 0 && o.editSwap <= int(o.slices.size()) ? o.editSwap : 0;
   if (swap == 0) {
+    setSlice(o.inRotation, o.tone);
     drawWarp(o.warp);
   } else { // the real first slice is parked in slices[swap - 1]
     const OutputSlice &first = o.slices[size_t(swap - 1)];
     setRect(first.srcX, first.srcY, first.srcW, first.srcH, first.flipX, first.flipY);
+    setSlice(first.inRotation, first.tone);
     drawWarp(first.warp);
   }
   if (!o.slices.empty()) {
@@ -538,6 +553,7 @@ void OutputManager::draw(const Project &p, const OutputConfig &o, int index,
       float sw = edited ? o.srcW : sl.srcW, sh = edited ? o.srcH : sl.srcH;
       if (!sl.enabled || sw <= 0 || sh <= 0) continue;
       setRect(x, y, sw, sh, edited ? o.flipX : sl.flipX, edited ? o.flipY : sl.flipY);
+      setSlice(edited ? o.inRotation : sl.inRotation, edited ? o.tone : sl.tone);
       drawWarp(edited ? o.warp : sl.warp);
     }
   }

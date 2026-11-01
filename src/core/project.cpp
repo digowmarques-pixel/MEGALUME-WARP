@@ -670,6 +670,12 @@ static void fromJson(const json &j, Warp &w) {
   }
 }
 
+static void readTone(const json &j, SliceTone &t) {
+  if (!j.contains("tone") || !j["tone"].is_array() || j["tone"].size() != 5) return;
+  const json &a = j["tone"];
+  t = {a[0].get<float>(), a[1].get<float>(), a[2].get<float>(), a[3].get<float>(), a[4].get<float>()};
+}
+
 static json masksToJson(const std::vector<Mask> &masks) {
   json arr = json::array();
   for (auto &m : masks) {
@@ -1025,12 +1031,18 @@ std::string serializeProject(const Project &p, const std::string &baseDir) {
          {"masks", masksToJson(o.masks)}, {"delay", o.delayFrames}, {"canvas", o.canvasId},
          {"spout", o.spoutName}, {"windowless", o.windowless}, {"ndi", o.ndiName}});
     if (o.flipX || o.flipY) j["outputs"].back()["flip"] = {o.flipX, o.flipY};
+    if (o.inRotation != 0) j["outputs"].back()["rotation"] = o.inRotation;
+    if (o.outRotation != 0) j["outputs"].back()["outRotation"] = o.outRotation;
+    if (!o.tone.isZero())
+      j["outputs"].back()["tone"] = {o.tone.brightness, o.tone.contrast, o.tone.red, o.tone.green, o.tone.blue};
     if (!o.slices.empty()) {
       json &jo = j["outputs"].back();
       for (auto &sl : o.slices)
         jo["slices"].push_back({{"name", sl.name}, {"enabled", sl.enabled},
                                 {"source", {sl.srcX, sl.srcY, sl.srcW, sl.srcH}}, {"warp", toJson(sl.warp)},
-                                {"flip", {sl.flipX, sl.flipY}}});
+                                {"flip", {sl.flipX, sl.flipY}}, {"rotation", sl.inRotation},
+                                {"outRotation", sl.outRotation},
+                                {"tone", {sl.tone.brightness, sl.tone.contrast, sl.tone.red, sl.tone.green, sl.tone.blue}}});
     }
   }
 
@@ -1415,6 +1427,9 @@ bool deserializeProject(const std::string &text, const std::string &baseDir, Pro
         o.flipX = jo["flip"][0];
         o.flipY = jo["flip"][1];
       }
+      o.inRotation = jo.value("rotation", 0.0f);
+      o.outRotation = jo.value("outRotation", 0.0f);
+      readTone(jo, o.tone);
       for (auto &js : jo.value("slices", json::array())) {
         OutputSlice sl;
         sl.name = js.value("name", std::string("Slice"));
@@ -1429,6 +1444,9 @@ bool deserializeProject(const std::string &text, const std::string &baseDir, Pro
           sl.flipX = js["flip"][0];
           sl.flipY = js["flip"][1];
         }
+        sl.inRotation = js.value("rotation", 0.0f);
+        sl.outRotation = js.value("outRotation", 0.0f);
+        readTone(js, sl.tone);
         o.slices.push_back(sl);
       }
       if (jo.contains("softEdge")) {

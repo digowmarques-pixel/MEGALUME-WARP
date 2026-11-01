@@ -95,6 +95,22 @@ Ordem pensada para **videomapping** e **instalações interativas**.
 - *Seek* preciso de vídeo e áudio (também por OSC: `/lumen/layer/<l>/time`)
 - Testes de integração no CI (`scripts/test-integration.sh`)
 
+## ✅ v0.10.37
+- **Editor de slices refeito no modelo do Advanced Output do Resolume** (Saídas → projetor):
+  abas **Seleção de entrada** e **Transformação de saída**, com
+  - **palco** com todos os slices (contorno e nome); clique seleciona, **arrastar move**;
+    quadrados mudam o tamanho (Shift: proporcional), **bolas giram** (Shift: de 15 em 15°);
+    setas 1 px / Shift 10 px
+  - **barra**: zoom (Ajustar, 25–200%, roda do mouse), desfazer/refazer, **Mão** (arrasta a
+    vista; botão do meio também), **Ímã** (bordas, centro e outros slices; Ctrl inverte) e
+    **Editar pontos / Transformar**
+  - **Editar pontos**: na saída, bolas = perspectiva e quadrados = malha (duplo clique adiciona
+    linha e coluna); na entrada, os pontos do warping de entrada
+  - **painel de propriedades**: X, Y, Esquerda, Topo, Largura, Altura, **Rotação** (entrada e
+    saída), Espelhar, **cor por slice** (brilho, contraste, vermelho, verde, azul), malha
+- Rotação da parte do canvas na entrada (fora do canvas fica preto); cor por slice
+- Desfazer/refazer pelos botões da janela é feito no fim do quadro (antes podia fechar o Lumen)
+
 ## ✅ v0.10.36
 - **Saídas no estilo do Advanced Output do Resolume**:
   - *Slice*: imagem centralizada, com margem; 8 quadrados (cantos e meios das bordas) maiores,

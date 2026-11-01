@@ -874,7 +874,13 @@ static void testV09() {
     sl.srcX = 960; sl.srcY = 10; sl.srcW = 960; sl.srcH = 540;
     sl.warp.setRect({0.5f, 0.1f}, {0.4f, 0.3f});
     sl.flipX = true;
+    sl.inRotation = 12.5f;
+    sl.outRotation = -30;
+    sl.tone.red = 0.25f;
+    sl.tone.contrast = -0.5f;
     ps.outputs[0].slices.push_back(sl);
+    ps.outputs[0].inRotation = 3;
+    ps.outputs[0].tone.blue = -0.75f;
     ps.outputs[0].flipY = true;
     Project qs;
     CHECK(deserializeProject(serializeProject(ps, ""), "", qs));
@@ -884,6 +890,8 @@ static void testV09() {
     CHECK(std::fabs(r.warp.corners[2].x - 0.9f) < 1e-5f && std::fabs(r.warp.corners[2].y - 0.4f) < 1e-5f);
     CHECK(qs.outputs[0].editSwap == 0); // never saved
     CHECK(r.flipX && !r.flipY && qs.outputs[0].flipY && !qs.outputs[0].flipX);
+    CHECK(r.inRotation == 12.5f && r.outRotation == -30 && r.tone.red == 0.25f && r.tone.contrast == -0.5f);
+    CHECK(qs.outputs[0].inRotation == 3 && qs.outputs[0].tone.blue == -0.75f);
   }
 
   // Timecode: labels <-> seconds (with drop frame).

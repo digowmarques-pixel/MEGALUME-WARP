@@ -172,6 +172,25 @@ private:
   int outputSlice_ = 0;
   int outputSliceFor_ = -1;
   void outputSliceBar(App &app, OutputConfig &o);
+  // Slice editor (Input Selection / Output Transformation, as Resolume's
+  // Advanced Output): stage with every slice, toolbar and properties panel.
+  struct StageView {
+    float zoom = 0; // 0 = fit
+    ImVec2 pan{0, 0};
+  };
+  StageView stageView_[2];
+  bool stageHand_ = false;
+  // Undo / redo asked from inside a window: done after every window is drawn
+  // (they replace the project, which the windows hold references into).
+  int pendingHistory_ = 0; // -1 undo, +1 redo
+  bool stageEditPoints_[2] = {false, false};
+  int stageDrag_ = 0, stageHandle_ = -1, stagePoint_ = -1;
+  ImVec2 stageStartMouse_{0, 0};
+  float stageStart_[6] = {};
+  Warp stageStartWarp_;
+  Framebuffer stagePreview_;
+  void sliceEditor(App &app, OutputConfig &o, bool output);
+  void slicePanel(App &app, OutputConfig &o, bool output, float outW, float outH);
   Workspace outputsWs_;   // workspace embedded in the mapping page
   int calibrating_ = -1; // mapping whose input range is being learnt
   float calMin_ = 0, calMax_ = 0;

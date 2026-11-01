@@ -308,12 +308,22 @@ enum class TestPattern { None, Card, BlendGrid, White, Black, COUNT };
 // of the canvas, placed with its own warp on the same projector. The output's
 // own source and warp are its first slice ("Slice 1"), which also carries the
 // soft edges of the blend.
+// Colour of one slice (Resolume's per-slice correction): offsets, 0 = none,
+// -1..1 (brightness and contrast scale the output's own, red/green/blue its gains).
+struct SliceTone {
+  float brightness = 0, contrast = 0, red = 0, green = 0, blue = 0;
+  bool isZero() const { return brightness == 0 && contrast == 0 && red == 0 && green == 0 && blue == 0; }
+};
+
 struct OutputSlice {
   std::string name = "Slice";
   bool enabled = true;
   float srcX = 0, srcY = 0, srcW = 1920, srcH = 1080; // canvas region (px)
   Warp warp;                                          // output-normalised space (0..1)
   bool flipX = false, flipY = false;                  // mirrored on the projector
+  float inRotation = 0;  // degrees: the canvas region turns around its centre
+  float outRotation = 0; // degrees turned on the projector (shown; the warp holds it)
+  SliceTone tone;
 };
 
 struct OutputConfig {
@@ -325,6 +335,8 @@ struct OutputConfig {
   float srcX = 0, srcY = 0, srcW = 1920, srcH = 1080; // canvas region (px)
   Warp warp;                      // output-normalised space (0..1)
   bool flipX = false, flipY = false; // Slice 1 mirrored on the projector
+  float inRotation = 0, outRotation = 0; // Slice 1 (see OutputSlice)
+  SliceTone tone;                        // Slice 1
   SoftEdge softEdge;
   TestPattern pattern = TestPattern::None;
   OutputColor color;
