@@ -95,6 +95,13 @@ Ordem pensada para **videomapping** e **instalações interativas**.
 - *Seek* preciso de vídeo e áudio (também por OSC: `/lumen/layer/<l>/time`)
 - Testes de integração no CI (`scripts/test-integration.sh`)
 
+## ✅ v0.10.41
+- **Clicar numa máscara seleciona ela** (ferramenta Máscara): a de cima sob o clique, da layer
+  selecionada ou de outra layer do canvas (a layer passa a ser a selecionada); também nas
+  máscaras da saída
+- **Arrastar dentro da máscara move ela sem Ctrl** ("Adicionar pontos" desligado): a mudança
+  anunciada na 0.10.40 não tinha entrado no código; agora entrou (conferido gravando o projeto)
+
 ## ✅ v0.10.40
 - **Mover a máscara sem tecla**: com "Adicionar pontos" desligado, arrastar dentro da máscara move
   ela inteira (arrastar um ponto move só o ponto; Shift: linha reta). Com "Adicionar pontos"

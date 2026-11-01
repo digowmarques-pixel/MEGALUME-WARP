@@ -126,7 +126,8 @@ bool Workspace::editMask(Mask &m, int &point, const std::function<ImVec2(Vec2)> 
       point = nearIdx;
       dragging_ = true;
       dragKind_ = base;
-    } else if (io.KeyCtrl && n >= 3 && pointInPolygon(mouse, maskOutline(m))) { // Ctrl+drag: the whole mask
+    } else if ((io.KeyCtrl || !maskAddPoints) && n >= 3 && pointInPolygon(mouse, maskOutline(m))) {
+      // Drag inside the mask moves all of it ("Adicionar pontos" off; Ctrl+drag always).
       dragging_ = true;
       dragKind_ = base + 1;
       dragLast_ = mouse;
@@ -728,6 +729,37 @@ void Workspace::drawCanvasOverlay(App &app, ImDrawList *dl, ImVec2 origin, float
       break;
     }
     case Tool::Mask: {
+      // A click on a mask selects it (the topmost one, of this layer or of
+      // another layer of the canvas), unless it is a point of the mask being
+      // edited or "Adicionar pontos" is drawing the current one.
+      if (clicked && !io.KeyAlt) {
+        bool onCurrentPoint = false;
+        if (app.sel.mask >= 0 && app.sel.mask < int(sel->masks.size()))
+          for (const Vec2 &pt : sel->masks[size_t(app.sel.mask)].points)
+            if (dist(mouse, toScreen(pt)) < kPick) onCurrentPoint = true;
+        const bool drawing = maskAddPoints && app.sel.mask >= 0 && app.sel.mask < int(sel->masks.size());
+        if (!onCurrentPoint && !drawing) {
+          auto hit = [&](Layer &l) {
+            for (int mi = int(l.masks.size()) - 1; mi >= 0; --mi) {
+              const Mask &mk = l.masks[size_t(mi)];
+              if (mk.points.size() >= 3 && pointInPolygon(mc, maskOutline(mk))) return mi;
+            }
+            return -1;
+          };
+          int mi = hit(*sel);
+          Layer *owner = mi >= 0 ? sel : nullptr;
+          if (!owner)
+            for (auto it = p.layers.rbegin(); it != p.layers.rend() && !owner; ++it)
+              if (&*it != sel && it->visible && it->canvasId == viewCanvas && (mi = hit(*it)) >= 0) owner = &*it;
+          if (owner && (owner != sel || mi != app.sel.mask)) {
+            app.sel.layerId = owner->id;
+            app.sel.mask = mi;
+            app.sel.maskPoint = -1;
+            app.sel.inspector = Inspector::Layer;
+            break; // selected; dragging it starts with the next click
+          }
+        }
+      }
       if (app.sel.mask < 0 || app.sel.mask >= int(sel->masks.size())) {
         if (clicked && maskAddPoints) { // first click creates a mask
           Mask m;
@@ -893,6 +925,25 @@ void Workspace::drawOutputOverlay(App &app, ImDrawList *dl, ImVec2 origin, ImVec
   }
 
   if (tool == Tool::Mask) {
+    // A click on another output mask selects it (topmost first).
+    if (clicked && !io.KeyAlt && !(maskAddPoints && app.sel.outMask >= 0 && app.sel.outMask < int(o->masks.size()))) {
+      bool onCurrentPoint = false;
+      if (app.sel.outMask >= 0 && app.sel.outMask < int(o->masks.size()))
+        for (const Vec2 &pt : o->masks[size_t(app.sel.outMask)].points)
+          if (dist(io.MousePos, toScreen(pt)) < kPick) onCurrentPoint = true;
+      if (!onCurrentPoint)
+        for (int mi = int(o->masks.size()) - 1; mi >= 0; --mi) {
+          const Mask &mk = o->masks[size_t(mi)];
+          if (mk.points.size() >= 3 && pointInPolygon(mn, maskOutline(mk))) {
+            if (mi != app.sel.outMask) {
+              app.sel.outMask = mi;
+              app.sel.outMaskPoint = -1;
+              return;
+            }
+            break;
+          }
+        }
+    }
     if (app.sel.outMask < 0 || app.sel.outMask >= int(o->masks.size())) {
       if (!clicked || !maskAddPoints) return;
       Mask m;
