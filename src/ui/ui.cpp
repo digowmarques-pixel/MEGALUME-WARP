@@ -2906,7 +2906,7 @@ void Ui::maskList(App &app, std::vector<Mask> &masks, int &sel, int &selPoint, V
   if (ImGui::SmallButton(T("Tudo reto"))) { m.tanIn.clear(); m.tanOut.clear(); app.edited(); }
   ImGui::SameLine();
   if (ImGui::SmallButton(T("Limpar pontos"))) { m.points.clear(); m.tanIn.clear(); m.tanOut.clear(); selPoint = -1; app.edited(); }
-  ImGui::TextDisabled("%s", T("Alt+clique num ponto: curva / canto. Arraste as alças (Shift: só uma). Shift ao arrastar um ponto: linha reta. Ctrl+arraste: a máscara inteira."));
+  ImGui::TextDisabled("%s", T("Alt+clique num ponto: curva / canto. Arraste as alças (Shift: só uma). Shift ao arrastar um ponto: linha reta. Arraste dentro: a máscara inteira (com Adicionar pontos ligado: Ctrl+arraste)."));
   ImGui::PopID();
 }
 

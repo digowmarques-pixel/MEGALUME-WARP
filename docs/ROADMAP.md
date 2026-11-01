@@ -95,6 +95,11 @@ Ordem pensada para **videomapping** e **instalações interativas**.
 - *Seek* preciso de vídeo e áudio (também por OSC: `/lumen/layer/<l>/time`)
 - Testes de integração no CI (`scripts/test-integration.sh`)
 
+## ✅ v0.10.40
+- **Mover a máscara sem tecla**: com "Adicionar pontos" desligado, arrastar dentro da máscara move
+  ela inteira (arrastar um ponto move só o ponto; Shift: linha reta). Com "Adicionar pontos"
+  ligado o clique cria pontos e o mover é Ctrl+arraste
+
 ## ✅ v0.10.39
 - **Mais contraste no tema**: painéis mais escuros, campos quase pretos (afundados), botões
   claros com contorno mais visível — botão, campo e fundo bem diferentes
