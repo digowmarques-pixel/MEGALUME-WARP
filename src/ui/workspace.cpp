@@ -324,7 +324,8 @@ void Workspace::draw(App &app, ImVec2 size) {
                          T("Arraste os pontos da malha para curvar a imagem · duplo clique adiciona linha e coluna"),
                          T("Clique adiciona ponto · arraste move (Shift: linha reta) · botão direito apaga · Alt+clique: curva · arraste dentro: move a máscara (com Adicionar pontos ligado: Ctrl+arraste)"),
                          T("LED: clique numa fita · arraste os cantos ou o meio para posicionar sobre a imagem"),
-                         T("Arraste os cantos para mudar o tamanho (Shift: livre) · os lados esticam · o meio move")};
+                         T("Arraste os cantos para mudar o tamanho (Shift: livre) · os lados esticam · o meio move"),
+                         T("Mão: arraste para mover a vista (nada é editado) · roda do mouse: zoom")};
   if (float hw = ImGui::GetContentRegionAvail().x; hw > 60) {
     ImVec2 at = ImGui::GetCursorScreenPos();
     ImGui::Dummy({hw, ImGui::GetTextLineHeight()});
@@ -385,7 +386,8 @@ void Workspace::draw(App &app, ImVec2 size) {
     pan_.y = m.y - (m.y - pan_.y) * (zoom_ / old);
   }
   bool panning = ImGui::IsMouseDragging(ImGuiMouseButton_Middle) ||
-                 (io.KeyAlt && ImGui::IsMouseDragging(ImGuiMouseButton_Left));
+                 ((io.KeyAlt || tool == Tool::Hand) && ImGui::IsMouseDragging(ImGuiMouseButton_Left));
+  if (tool == Tool::Hand && hovered) ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
   if (ImGui::IsItemActive() && panning) {
     pan_.x += io.MouseDelta.x;
     pan_.y += io.MouseDelta.y;
@@ -419,7 +421,7 @@ void Workspace::drawCanvasOverlay(App &app, ImDrawList *dl, ImVec2 origin, float
   auto toScreen = [&](Vec2 v) { return ImVec2{origin.x + v.x * scale, origin.y + v.y * scale}; };
   auto toCanvas = [&](ImVec2 s) { return Vec2{(s.x - origin.x) / scale, (s.y - origin.y) / scale}; };
   bool hovered = ImGui::IsItemHovered();
-  bool clicked = hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !io.KeyAlt;
+  bool clicked = hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !io.KeyAlt && tool != Tool::Hand;
   ImVec2 mouse = io.MousePos;
   Vec2 mc = toCanvas(mouse);
 
@@ -470,11 +472,19 @@ void Workspace::drawCanvasOverlay(App &app, ImDrawList *dl, ImVec2 origin, float
 
   // ---- selection by click (Select tool, or clicking outside the current layer)
   auto pickLayer = [&](Vec2 c, int &sliceOut) -> Layer * {
+    // The slice already selected wins when it is under the click: a copy on
+    // top of its original (Duplicar) can then be dragged away.
+    if (Layer *cur = p.layer(app.sel.layerId); cur && cur->visible && cur->canvasId == viewCanvas &&
+        app.sel.slice >= 0 && app.sel.slice < int(cur->slices.size()) &&
+        pointInPolygon(c, warpOutline(transformedWarp(*cur, cur->slices[size_t(app.sel.slice)])))) {
+      sliceOut = app.sel.slice;
+      return cur;
+    }
     for (auto &l : p.layers) { // front-most first
       if (!l.visible || l.canvasId != viewCanvas) continue;
-      for (size_t si = 0; si < l.slices.size(); ++si)
-        if (pointInPolygon(c, warpOutline(transformedWarp(l, l.slices[si])))) {
-          sliceOut = int(si);
+      for (int si = int(l.slices.size()) - 1; si >= 0; --si) // the last slice is drawn on top
+        if (pointInPolygon(c, warpOutline(transformedWarp(l, l.slices[size_t(si)])))) {
+          sliceOut = si;
           return &l;
         }
     }
@@ -538,6 +548,7 @@ void Workspace::drawCanvasOverlay(App &app, ImDrawList *dl, ImVec2 origin, float
     };
 
     switch (tool) {
+    case Tool::Hand: break; // only moves the view
     case Tool::Led: break; // handled by drawLedOverlay
     case Tool::Select: {
       if (clicked) {
@@ -893,7 +904,7 @@ void Workspace::drawOutputOverlay(App &app, ImDrawList *dl, ImVec2 origin, ImVec
   ImGuiIO &io = ImGui::GetIO();
   auto toScreen = [&](Vec2 v) { return ImVec2{origin.x + v.x * size.x, origin.y + v.y * size.y}; };
   Vec2 mn{(io.MousePos.x - origin.x) / size.x, (io.MousePos.y - origin.y) / size.y};
-  bool clicked = ImGui::IsItemHovered() && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !io.KeyAlt;
+  bool clicked = ImGui::IsItemHovered() && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !io.KeyAlt && tool != Tool::Hand;
   if (dragging_ && !ImGui::IsMouseDown(ImGuiMouseButton_Left)) dragging_ = false;
   Warp &w = o->warp;
   // Magnet in projector space (0..1): the edges, the centre and the other points;
@@ -1044,6 +1055,7 @@ void Workspace::handleShortcuts(App &app) {
   if (ImGui::IsKeyPressed(ImGuiKey_M, false)) tool = Tool::Perspective;
   if (ImGui::IsKeyPressed(ImGuiKey_G, false)) tool = Tool::Mesh;
   if (ImGui::IsKeyPressed(ImGuiKey_K, false)) tool = Tool::Mask;
+  if (ImGui::IsKeyPressed(ImGuiKey_H, false)) tool = Tool::Hand;
   if (showLed && ImGui::IsKeyPressed(ImGuiKey_L, false)) tool = Tool::Led;
   if (ImGui::IsKeyPressed(ImGuiKey_F, false)) fitRequested = true;
 
@@ -1096,6 +1108,7 @@ void Workspace::handleShortcuts(App &app) {
   if (!l) return;
   Slice &s = l->slices[size_t(std::clamp(app.sel.slice, 0, int(l->slices.size()) - 1))];
   switch (tool) {
+  case Tool::Hand: return;
   case Tool::Led: break;
   case Tool::Select:
   case Tool::Scale: keepInPlace(*l, [&] { s.warp.translate(layerDelta(*l, d)); }); break;

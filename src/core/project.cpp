@@ -115,6 +115,14 @@ Vec2 maskCenter(const Mask &m) {
   return m.points.empty() ? c : c * (1.0f / float(m.points.size()));
 }
 
+void scaleMask(Mask &m, float factor) {
+  if (factor <= 0 || factor == 1 || m.points.empty()) return;
+  Vec2 c = maskCenter(m);
+  for (auto &p : m.points) p = c + (p - c) * factor;
+  for (auto &t : m.tanIn) t = t * factor;
+  for (auto &t : m.tanOut) t = t * factor;
+}
+
 std::vector<Vec2> maskOutline(const Mask &m, int steps) {
   std::vector<Vec2> out;
   size_t n = m.points.size();
@@ -760,13 +768,17 @@ static std::vector<Mask> masksFromJson(const json &arr) {
     m.feather = jm.value("feather", 0.0f);
     m.inverted = jm.value("inverted", false);
     m.opacity = jm.value("opacity", 1.0f);
-    m.scale = jm.value("scale", 1.0f);
+    // Older files kept a scale apart from the points: applied to them now.
+    float oldScale = jm.value("scale", 1.0f);
     for (auto &pt : jm.value("points", json::array())) m.points.push_back(vecFrom(pt));
     if (jm.contains("tanIn") && jm.contains("tanOut")) {
       for (auto &pt : jm["tanIn"]) m.tanIn.push_back(vecFrom(pt));
       for (auto &pt : jm["tanOut"]) m.tanOut.push_back(vecFrom(pt));
       m.ensureTangents();
     }
+    m.ensureTangents();
+    scaleMask(m, oldScale);
+    m.scale = 1;
     out.push_back(m);
   }
   return out;

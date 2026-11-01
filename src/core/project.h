@@ -139,6 +139,9 @@ struct Mask {
 // Polygon of a mask (bezier curves flattened, scale applied).
 std::vector<Vec2> maskOutline(const Mask &m, int stepsPerCurve = 16);
 Vec2 maskCenter(const Mask &m);
+// Scales the points and curve handles around the centre by `factor` (the
+// points then are where the mask is drawn, so they can be grabbed).
+void scaleMask(Mask &m, float factor);
 
 struct LayerFx {
   float brightness = 0;  // -1..1

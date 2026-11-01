@@ -22,7 +22,7 @@ namespace lumen {
 class App;
 struct OutputConfig;
 
-enum class Tool { Select, Perspective, Mesh, Mask, Led, Scale }; // values index the hints: only append
+enum class Tool { Select, Perspective, Mesh, Mask, Led, Scale, Hand }; // values index the hints: only append
 
 class Workspace {
 public:

@@ -13,7 +13,7 @@ um Arduino e o NDI Tools.
 
 ## 0. Instalação e diagnóstico
 
-- [ ] 0.1 Instale com `Lumen-0.10.41-setup.exe` (ou descompacte o .zip). O atalho
+- [ ] 0.1 Instale com `Lumen-0.10.42-setup.exe` (ou descompacte o .zip). O atalho
       aparece no Menu Iniciar, e arquivos `.lumen` abrem com o Lumen.
 - [ ] 0.2 Menu Iniciar → *Lumen (console de diagnóstico)*. O relatório abre no Bloco
       de Notas (também fica em `%APPDATA%\Lumen\diagnostico.txt`).
@@ -233,6 +233,10 @@ um Arduino e o NDI Tools.
 - [ ] 13.33 Vídeo segue o timecode: Cue 1 em 00:00:00:00 e Cue 2 em 00:00:30:00. Play no Reaper,
       pause: o vídeo pausa junto. Play: continua do mesmo ponto. Leve o cursor para 00:00:40:00 e
       dê play: entra a Cue 2, 10 s adiante. Volte para 00:00:05:00: Cue 1, em 5 s.
+- [ ] 13.67 Mapping → Duplicar uma fatia; selecione a cópia e, com Selecionar (V), arraste no workspace:
+      só a cópia anda. Ferramenta Mão (H): arrastar move a vista, nada muda no mapping.
+- [ ] 13.66 Máscara (da layer ou da saída): Escala 2 → dobra de tamanho e os pontos ficam nos cantos
+      do desenho; arraste um ponto: ele está onde aparece.
 - [ ] 13.65 Ferramenta Máscara (K): clique dentro de uma máscara: ela fica selecionada (pontos
       aparecem), mesmo de outra layer. Arraste por dentro, sem Ctrl: ela se move inteira.
 - [ ] 13.64 Máscara com "Adicionar pontos" desligado: arraste dentro dela (sem tecla): a máscara toda

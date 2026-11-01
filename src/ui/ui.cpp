@@ -1050,7 +1050,8 @@ void Ui::toolbar(App &app) {
   struct ToolButton { Tool tool; const char *label, *key; };
   const ToolButton tools[] = {{Tool::Select, T("Selecionar"), "V"}, {Tool::Scale, T("Escala"), "E"},
                               {Tool::Perspective, T("Perspectiva"), "M"}, {Tool::Mesh, T("Malha"), "G"},
-                              {Tool::Mask, T("Máscara"), "K"}, {Tool::Led, T("LED"), "L"}};
+                              {Tool::Mask, T("Máscara"), "K"}, {Tool::Led, T("LED"), "L"},
+                              {Tool::Hand, T("Mão"), "H"}};
   ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, {3, 6});
   ImGui::BeginDisabled(app.showLocked);
   for (const ToolButton &tb : tools) {
@@ -2889,7 +2890,17 @@ void Ui::maskList(App &app, std::vector<Mask> &masks, int &sel, int &selPoint, V
   helpMarker(T("Invertida: age fora da forma em vez de dentro."));
   if (ImGui::SliderFloat(T("Opacidade"), &m.opacity, 0, 1)) app.edited();
   if (ImGui::SliderFloat(T("Suavizar borda (px)"), &m.feather, 0, 300)) app.edited();
-  if (ImGui::DragFloat(T("Escala"), &m.scale, 0.005f, 0.001f, 20, "%.3f")) { m.scale = std::max(0.001f, m.scale); app.edited(); }
+  {
+    // Scales the points themselves (they stay on the drawn shape and can be
+    // grabbed): the field starts at 1 each time; drag it, or type a factor.
+    float f = 1;
+    if (ImGui::DragFloat(T("Escala"), &f, 0.005f, 0.05f, 20, "%.3f\xc3\x97")) { // ×
+      m.ensureTangents();
+      scaleMask(m, std::clamp(f, 0.05f, 20.0f));
+      app.edited();
+    }
+    ImGui::SetItemTooltip("%s", T("Arraste para aumentar/diminuir a máscara (os pontos vão junto), ou digite um fator: 2 = dobro"));
+  }
   ImGui::Text(T("%zu pontos"), m.points.size());
   ImGui::SameLine();
   if (ImGui::SmallButton(T("Tudo curvo"))) {

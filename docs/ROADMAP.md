@@ -95,6 +95,14 @@ Ordem pensada para **videomapping** e **instalações interativas**.
 - *Seek* preciso de vídeo e áudio (também por OSC: `/lumen/layer/<l>/time`)
 - Testes de integração no CI (`scripts/test-integration.sh`)
 
+## ✅ v0.10.42
+- **Escala da máscara leva os pontos junto** (layers e saídas): o campo Escala aplica o fator nos
+  pontos e nas curvas (começa em 1×: arraste ou digite 2 = dobro); projetos antigos com escala
+  separada são convertidos ao abrir, sem mudar o desenho
+- **Slice duplicado pode ser arrastado**: o slice selecionado (no painel ou no workspace) tem
+  preferência no clique; sem seleção, o de cima (o último) é o escolhido
+- **Ferramenta Mão** (H) no workspace: arrasta a vista sem editar nada
+
 ## ✅ v0.10.41
 - **Clicar numa máscara seleciona ela** (ferramenta Máscara): a de cima sob o clique, da layer
   selecionada ou de outra layer do canvas (a layer passa a ser a selecionada); também nas

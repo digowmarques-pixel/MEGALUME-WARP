@@ -970,3 +970,6 @@
 {"Nome do preset", "Preset name"},
 {"Preset de saída salvo: ", "Output preset saved: "},
 {"Não foi possível salvar o preset", "Could not save the preset"},
+{"Arraste para aumentar/diminuir a máscara (os pontos vão junto), ou digite um fator: 2 = dobro", "Drag to grow/shrink the mask (the points follow), or type a factor: 2 = double"},
+{"Mão: arraste para mover a vista (nada é editado) · roda do mouse: zoom", "Hand: drag to move the view (nothing is edited) · mouse wheel: zoom"},
+{"Mão", "Hand"},

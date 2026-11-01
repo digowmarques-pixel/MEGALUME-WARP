@@ -1007,6 +1007,26 @@ static void testComposeAccents() {
   CHECK(composeAccents("plain.mov") == "plain.mov");
 }
 
+static void testScaleMask() {
+  using namespace lumen;
+  Mask m;
+  m.points = {{0, 0}, {100, 0}, {100, 100}, {0, 100}};
+  m.ensureTangents();
+  m.tanOut[0] = {10, 0};
+  scaleMask(m, 2);
+  CHECK(m.points[0].x == -50 && m.points[2].x == 150 && m.tanOut[0].x == 20 && m.scale == 1);
+  // Old files: a scale apart from the points is applied to them on load.
+  Project p = Project::makeDefault();
+  Mask old;
+  old.points = {{0, 0}, {100, 0}, {100, 100}};
+  old.scale = 2;
+  p.layers[0].masks.push_back(old);
+  Project q;
+  CHECK(deserializeProject(serializeProject(p, ""), "", q));
+  const Mask &r = q.layers[0].masks[0];
+  CHECK(r.scale == 1 && std::fabs(r.points[0].x - (-200.0f / 3)) < 0.01f);
+}
+
 static void testConstrain45() {
   using namespace lumen;
   Vec2 a{100, 100};
@@ -1250,6 +1270,7 @@ int main() {
   testExpr();
   testComposeAccents();
   testConstrain45();
+  testScaleMask();
   testV09();
   testV08();
   testV07();
