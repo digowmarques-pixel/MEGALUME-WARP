@@ -95,6 +95,11 @@ Ordem pensada para **videomapping** e **instalações interativas**.
 - *Seek* preciso de vídeo e áudio (também por OSC: `/lumen/layer/<l>/time`)
 - Testes de integração no CI (`scripts/test-integration.sh`)
 
+## ✅ v0.10.44
+- **Máscaras: botão direito num ponto arredonda (bezier) / deixa reto** — não apaga mais.
+  Para apagar: selecione o ponto e use **Remover ponto** no painel da máscara (ou a tecla
+  Delete). O painel também tem **Arredondar (bezier) / Deixar reto** para o ponto selecionado
+
 ## ✅ v0.10.43
 - **Ícones de mão e de ímã** no lugar das palavras "Mão" e "Ímã" (barra do workspace e editor
   de slices das Saídas); desenhados pelo Lumen, iguais em qualquer Windows; o nome aparece ao

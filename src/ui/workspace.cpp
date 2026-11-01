@@ -100,7 +100,8 @@ bool Workspace::editMask(Mask &m, int &point, const std::function<ImVec2(Vec2)> 
     float d = dist(io.MousePos, toScreen(m.points[i]));
     if (d < bestD) { bestD = d; nearIdx = int(i); }
   }
-  if (altClick && nearIdx >= 0) {
+  // Right click (or Alt+click) on a point: curve (bezier) <-> corner.
+  if ((altClick || rclicked) && nearIdx >= 0) {
     size_t i = size_t(nearIdx);
     if (m.isBezier(i)) {
       m.tanIn[i] = m.tanOut[i] = {};
@@ -112,12 +113,8 @@ bool Workspace::editMask(Mask &m, int &point, const std::function<ImVec2(Vec2)> 
     point = nearIdx;
     changed = true;
   }
-  if (rclicked && nearIdx >= 0) {
-    m.points.erase(m.points.begin() + nearIdx);
-    m.tanIn.erase(m.tanIn.begin() + nearIdx);
-    m.tanOut.erase(m.tanOut.begin() + nearIdx);
-    point = -1;
-    changed = true;
+  if (rclicked) {
+    // handled above: points are removed with the button of the mask panel (or Delete)
   } else if (clicked) {
     if (nearHandle >= 0) {
       dragging_ = true;
@@ -322,7 +319,7 @@ void Workspace::draw(App &app, ImVec2 size) {
   const char *hints[] = {T("Clique para selecionar · arraste para mover a fatia (Shift: layer inteira)"),
                          T("Arraste os cantos para encaixar a imagem na superfície"),
                          T("Arraste os pontos da malha para curvar a imagem · duplo clique adiciona linha e coluna"),
-                         T("Clique adiciona ponto · arraste move (Shift: linha reta) · botão direito apaga · Alt+clique: curva · arraste dentro: move a máscara (com Adicionar pontos ligado: Ctrl+arraste)"),
+                         T("Clique adiciona ponto · arraste move (Shift: linha reta) · botão direito: arredondar / reto · Alt+clique: curva · arraste dentro: move a máscara (com Adicionar pontos ligado: Ctrl+arraste)"),
                          T("LED: clique numa fita · arraste os cantos ou o meio para posicionar sobre a imagem"),
                          T("Arraste os cantos para mudar o tamanho (Shift: livre) · os lados esticam · o meio move"),
                          T("Mão: arraste para mover a vista (nada é editado) · roda do mouse: zoom")};
@@ -968,7 +965,7 @@ void Workspace::drawOutputOverlay(App &app, ImDrawList *dl, ImVec2 origin, ImVec
     if (editMask(m, app.sel.outMaskPoint, toScreen, mn, std::max(1.0f, size.x), dl, pal::u32(pal::kMagenta), 30))
       app.edited();
     dl->AddText({origin.x + 8, origin.y + 8}, IM_COL32(255, 255, 255, 220),
-                maskAddPoints ? T("Máscara da saída: clique adiciona ponto, arraste move (Shift: linha reta), botão direito apaga, Alt+clique faz curva, arraste dentro move a máscara (com Adicionar pontos ligado: Ctrl+arraste).")
+                maskAddPoints ? T("Máscara da saída: clique adiciona ponto, arraste move (Shift: linha reta), botão direito: arredondar / reto, Alt+clique faz curva, arraste dentro move a máscara (com Adicionar pontos ligado: Ctrl+arraste).")
                               : T("Máscara da saída: arraste os pontos; ligue \"Adicionar pontos\" para criar novos."));
     return;
   }

@@ -662,7 +662,7 @@ void Ui::draw(App &app) {
       ImGui::BulletText("%s", T("G: malha (mesh warp)   K: máscara"));
       ImGui::BulletText("%s", T("Tab: próximo canto/ponto   Setas: ajuste fino (Shift = 10px)"));
       ImGui::BulletText("%s", T("Roda do mouse: zoom   Botão do meio / Alt+arrastar: mover a vista"));
-      ImGui::BulletText("%s", T("F: enquadrar   Máscara: com \"Adicionar pontos\" ligado, clique cria ponto; botão direito apaga"));
+      ImGui::BulletText("%s", T("F: enquadrar   Máscara: com \"Adicionar pontos\" ligado, clique cria ponto; botão direito: arredondar / reto"));
       sectionTitle(T("Projeto"));
       ImGui::BulletText("%s", T("Ctrl+N novo, Ctrl+O abrir, Ctrl+S salvar, Ctrl+Shift+S salvar como"));
       ImGui::BulletText("%s", T("Ctrl+Z desfazer, Ctrl+Y / Ctrl+Shift+Z refazer, Ctrl+I importar"));
@@ -2920,7 +2920,36 @@ void Ui::maskList(App &app, std::vector<Mask> &masks, int &sel, int &selPoint, V
   if (ImGui::SmallButton(T("Tudo reto"))) { m.tanIn.clear(); m.tanOut.clear(); app.edited(); }
   ImGui::SameLine();
   if (ImGui::SmallButton(T("Limpar pontos"))) { m.points.clear(); m.tanIn.clear(); m.tanOut.clear(); selPoint = -1; app.edited(); }
-  ImGui::TextDisabled("%s", T("Alt+clique num ponto: curva / canto. Arraste as alças (Shift: só uma). Shift ao arrastar um ponto: linha reta. Arraste dentro: a máscara inteira (com Adicionar pontos ligado: Ctrl+arraste)."));
+  // The selected point: curve or corner, and removing it.
+  if (selPoint >= 0 && selPoint < int(m.points.size())) {
+    m.ensureTangents();
+    const size_t i = size_t(selPoint);
+    ImGui::Text(T("Ponto %d"), selPoint + 1);
+    ImGui::SameLine();
+    bool curved = m.isBezier(i);
+    if (ImGui::SmallButton(curved ? T("Deixar reto") : T("Arredondar (bezier)"))) {
+      size_t n = m.points.size();
+      if (curved || n < 2) {
+        m.tanIn[i] = m.tanOut[i] = {};
+      } else {
+        Vec2 d = (m.points[(i + 1) % n] - m.points[(i + n - 1) % n]) * (1.0f / 6.0f);
+        m.tanIn[i] = d * -1.0f;
+        m.tanOut[i] = d;
+      }
+      app.edited();
+    }
+    ImGui::SameLine();
+    if (dangerButton(T("Remover ponto"))) {
+      m.points.erase(m.points.begin() + selPoint);
+      m.tanIn.erase(m.tanIn.begin() + selPoint);
+      m.tanOut.erase(m.tanOut.begin() + selPoint);
+      selPoint = -1;
+      app.edited();
+    }
+  } else {
+    ImGui::TextDisabled("%s", T("Clique num ponto para arredondar ou remover."));
+  }
+  ImGui::TextDisabled("%s", T("Botão direito (ou Alt+clique) num ponto: curva / canto. Arraste as alças (Shift: só uma). Shift ao arrastar um ponto: linha reta. Arraste dentro: a máscara inteira (com Adicionar pontos ligado: Ctrl+arraste)."));
   ImGui::PopID();
 }
 
