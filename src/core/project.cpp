@@ -1024,11 +1024,13 @@ std::string serializeProject(const Project &p, const std::string &baseDir) {
          {"blackLevel", toJson(o.blackLevel)},
          {"masks", masksToJson(o.masks)}, {"delay", o.delayFrames}, {"canvas", o.canvasId},
          {"spout", o.spoutName}, {"windowless", o.windowless}, {"ndi", o.ndiName}});
+    if (o.flipX || o.flipY) j["outputs"].back()["flip"] = {o.flipX, o.flipY};
     if (!o.slices.empty()) {
       json &jo = j["outputs"].back();
       for (auto &sl : o.slices)
         jo["slices"].push_back({{"name", sl.name}, {"enabled", sl.enabled},
-                                {"source", {sl.srcX, sl.srcY, sl.srcW, sl.srcH}}, {"warp", toJson(sl.warp)}});
+                                {"source", {sl.srcX, sl.srcY, sl.srcW, sl.srcH}}, {"warp", toJson(sl.warp)},
+                                {"flip", {sl.flipX, sl.flipY}}});
     }
   }
 
@@ -1409,6 +1411,10 @@ bool deserializeProject(const std::string &text, const std::string &baseDir, Pro
       }
       o.warp.setRect({0, 0}, {1, 1});
       if (jo.contains("warp")) fromJson(jo["warp"], o.warp);
+      if (jo.contains("flip") && jo["flip"].size() == 2) {
+        o.flipX = jo["flip"][0];
+        o.flipY = jo["flip"][1];
+      }
       for (auto &js : jo.value("slices", json::array())) {
         OutputSlice sl;
         sl.name = js.value("name", std::string("Slice"));
@@ -1419,6 +1425,10 @@ bool deserializeProject(const std::string &text, const std::string &baseDir, Pro
         }
         sl.warp.setRect({0, 0}, {1, 1});
         if (js.contains("warp")) fromJson(js["warp"], sl.warp);
+        if (js.contains("flip") && js["flip"].size() == 2) {
+          sl.flipX = js["flip"][0];
+          sl.flipY = js["flip"][1];
+        }
         o.slices.push_back(sl);
       }
       if (jo.contains("softEdge")) {

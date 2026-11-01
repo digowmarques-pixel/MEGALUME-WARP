@@ -486,7 +486,11 @@ void OutputManager::draw(const Project &p, const OutputConfig &o, int index,
   shader_.set("uTarget", float(w), float(h));
   shader_.set("uCanvas", 0);
   float cw = float(p.canvasWidth(o.canvasId)), ch = float(p.canvasHeight(o.canvasId));
-  shader_.set("uRect", o.srcX / cw, o.srcY / ch, o.srcW / cw, o.srcH / ch);
+  // Canvas region, mirrored by a negative size (the shader reads xy + uv * wh).
+  auto setRect = [&](float x, float y, float rw, float rh, bool fx, bool fy) {
+    shader_.set("uRect", (fx ? x + rw : x) / cw, (fy ? y + rh : y) / ch, (fx ? -rw : rw) / cw, (fy ? -rh : rh) / ch);
+  };
+  setRect(o.srcX, o.srcY, o.srcW, o.srcH, o.flipX, o.flipY);
   shader_.set("uSoft", o.softEdge.left, o.softEdge.right, o.softEdge.top, o.softEdge.bottom);
   float span[4][2];
   softEdgeSpans(p, o, span);
@@ -522,7 +526,7 @@ void OutputManager::draw(const Project &p, const OutputConfig &o, int index,
     drawWarp(o.warp);
   } else { // the real first slice is parked in slices[swap - 1]
     const OutputSlice &first = o.slices[size_t(swap - 1)];
-    shader_.set("uRect", first.srcX / cw, first.srcY / ch, first.srcW / cw, first.srcH / ch);
+    setRect(first.srcX, first.srcY, first.srcW, first.srcH, first.flipX, first.flipY);
     drawWarp(first.warp);
   }
   if (!o.slices.empty()) {
@@ -533,7 +537,7 @@ void OutputManager::draw(const Project &p, const OutputConfig &o, int index,
       float x = edited ? o.srcX : sl.srcX, y = edited ? o.srcY : sl.srcY;
       float sw = edited ? o.srcW : sl.srcW, sh = edited ? o.srcH : sl.srcH;
       if (!sl.enabled || sw <= 0 || sh <= 0) continue;
-      shader_.set("uRect", x / cw, y / ch, sw / cw, sh / ch);
+      setRect(x, y, sw, sh, edited ? o.flipX : sl.flipX, edited ? o.flipY : sl.flipY);
       drawWarp(edited ? o.warp : sl.warp);
     }
   }

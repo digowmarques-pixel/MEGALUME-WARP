@@ -888,67 +888,78 @@ void Workspace::drawOutputOverlay(App &app, ImDrawList *dl, ImVec2 origin, ImVec
     return;
   }
 
-  if (tool == Tool::Mesh) {
-    drawMeshGrid(dl, w, toScreen, pal::u32(pal::kCyan, 170));
+  // Perspective and mesh together (as in Resolume): the rings on the corners
+  // move the perspective, the squares move the mesh points (a square on a
+  // corner sits inside its ring; the square wins at its centre).
+  const float ringR = 16, squareR = 6;
+  drawMeshGrid(dl, w, toScreen, pal::u32(pal::kCyan, w.hasMesh() ? 170 : 90));
+  int hoverPoint = -1, hoverCorner = -1;
+  if (ImGui::IsItemHovered() && !dragging_) {
+    float best = squareR + 3;
     for (int r = 0; r < w.meshRows; ++r)
       for (int c = 0; c < w.meshCols; ++c)
-        handle(dl, toScreen(w.meshPointDest(c, r)), pal::u32(pal::kCyan),
-               app.sel.meshPoint == r * w.meshCols + c, true);
-    if (clicked) {
-      int best = -1;
-      float bestD = kPick;
-      for (int r = 0; r < w.meshRows; ++r)
-        for (int c = 0; c < w.meshCols; ++c) {
-          float d = dist(io.MousePos, toScreen(w.meshPointDest(c, r)));
-          if (d < bestD) { bestD = d; best = r * w.meshCols + c; }
-        }
-      if (best >= 0) { app.sel.meshPoint = best; dragging_ = true; dragKind_ = 7; }
-    }
-    if (dragging_ && dragKind_ == 7 && app.sel.meshPoint >= 0 && app.sel.meshPoint < int(w.mesh.size())) {
-      std::vector<float> xs = {0, 0.5f, 1}, ys = {0, 0.5f, 1};
-      const int pr = app.sel.meshPoint / w.meshCols, pc = app.sel.meshPoint % w.meshCols;
-      for (int r = 0; r < w.meshRows; ++r)
-        for (int c = 0; c < w.meshCols; ++c)
-          if ((r == pr) != (c == pc)) {
-            Vec2 q = w.meshPointDest(c, r);
-            xs.push_back(q.x);
-            ys.push_back(q.y);
-          }
-      w.mesh[size_t(app.sel.meshPoint)] = w.unmapPerspective(outputSnap(mn, xs, ys));
-      app.edited();
-    }
-    if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
-      Vec2 uv;
-      if (w.unmap(mn, uv) && w.insertLines(uv.x, uv.y)) {
-        dragging_ = false;
-        app.sel.meshPoint = -1;
-        app.edited();
-      }
-    }
-  } else {
-    for (int c = 0; c < 4; ++c) handle(dl, toScreen(w.corners[size_t(c)]), pal::u32(pal::kCyan), app.sel.corner == c);
-    if (clicked) {
-      int best = -1;
-      float bestD = kPick;
-      for (int c = 0; c < 4; ++c) {
-        float d = dist(io.MousePos, toScreen(w.corners[size_t(c)]));
-        if (d < bestD) { bestD = d; best = c; }
-      }
-      if (best >= 0) { app.sel.corner = best; dragging_ = true; dragKind_ = 6; }
-    }
-    if (dragging_ && dragKind_ == 6 && app.sel.corner >= 0) {
-      std::vector<float> xs = {0, 0.5f, 1}, ys = {0, 0.5f, 1};
+        if (float d = dist(io.MousePos, toScreen(w.meshPointDest(c, r))); d < best) { best = d; hoverPoint = r * w.meshCols + c; }
+    if (hoverPoint < 0) {
+      float bestC = ringR + 3;
       for (int c = 0; c < 4; ++c)
-        if (c != app.sel.corner) {
-          xs.push_back(w.corners[size_t(c)].x);
-          ys.push_back(w.corners[size_t(c)].y);
+        if (float d = dist(io.MousePos, toScreen(w.corners[size_t(c)])); d < bestC) { bestC = d; hoverCorner = c; }
+    }
+  }
+  for (int c = 0; c < 4; ++c) {
+    bool hot = c == hoverCorner || (dragging_ && dragKind_ == 6 && app.sel.corner == c);
+    ImVec2 q = toScreen(w.corners[size_t(c)]);
+    dl->AddCircleFilled(q, ringR, pal::u32(pal::kCyan, hot ? 90 : 30));
+    dl->AddCircle(q, ringR, hot ? IM_COL32(255, 255, 255, 255) : pal::u32(pal::kCyan), 0, hot ? 3.0f : 2.0f);
+  }
+  for (int r = 0; r < w.meshRows; ++r)
+    for (int c = 0; c < w.meshCols; ++c) {
+      int i = r * w.meshCols + c;
+      bool hot = i == hoverPoint || (dragging_ && dragKind_ == 7 && app.sel.meshPoint == i);
+      ImVec2 q = toScreen(w.meshPointDest(c, r));
+      float hr = hot ? squareR + 1 : squareR - 1;
+      dl->AddRectFilled({q.x - hr, q.y - hr}, {q.x + hr, q.y + hr}, hot ? IM_COL32(255, 255, 255, 255) : IM_COL32(20, 20, 20, 230));
+      dl->AddRect({q.x - hr, q.y - hr}, {q.x + hr, q.y + hr}, pal::u32(pal::kCyan), 0, 0, 1.5f);
+    }
+  if (hoverPoint >= 0 || hoverCorner >= 0) ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeAll);
+  if (hoverCorner >= 0) ImGui::SetItemTooltip("%s", T("Bola: perspectiva (cantos)"));
+  else if (hoverPoint >= 0) ImGui::SetItemTooltip("%s", T("Quadrado: ponto da malha (duplo clique na imagem adiciona linha e coluna)"));
+  if (clicked) {
+    if (hoverPoint >= 0) { app.sel.meshPoint = hoverPoint; app.sel.corner = -1; dragging_ = true; dragKind_ = 7; }
+    else if (hoverCorner >= 0) { app.sel.corner = hoverCorner; app.sel.meshPoint = -1; dragging_ = true; dragKind_ = 6; }
+  }
+  if (dragging_ && dragKind_ == 7 && app.sel.meshPoint >= 0 && app.sel.meshPoint < int(w.mesh.size())) {
+    std::vector<float> xs = {0, 0.5f, 1}, ys = {0, 0.5f, 1};
+    const int pr = app.sel.meshPoint / w.meshCols, pc = app.sel.meshPoint % w.meshCols;
+    for (int r = 0; r < w.meshRows; ++r)
+      for (int c = 0; c < w.meshCols; ++c)
+        if ((r == pr) != (c == pc)) {
+          Vec2 q = w.meshPointDest(c, r);
+          xs.push_back(q.x);
+          ys.push_back(q.y);
         }
-      w.corners[size_t(app.sel.corner)] = outputSnap(mn, xs, ys);
+    w.mesh[size_t(app.sel.meshPoint)] = w.unmapPerspective(outputSnap(mn, xs, ys));
+    app.edited();
+  }
+  if (dragging_ && dragKind_ == 6 && app.sel.corner >= 0) {
+    std::vector<float> xs = {0, 0.5f, 1}, ys = {0, 0.5f, 1};
+    for (int c = 0; c < 4; ++c)
+      if (c != app.sel.corner) {
+        xs.push_back(w.corners[size_t(c)].x);
+        ys.push_back(w.corners[size_t(c)].y);
+      }
+    w.corners[size_t(app.sel.corner)] = outputSnap(mn, xs, ys);
+    app.edited();
+  }
+  if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
+    Vec2 uv;
+    if (w.unmap(mn, uv) && w.insertLines(uv.x, uv.y)) {
+      dragging_ = false;
+      app.sel.meshPoint = -1;
       app.edited();
     }
   }
   dl->AddText({origin.x + 8, origin.y + 8}, IM_COL32(255, 255, 255, 220),
-              T("Warp da saída: cantos (M) ou malha (G). Ajusta a projeção inteira."));
+              T("Bola: perspectiva · quadrado: malha · duplo clique adiciona linha e coluna"));
 }
 
 void Workspace::handleShortcuts(App &app) {

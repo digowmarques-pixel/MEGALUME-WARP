@@ -313,6 +313,7 @@ struct OutputSlice {
   bool enabled = true;
   float srcX = 0, srcY = 0, srcW = 1920, srcH = 1080; // canvas region (px)
   Warp warp;                                          // output-normalised space (0..1)
+  bool flipX = false, flipY = false;                  // mirrored on the projector
 };
 
 struct OutputConfig {
@@ -323,6 +324,7 @@ struct OutputConfig {
   int winX = 100, winY = 100, winW = 960, winH = 540;
   float srcX = 0, srcY = 0, srcW = 1920, srcH = 1080; // canvas region (px)
   Warp warp;                      // output-normalised space (0..1)
+  bool flipX = false, flipY = false; // Slice 1 mirrored on the projector
   SoftEdge softEdge;
   TestPattern pattern = TestPattern::None;
   OutputColor color;

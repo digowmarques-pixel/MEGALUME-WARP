@@ -873,7 +873,9 @@ static void testV09() {
     sl.enabled = false;
     sl.srcX = 960; sl.srcY = 10; sl.srcW = 960; sl.srcH = 540;
     sl.warp.setRect({0.5f, 0.1f}, {0.4f, 0.3f});
+    sl.flipX = true;
     ps.outputs[0].slices.push_back(sl);
+    ps.outputs[0].flipY = true;
     Project qs;
     CHECK(deserializeProject(serializeProject(ps, ""), "", qs));
     CHECK(qs.outputs.size() == ps.outputs.size() && qs.outputs[0].slices.size() == 1);
@@ -881,6 +883,7 @@ static void testV09() {
     CHECK(r.name == "Teto" && !r.enabled && r.srcX == 960 && r.srcY == 10 && r.srcW == 960 && r.srcH == 540);
     CHECK(std::fabs(r.warp.corners[2].x - 0.9f) < 1e-5f && std::fabs(r.warp.corners[2].y - 0.4f) < 1e-5f);
     CHECK(qs.outputs[0].editSwap == 0); // never saved
+    CHECK(r.flipX && !r.flipY && qs.outputs[0].flipY && !qs.outputs[0].flipX);
   }
 
   // Timecode: labels <-> seconds (with drop frame).

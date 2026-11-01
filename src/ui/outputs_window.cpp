@@ -55,6 +55,44 @@ void Ui::outputSliceBar(App &app, OutputConfig &o) {
       if (mappingTab_ >= 2) mappingTab_ = 1; // slices are edited in Slice and Mapping
     }
     if (on) ImGui::PopStyleColor();
+    // Right click: duplicate, order (extra slices are drawn in list order, over Slice 1), remove.
+    if (ImGui::BeginPopupContextItem("##slctx")) {
+      if (ImGui::MenuItem(T("Duplicar"))) {
+        OutputSlice copy;
+        if (k == 0) {
+          copy.srcX = o.srcX; copy.srcY = o.srcY; copy.srcW = o.srcW; copy.srcH = o.srcH;
+          copy.warp = o.warp; copy.flipX = o.flipX; copy.flipY = o.flipY;
+        } else {
+          copy = o.slices[size_t(k - 1)];
+        }
+        copy.name = "Slice " + std::to_string(o.slices.size() + 2);
+        copy.enabled = true;
+        o.slices.insert(o.slices.begin() + k, copy); // right after the original
+        outputSlice_ = k + 1;
+        app.edited();
+      }
+      if (k > 0) {
+        if (ImGui::MenuItem(T("Subir"), nullptr, false, k > 1)) {
+          std::swap(o.slices[size_t(k - 1)], o.slices[size_t(k - 2)]);
+          outputSlice_ = k - 1;
+          app.edited();
+        }
+        if (ImGui::MenuItem(T("Descer"), nullptr, false, k < int(o.slices.size()))) {
+          std::swap(o.slices[size_t(k - 1)], o.slices[size_t(k)]);
+          outputSlice_ = k + 1;
+          app.edited();
+        }
+        if (ImGui::MenuItem(T("Remover##slctx"))) {
+          o.slices.erase(o.slices.begin() + (k - 1));
+          outputSlice_ = 0;
+          app.edited();
+          ImGui::EndPopup();
+          ImGui::PopID();
+          break;
+        }
+      }
+      ImGui::EndPopup();
+    }
     ImGui::PopID();
   }
   if (ImGui::SmallButton(T("+ Slice"))) {
@@ -339,6 +377,8 @@ void Ui::outputsWindow(App &app) {
       std::swap(sel->srcW, swapped->srcW);
       std::swap(sel->srcH, swapped->srcH);
       std::swap(sel->warp, swapped->warp);
+      std::swap(sel->flipX, swapped->flipX);
+      std::swap(sel->flipY, swapped->flipY);
       sel->editSwap = sel->editSwap ? 0 : outputSlice_;
     };
     if (swapped) swapSlice();
@@ -363,8 +403,11 @@ void Ui::outputsWindow(App &app) {
       av.y -= ImGui::GetFrameHeightWithSpacing() * 1.5f;
       float scw = float(p.canvasWidth(sel->canvasId)), sch = float(p.canvasHeight(sel->canvasId));
       // A window shrunk to nothing must not give a zero-sized (asserting) button.
-      float k = std::max(0.01f, std::min(av.x / scw, av.y / sch));
-      ImVec2 o0 = ImGui::GetCursorScreenPos();
+      // A margin around the picture, so handles on the canvas edges can be grabbed whole.
+      const float M = 18;
+      float k = std::max(0.01f, std::min((av.x - 2 * M) / scw, (av.y - 2 * M) / sch));
+      ImVec2 c0 = ImGui::GetCursorScreenPos();
+      ImVec2 o0{c0.x + M + std::max(0.0f, (av.x - 2 * M - scw * k) * 0.5f), c0.y + M}; // centred in the page
       ImVec2 o1{o0.x + scw * k, o0.y + sch * k};
       ImDrawList *dl = ImGui::GetWindowDrawList();
       dl->AddImage(tex(app.engine.canvasTexture(sel->canvasId)), o0, o1, {0, 1}, {1, 0});
@@ -389,42 +432,81 @@ void Ui::outputsWindow(App &app) {
       ImVec2 rb{o0.x + (sel->srcX + sel->srcW) * k, o0.y + (sel->srcY + sel->srcH) * k};
       dl->AddRectFilled(ra, rb, IM_COL32(255, 196, 0, 40));
       dl->AddRect(ra, rb, IM_COL32(255, 196, 0, 255), 0, 0, 2);
-      ImGui::InvisibleButton("##slice", {o1.x - o0.x, o1.y - o0.y});
-      static int dragCorner = -2; // -2 none, -1 move, 0 tl, 1 br
+      ImGui::SetCursorScreenPos({o0.x - M, o0.y - M});
+      ImGui::InvisibleButton("##slice", {o1.x - o0.x + 2 * M, o1.y - o0.y + 2 * M});
+      static int dragCorner = -2; // -2 none, -1 move, 0..3 corners (tl tr br bl), 4..7 edges (t r b l)
       static int dragPoint = -1;  // warping: mesh point being dragged
       ImGuiIO &io = ImGui::GetIO();
       Warp &w = sel->warp;
       auto uvScreen = [&](Vec2 uv) { return ImVec2{ra.x + uv.x * (rb.x - ra.x), ra.y + uv.y * (rb.y - ra.y)}; };
+      // Rectangle handles (squares): corners and edge middles. With warping on,
+      // a mesh point on the same spot is the ring around the square (as in
+      // Resolume): the square resizes the slice, the ring moves the point.
+      const float off = 0.0f;
+      const float mx = (ra.x + rb.x) * 0.5f, my = (ra.y + rb.y) * 0.5f;
+      const ImVec2 hp[8] = {{ra.x - off, ra.y - off}, {rb.x + off, ra.y - off}, {rb.x + off, rb.y + off},
+                            {ra.x - off, rb.y + off}, {mx, ra.y - off}, {rb.x + off, my},
+                            {mx, rb.y + off}, {ra.x - off, my}};
+      auto dist = [&](ImVec2 q) { return std::hypot(io.MousePos.x - q.x, io.MousePos.y - q.y); };
+      const float squareR = 7, ringR = 16;
+      // Rings: the warping points; with warping off, the 4 corners (dragging one
+      // switches warping on). uv of the corners in uvMesh order is found by value.
+      std::vector<Vec2> rings;
       if (sliceWarpOn) {
         w.ensureUvMesh();
+        rings = w.uvMesh;
+      } else {
+        rings = {{0, 0}, {1, 0}, {1, 1}, {0, 1}};
+      }
+      // What is under the mouse: a square (its centre), else a ring, else the inside.
+      int hoverHandle = -1, hoverPoint = -1;
+      if (ImGui::IsItemHovered() || ImGui::IsItemActive()) {
+        float best = squareR + 2;
+        for (int h = 0; h < 8; ++h)
+          if (float d = dist(hp[h]); d < (h >= 4 ? 12.0f : best)) { best = d; hoverHandle = h; }
+        if (hoverHandle < 0) {
+          float bestP = ringR + 2;
+          for (size_t i = 0; i < rings.size(); ++i)
+            if (float d = dist(uvScreen(rings[i])); d < bestP) { bestP = d; hoverPoint = int(i); }
+        }
+      }
+      if (sliceWarpOn) {
         for (int r = 0; r < w.meshRows; ++r)
           for (int c = 0; c < w.meshCols; ++c) {
             if (c + 1 < w.meshCols) dl->AddLine(uvScreen(w.uvAt(c, r)), uvScreen(w.uvAt(c + 1, r)), IM_COL32(255, 120, 0, 255), 2);
             if (r + 1 < w.meshRows) dl->AddLine(uvScreen(w.uvAt(c, r)), uvScreen(w.uvAt(c, r + 1)), IM_COL32(255, 120, 0, 255), 2);
           }
-        for (auto &uv : w.uvMesh) dl->AddCircle(uvScreen(uv), 7, IM_COL32(255, 255, 255, 255), 0, 2);
-        if (ImGui::IsItemClicked()) {
-          dragPoint = -1;
-          float best = 12;
+      }
+      for (size_t i = 0; i < rings.size(); ++i) {
+        bool hot = int(i) == hoverPoint || (sliceWarpOn && int(i) == dragPoint);
+        ImVec2 q = uvScreen(rings[i]);
+        ImU32 tone = sliceWarpOn ? IM_COL32(255, 140, 40, 255) : IM_COL32(255, 196, 0, 255);
+        dl->AddCircleFilled(q, ringR, hot ? IM_COL32(255, 160, 60, 110) : IM_COL32(255, 160, 60, 35));
+        dl->AddCircle(q, ringR, hot ? IM_COL32(255, 255, 255, 255) : tone, 0, hot ? 3.0f : 2.0f);
+      }
+      if (hoverPoint >= 0)
+        ImGui::SetItemTooltip("%s", T("Bola: deforma o canto (warping) · quadrado: muda o tamanho"));
+      static float startRect[4];
+      static ImVec2 startMouse;
+      if (ImGui::IsItemClicked()) {
+        if (hoverPoint >= 0 && !sliceWarpOn) { // a corner ring: warping starts at that corner
+          Vec2 uv = rings[size_t(hoverPoint)];
+          sliceWarpOn = true;
+          w.ensureUvMesh();
+          hoverPoint = -1;
+          float bestUv = 1e9f;
           for (size_t i = 0; i < w.uvMesh.size(); ++i) {
-            ImVec2 q = uvScreen(w.uvMesh[i]);
-            float d = std::hypot(io.MousePos.x - q.x, io.MousePos.y - q.y);
-            if (d < best) { best = d; dragPoint = int(i); }
+            float d = std::fabs(w.uvMesh[i].x - uv.x) + std::fabs(w.uvMesh[i].y - uv.y);
+            if (d < bestUv) { bestUv = d; hoverPoint = int(i); }
           }
         }
-        if (!ImGui::IsMouseDown(ImGuiMouseButton_Left)) dragPoint = -1;
-        if (dragPoint >= 0 && dragPoint < int(w.uvMesh.size()) && ImGui::IsItemActive()) {
-          float sw = std::max(1.0f, rb.x - ra.x), sh = std::max(1.0f, rb.y - ra.y);
-          w.uvMesh[size_t(dragPoint)] = {std::clamp((io.MousePos.x - ra.x) / sw, 0.0f, 1.0f),
-                                         std::clamp((io.MousePos.y - ra.y) / sh, 0.0f, 1.0f)};
-          app.edited();
-        }
-      }
-      if (ImGui::IsItemClicked() && dragPoint < 0) {
-        auto near = [&](ImVec2 q) { return std::hypot(io.MousePos.x - q.x, io.MousePos.y - q.y) < 12; };
-        dragCorner = near(ra) ? 0 : near(rb) ? 1
+        dragPoint = hoverPoint;
+        dragCorner = hoverHandle >= 0 ? hoverHandle
+                   : hoverPoint >= 0 ? -2
                    : (io.MousePos.x >= ra.x && io.MousePos.x <= rb.x && io.MousePos.y >= ra.y && io.MousePos.y <= rb.y) ? -1 : -2;
-        if (dragCorner == -2) // a click on another projector's slice selects that projector
+        startRect[0] = sel->srcX; startRect[1] = sel->srcY; startRect[2] = sel->srcW; startRect[3] = sel->srcH;
+        startMouse = io.MousePos;
+        if (dragCorner == -2 && dragPoint < 0) // a click on another projector's slice selects that projector
           for (auto &o : p.outputs) {
             if (o.id == sel->id || o.canvasId != sel->canvasId) continue;
             float cx = (io.MousePos.x - o0.x) / k, cy = (io.MousePos.y - o0.y) / k;
@@ -434,17 +516,81 @@ void Ui::outputsWindow(App &app) {
             }
           }
       }
-      if (!ImGui::IsMouseDown(ImGuiMouseButton_Left)) dragCorner = -2;
-      if (dragCorner != -2 && ImGui::IsItemActive() && (io.MouseDelta.x != 0 || io.MouseDelta.y != 0)) {
-        float dx = io.MouseDelta.x / k, dy = io.MouseDelta.y / k;
-        if (dragCorner == -1) { sel->srcX += dx; sel->srcY += dy; }
-        else if (dragCorner == 0) { sel->srcX += dx; sel->srcY += dy; sel->srcW -= dx; sel->srcH -= dy; }
-        else { sel->srcW += dx; sel->srcH += dy; }
-        sel->srcW = std::max(8.0f, sel->srcW);
-        sel->srcH = std::max(8.0f, sel->srcH);
+      if (!ImGui::IsMouseDown(ImGuiMouseButton_Left)) { dragCorner = -2; dragPoint = -1; }
+      // Cursor: arrows on a handle or point, a hand inside the slice.
+      if (hoverHandle >= 0 || hoverPoint >= 0 || dragCorner >= 0 || dragPoint >= 0)
+        ImGui::SetMouseCursor(hoverHandle == 0 || hoverHandle == 2 || dragCorner == 0 || dragCorner == 2 ? ImGuiMouseCursor_ResizeNWSE
+                              : hoverHandle == 1 || hoverHandle == 3 || dragCorner == 1 || dragCorner == 3 ? ImGuiMouseCursor_ResizeNESW
+                              : hoverHandle == 4 || hoverHandle == 6 || dragCorner == 4 || dragCorner == 6 ? ImGuiMouseCursor_ResizeNS
+                              : hoverHandle == 5 || hoverHandle == 7 || dragCorner == 5 || dragCorner == 7 ? ImGuiMouseCursor_ResizeEW
+                                                                                                            : ImGuiMouseCursor_ResizeAll);
+      else if (ImGui::IsItemHovered() && io.MousePos.x >= ra.x && io.MousePos.x <= rb.x && io.MousePos.y >= ra.y && io.MousePos.y <= rb.y)
+        ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+      if (dragPoint >= 0 && dragPoint < int(w.uvMesh.size()) && ImGui::IsItemActive()) {
+        float sw = std::max(1.0f, rb.x - ra.x), sh = std::max(1.0f, rb.y - ra.y);
+        w.uvMesh[size_t(dragPoint)] = {std::clamp((io.MousePos.x - ra.x) / sw, 0.0f, 1.0f),
+                                       std::clamp((io.MousePos.y - ra.y) / sh, 0.0f, 1.0f)};
         app.edited();
       }
-      for (ImVec2 q : {ra, rb}) dl->AddRectFilled({q.x - 5, q.y - 5}, {q.x + 5, q.y + 5}, IM_COL32(255, 196, 0, 255));
+      if (dragCorner != -2 && ImGui::IsItemActive() && ImGui::IsMouseDragging(ImGuiMouseButton_Left, 0)) {
+        // From where the drag started (no drift), canvas px.
+        float dx = (io.MousePos.x - startMouse.x) / k, dy = (io.MousePos.y - startMouse.y) / k;
+        float x0 = startRect[0], y0 = startRect[1], x1 = x0 + startRect[2], y1 = y0 + startRect[3];
+        // Magnet: canvas edges and centre, the other projectors' slices.
+        std::vector<float> tx = {0, scw * 0.5f, scw}, ty = {0, sch * 0.5f, sch};
+        for (auto &o : p.outputs)
+          if (o.id != sel->id && o.canvasId == sel->canvasId) {
+            tx.insert(tx.end(), {o.srcX, o.srcX + o.srcW});
+            ty.insert(ty.end(), {o.srcY, o.srcY + o.srcH});
+          }
+        const bool magnet = workspace.snap != io.KeyCtrl;
+        auto snapTo = [&](float v, const std::vector<float> &ts) {
+          if (!magnet) return v;
+          float bestD = 10 / k, out = v;
+          for (float t : ts)
+            if (std::fabs(t - v) < bestD) { bestD = std::fabs(t - v); out = t; }
+          return out;
+        };
+        const int h = dragCorner;
+        if (h == -1) { // move: the nearest edge on each axis snaps
+          float nx0 = x0 + dx, ny0 = y0 + dy, w0 = x1 - x0, h0 = y1 - y0;
+          float sx0 = snapTo(nx0, tx), sx1 = snapTo(nx0 + w0, tx);
+          nx0 = std::fabs(sx0 - nx0) <= std::fabs(sx1 - (nx0 + w0)) ? sx0 : sx1 - w0;
+          float sy0 = snapTo(ny0, ty), sy1 = snapTo(ny0 + h0, ty);
+          ny0 = std::fabs(sy0 - ny0) <= std::fabs(sy1 - (ny0 + h0)) ? sy0 : sy1 - h0;
+          x0 = nx0; y0 = ny0; x1 = nx0 + w0; y1 = ny0 + h0;
+        } else {
+          const bool left = h == 0 || h == 3 || h == 7, right = h == 1 || h == 2 || h == 5;
+          const bool top = h == 0 || h == 1 || h == 4, bottom = h == 2 || h == 3 || h == 6;
+          if (left) x0 = std::min(snapTo(x0 + dx, tx), x1 - 8);
+          if (right) x1 = std::max(snapTo(x1 + dx, tx), x0 + 8);
+          if (top) y0 = std::min(snapTo(y0 + dy, ty), y1 - 8);
+          if (bottom) y1 = std::max(snapTo(y1 + dy, ty), y0 + 8);
+        }
+        sel->srcX = x0; sel->srcY = y0; sel->srcW = x1 - x0; sel->srcH = y1 - y0;
+        app.edited();
+      }
+      // Arrow keys nudge the slice 1 px (Shift: 10 px) while the mouse is over the picture.
+      if (ImGui::IsItemHovered() && !io.WantTextInput) {
+        float step = io.KeyShift ? 10.0f : 1.0f, nx = 0, ny = 0;
+        if (ImGui::IsKeyPressed(ImGuiKey_LeftArrow)) nx -= step;
+        if (ImGui::IsKeyPressed(ImGuiKey_RightArrow)) nx += step;
+        if (ImGui::IsKeyPressed(ImGuiKey_UpArrow)) ny -= step;
+        if (ImGui::IsKeyPressed(ImGuiKey_DownArrow)) ny += step;
+        if (nx != 0 || ny != 0) {
+          sel->srcX += nx;
+          sel->srcY += ny;
+          app.edited();
+        }
+      }
+      for (int hIdx = 0; hIdx < 8; ++hIdx) {
+        bool hot = hIdx == hoverHandle || hIdx == dragCorner;
+        float r = hot ? squareR + 1 : squareR - 1;
+        ImVec2 q = hp[hIdx];
+        dl->AddRectFilled({q.x - r, q.y - r}, {q.x + r, q.y + r}, hot ? IM_COL32(255, 255, 255, 255) : IM_COL32(255, 196, 0, 255), 2);
+        dl->AddRect({q.x - r, q.y - r}, {q.x + r, q.y + r}, IM_COL32(20, 20, 20, 255), 2, 0, 1.5f);
+      }
+      ImGui::SetCursorScreenPos({o0.x - M, o1.y + M + 2});
       float src[4] = {sel->srcX, sel->srcY, sel->srcW, sel->srcH};
       ImGui::SetNextItemWidth(360);
       if (ImGui::DragFloat4(T("x  y  largura  altura"), src, 1.0f)) {
@@ -469,12 +615,8 @@ void Ui::outputsWindow(App &app) {
       outputsWs_.viewOutputId = sel->id;
       outputsWs_.lockView = true;
       if (mappingTab_ == 1) {
-        bool mesh = outputsWs_.tool == Tool::Mesh;
-        if (ImGui::RadioButton(T("Cantos (perspectiva)"), !mesh)) outputsWs_.tool = Tool::Perspective;
-        ImGui::SameLine();
-        if (ImGui::RadioButton(T("Malha (warping)"), mesh)) outputsWs_.tool = Tool::Mesh;
+        // Perspective (rings) and mesh (squares) are edited together on the view.
         if (outputsWs_.tool != Tool::Mesh) outputsWs_.tool = Tool::Perspective;
-        ImGui::SameLine(0, 20);
         int grid[2] = {sel->warp.meshCols, sel->warp.meshRows};
         ImGui::SetNextItemWidth(140);
         if (ImGui::InputInt2(T("malha"), grid)) {
@@ -483,6 +625,10 @@ void Ui::outputsWindow(App &app) {
           app.edited();
         }
         ImGui::SameLine();
+        if (ImGui::Checkbox(T("Espelhar \xe2\x86\x94"), &sel->flipX)) app.edited(); // ↔
+        ImGui::SameLine();
+        if (ImGui::Checkbox(T("Espelhar \xe2\x86\x95"), &sel->flipY)) app.edited(); // ↕
+        ImGui::SameLine(0, 16);
         if (ImGui::Button(T("entrada..."))) openInputMesh(-1, 0, sel->id);
         ImGui::SetItemTooltip("%s", T("Malha de entrada: põe os pontos sobre detalhes do canvas"));
         ImGui::SameLine();

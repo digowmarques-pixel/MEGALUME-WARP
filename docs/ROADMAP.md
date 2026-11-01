@@ -95,6 +95,17 @@ Ordem pensada para **videomapping** e **instalações interativas**.
 - *Seek* preciso de vídeo e áudio (também por OSC: `/lumen/layer/<l>/time`)
 - Testes de integração no CI (`scripts/test-integration.sh`)
 
+## ✅ v0.10.36
+- **Saídas no estilo do Advanced Output do Resolume**:
+  - *Slice*: imagem centralizada, com margem; 8 quadrados (cantos e meios das bordas) maiores,
+    que acendem sob o mouse, com cursor de redimensionar; ímã nas bordas do canvas, centro e
+    outros projetores; setas movem 1 px (Shift: 10 px). Nos cantos, uma **bola** em volta do
+    quadrado: o quadrado muda o tamanho, a bola deforma o canto (liga o warping sozinha)
+  - *Mapping*: **perspectiva e malha juntas** — bolas nos cantos (perspectiva) e quadrados nos
+    pontos da malha, sem escolher "Cantos/Malha"; duplo clique adiciona linha e coluna
+  - **Espelhar ↔ / ↕** por slice; botão direito no slice da lista: **Duplicar, Subir, Descer,
+    Remover**
+
 ## ✅ v0.10.35
 - **Vários slices por saída** (como o Advanced Output do Resolume): em *Saídas*, embaixo do
   projetor selecionado, a lista Slice 1, Slice 2... e **+ Slice**. Cada slice pega a sua parte do
