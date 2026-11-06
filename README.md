@@ -100,7 +100,7 @@ código compila para Windows: `./scripts/check-windows-mingw.sh`.
 O instalador (NSIS, também roda no Linux com `sudo apt install nsis`):
 
 ```bash
-cd installer && makensis -DVERSION=0.10.45 -DSRCDIR=../build-mingw/Lumen -DOUTFILE=../Lumen-0.10.45-setup.exe lumen.nsi
+cd installer && makensis -DVERSION=0.10.46 -DSRCDIR=../build-mingw/Lumen -DOUTFILE=../Lumen-0.10.46-setup.exe lumen.nsi
 ```
 
 ## Compilar no Linux (desenvolvimento)
@@ -130,6 +130,13 @@ cmake -S . -B build && cmake --build build -j
 6. Em *Interação*, envie OSC para a porta 8000 (ex.: `/sensor/1 0.5` gira o matiz do cubo).
 7. Ligue um controlador MIDI, crie um mapeamento, clique em **Aprender** e mexa num knob.
 8. **+ Ao vivo** na biblioteca adiciona câmera, stream de rede ou Spout.
+
+### Modo Operador (loja)
+
+*Janela → Modo Operador (loja)...* troca a interface por uma tela simples para quem só dá play:
+os vídeos de um dashboard em botões grandes, Parar, Blackout e Volume. Para voltar, o cadeado pede
+o PIN (padrão **546500**, troque na mesma janela). "Abrir sempre no Modo Operador" deixa o
+computador da loja ligar direto nessa tela, com as saídas no projetor/TV.
 
 ### Dicas de desempenho
 

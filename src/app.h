@@ -31,6 +31,7 @@ struct Options {
   std::string checkEffectsDir;  // another folder of .fs files
   bool diagnose = false;        // print the system self-test report and exit
   bool showMode = false;        // start with editing locked
+  bool operatorMode = false;    // start in operator mode (shop)
   bool syncUpload = false;      // never use the asynchronous (PBO) upload
   std::string role;             // "main" / "backup": overrides the machine setting
   std::string syncPeer;
@@ -122,6 +123,12 @@ public:
   bool showOutputControls = false;
   // Show mode: editing is locked, only show control (GO, stop, blackout...).
   bool showLocked = false;
+  // Operator mode (for a shop): a screen with only the cues of one dashboard,
+  // Stop, Blackout and volume; leaving it asks for the PIN.
+  bool operatorMode = false;
+  void setOperatorMode(bool on);
+  bool checkOperatorPin(const std::string &pin) const;
+  void setOperatorPin(const std::string &pin);
   // Missing media: relinks every missing file found (by name) under `dir`.
   int relinkMissing(const std::string &dir);
   int missingMedia() const;

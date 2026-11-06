@@ -107,6 +107,14 @@ private:
   // Conversor HAP.
   bool panelOpen_[6] = {};
   void converterWindow(App &app);
+  // Operator mode (shop): big cue buttons of one dashboard, Stop, Blackout,
+  // volume; the lock asks for the PIN. Its setup lives in Janela.
+  void operatorScreen(App &app);
+  void operatorSetupWindow(App &app);
+  bool showOperatorSetup_ = false;
+  bool askOperatorPin_ = false;
+  std::string operatorPin_;
+  bool operatorPinWrong_ = false;
   // Preview (double click on a cell or a library item, or its menu): plays one
   // media item in its own window, silent and outside the outputs, to check it
   // before giving GO.

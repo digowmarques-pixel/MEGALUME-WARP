@@ -32,7 +32,23 @@ void drawMagnet(ImDrawList *dl, ImVec2 c, float s, ImU32 col) {
   dl->AddRectFilled({c.x + r - t * 0.5f, top - t * 0.1f}, {c.x + r + t * 0.5f, top + s * 0.12f}, tip);
 }
 
+void drawLock(ImDrawList *dl, ImVec2 c, float s, ImU32 col) {
+  // A padlock: the shackle (arc) over the body.
+  const float w = s * 0.24f;
+  dl->PathArcTo({c.x, c.y - s * 0.06f}, s * 0.16f, 3.14159265f, 2 * 3.14159265f, 16);
+  dl->PathStroke(col, 0, s * 0.07f);
+  dl->AddLine({c.x - s * 0.16f, c.y - s * 0.06f}, {c.x - s * 0.16f, c.y + s * 0.02f}, col, s * 0.07f);
+  dl->AddLine({c.x + s * 0.16f, c.y - s * 0.06f}, {c.x + s * 0.16f, c.y + s * 0.02f}, col, s * 0.07f);
+  dl->AddRectFilled({c.x - w, c.y + s * 0.0f}, {c.x + w, c.y + s * 0.34f}, col, s * 0.05f);
+}
+
 } // namespace
+
+void drawIcon(ImDrawList *dl, Icon icon, ImVec2 c, float s, ImU32 col) {
+  if (icon == Icon::Hand) drawHand(dl, c, s, col);
+  else if (icon == Icon::Magnet) drawMagnet(dl, c, s, col);
+  else drawLock(dl, c, s, col);
+}
 
 bool iconButton(const char *id, Icon icon, ImVec2 size) {
   bool pressed = ImGui::Button(id, size);
@@ -41,8 +57,7 @@ bool iconButton(const char *id, Icon icon, ImVec2 size) {
   float s = std::min(b.x - a.x, b.y - a.y) * 0.95f;
   ImU32 col = ImGui::GetColorU32(ImGuiCol_Text);
   ImDrawList *dl = ImGui::GetWindowDrawList();
-  if (icon == Icon::Hand) drawHand(dl, c, s, col);
-  else drawMagnet(dl, c, s, col);
+  drawIcon(dl, icon, c, s, col);
   return pressed;
 }
 

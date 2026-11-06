@@ -291,6 +291,25 @@ void App::applyConversions() {
   }
 }
 
+// ---- operator mode
+static std::string pinHash(const std::string &pin) { return md5Hex("lumen-operator-pin:" + pin); }
+
+void App::setOperatorMode(bool on) {
+  static bool lockedBefore = false;
+  if (on == operatorMode) return;
+  if (on) lockedBefore = showLocked;
+  operatorMode = on;
+  showLocked = on ? true : lockedBefore; // nothing can be edited behind the operator screen
+}
+
+bool App::checkOperatorPin(const std::string &pin) const {
+  std::string stored = machineSetting("operatorPin");
+  if (stored.empty()) stored = pinHash("546500"); // the PIN until another is set
+  return pinHash(pin) == stored;
+}
+
+void App::setOperatorPin(const std::string &pin) { setMachineSetting("operatorPin", pinHash(pin)); }
+
 void App::applySync(SyncRole role, const std::string &peer, int port, bool save) {
   engine.setSync(role, peer, port);
   if (!save) return;
@@ -577,6 +596,7 @@ int App::run(const Options &opts) {
   }
   if (!engine.project.layers.empty() && sel.layerId < 0) sel.layerId = engine.project.layers.front().id;
   showLocked = opts.showMode;
+  if (opts.operatorMode || machineSettingInt("operatorAtStart", 0) != 0) setOperatorMode(true);
   engine.forceSyncUpload = opts.syncUpload;
   if (opts.launchColumn > 0) engine.startColumnOnTakeover = opts.launchColumn - 1;
   {
@@ -601,7 +621,8 @@ int App::run(const Options &opts) {
     if (opts.blackLevel >= 0) o.blackLevel = {opts.blackLevel, opts.blackLevel, opts.blackLevel, 1};
   }
   // Installation start-up (project settings), then the command line.
-  outputsOpen = opts.openOutputs || engine.project.startOutputs;
+  outputsOpen = opts.openOutputs || engine.project.startOutputs ||
+                (operatorMode && !opts.noOutputs); // a shop computer starts with the screens on
   if (opts.outputControls && !engine.project.outputs.empty()) {
     showOutputControls = true;
     sel.outputId = engine.project.outputs.front().id;
@@ -699,7 +720,7 @@ int App::run(const Options &opts) {
 
     if (!io.WantTextInput) {
       bool ctrl = io.KeyCtrl, shift = io.KeyShift;
-      if (ctrl && shift && ImGui::IsKeyPressed(ImGuiKey_L, false)) {
+      if (ctrl && shift && ImGui::IsKeyPressed(ImGuiKey_L, false) && !operatorMode) {
         showLocked = !showLocked;
         status(showLocked ? T("Modo show: edição travada (Ctrl+Shift+L destrava)") : T("Edição liberada"));
       }
@@ -713,8 +734,8 @@ int App::run(const Options &opts) {
       if (!showLocked && ctrl && ImGui::IsKeyPressed(ImGuiKey_O, false)) unlessUnsaved([this] { openDialog(); });
       if (!showLocked && ctrl && ImGui::IsKeyPressed(ImGuiKey_N, false)) unlessUnsaved([this] { newProject(); });
       if (!showLocked && ctrl && ImGui::IsKeyPressed(ImGuiKey_I, false)) importDialog();
-      if (ctrl && !shift && ImGui::IsKeyPressed(ImGuiKey_P, false)) outputsOpen = !outputsOpen;
-      if (ctrl && shift && ImGui::IsKeyPressed(ImGuiKey_P, false)) ui_->openOutputs();
+      if (ctrl && !shift && ImGui::IsKeyPressed(ImGuiKey_P, false) && !operatorMode) outputsOpen = !outputsOpen;
+      if (ctrl && shift && ImGui::IsKeyPressed(ImGuiKey_P, false) && !operatorMode) ui_->openOutputs();
       if (ctrl && shift && ImGui::IsKeyPressed(ImGuiKey_D, false)) showOutputControls = !showOutputControls;
       if (!showLocked) {
         if (ctrl && ImGui::IsKeyPressed(ImGuiKey_Z)) shift ? redo() : undo();

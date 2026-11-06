@@ -95,6 +95,15 @@ Ordem pensada para **videomapping** e **instalações interativas**.
 - *Seek* preciso de vídeo e áudio (também por OSC: `/lumen/layer/<l>/time`)
 - Testes de integração no CI (`scripts/test-integration.sh`)
 
+## ✅ v0.10.46
+- **Modo Operador (loja)** — *Janela → Modo Operador (loja)...*: uma tela simples para quem dá play
+  na loja, sem menus, mapping, saídas ou ajustes: os vídeos de um dashboard escolhido em **botões
+  grandes** com miniatura (um clique põe no ar), o que está no ar destacado na cor da coluna com
+  **"NO AR" e o tempo restante**, e embaixo **Parar, Blackout e Volume**. Para sair, o **cadeado**
+  pede o **PIN** (teclado na tela ou do computador; padrão 546500, trocável na janela, guardado
+  por computador). Opção **"Abrir sempre no Modo Operador"** (com as saídas ligadas) e linha de
+  comando `--operator`. Por trás tudo continua igual; atalhos de edição/saídas ficam desligados
+
 ## ✅ v0.10.45
 - **Abas e janelas que não se confundem** em todo o programa: aba escolhida clara com linha amarela
   em cima, as outras escuras e contornadas; título das janelas (Saídas, Preview...) numa faixa

@@ -53,6 +53,7 @@ static void usage() {
       "  --check-effects         compila todos os shaders ISF da pasta effects e sai\n"
       "  --diagnose              testa GPU, shaders, monitores, áudio, MIDI, serial, Spout e NDI e sai\n"
       "  --show-mode             abre com a edição travada (modo show)\n"
+      "  --operator              abre no Modo Operador (loja)\n"
       "  --sync-upload           envia os quadros à GPU sem PBO (comparação / driver com problema)\n"
       "  --role main|backup      máquina principal ou reserva (sem salvar a configuração)\n"
       "  --sync-peer IP[:PORTA]  a outra máquina (vazio = broadcast na rede)\n"
@@ -113,6 +114,7 @@ int main(int argc, char **argv) {
     else if (a == "--output-controls") opts.outputControls = true;
     else if (a == "--diagnose") opts.diagnose = true;
     else if (a == "--show-mode") opts.showMode = true;
+    else if (a == "--operator") opts.operatorMode = true;
     else if (a == "--sync-upload") opts.syncUpload = true;
     else if (a == "--role") opts.role = next();
     else if (a == "--sync-peer") opts.syncPeer = next();

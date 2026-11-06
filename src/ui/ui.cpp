@@ -507,6 +507,11 @@ void Ui::setup() {
 
 void Ui::draw(App &app) {
   ImGuiViewport *vp = ImGui::GetMainViewport();
+  if (app.operatorMode) { // the shop screen only: no menus, panels or editing
+    operatorScreen(app);
+    recoveryPopup(app);
+    return;
+  }
   menuBar(app);
 
   const float statusH = 28, g = 6; // g: gap between the panel cards
@@ -626,6 +631,7 @@ void Ui::draw(App &app) {
     convertPopup(app);
     previewWindow(app);
   }
+  operatorSetupWindow(app);
   recoveryPopup(app);
   if (showRemoveColumns_) removeColumnsWindow(app);
   if (showAbout_) {
@@ -899,6 +905,8 @@ void Ui::menuBar(App &app) {
     ImGui::MenuItem(T("Timecode (MTC / LTC)"), nullptr, &panelOpen_[4]);
     sectionTitle(T("Ferramentas"));
     ImGui::MenuItem(T("Conversor HAP"), nullptr, &panelOpen_[5]);
+    sectionTitle(T("Loja"));
+    if (ImGui::MenuItem(T("Modo Operador (loja)..."))) showOperatorSetup_ = true;
     sectionTitle(T("Propriedades"));
     struct P { const char *name; Inspector id; };
     const P panels[] = {{T("Layer"), Inspector::Layer}, {T("Célula"), Inspector::Cell}, {T("Mídia"), Inspector::Media}};
@@ -2671,6 +2679,253 @@ void Ui::previewWindow(App &app) {
     preview_.reset();
     previewOpen_ = false;
   }
+}
+
+// ---------------------------------------------------------------- operator mode
+// The shop screen: the cues of one dashboard as big buttons (a click puts it
+// on air), the one on air highlighted with its time left, and Stop, Blackout
+// and the volume at the bottom. Nothing else can be reached without the PIN.
+void Ui::operatorScreen(App &app) {
+  Engine &e = app.engine;
+  Project &p = e.project;
+  ImGuiViewport *vp = ImGui::GetMainViewport();
+  ImGui::SetNextWindowPos(vp->Pos);
+  ImGui::SetNextWindowSize(vp->Size);
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {24, 18});
+  ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.07f, 0.07f, 0.08f, 1));
+  ImGui::Begin("##operator", nullptr,
+               ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings |
+                   ImGuiWindowFlags_NoBringToFrontOnFocus);
+  ImDrawList *dl = ImGui::GetWindowDrawList();
+  const int board = std::clamp(machineSettingInt("operatorBoard", 0), 0, std::max(0, int(p.boards.size()) - 1));
+
+  // Top: name of the dashboard, and the lock that leaves operator mode.
+  if (bigFont_) ImGui::PushFont(bigFont_);
+  ImGui::TextColored(kAccent, "LUMEN");
+  ImGui::SameLine(0, 18);
+  ImGui::TextUnformatted(board < int(p.boards.size()) ? p.boards[size_t(board)].c_str() : "");
+  if (bigFont_) ImGui::PopFont();
+  ImGui::SameLine(ImGui::GetWindowWidth() - 150);
+  bool lockHit = ImGui::Button(T("      Bloqueado##oplock"), {136, 34});
+  {
+    ImVec2 la = ImGui::GetItemRectMin(), lb = ImGui::GetItemRectMax();
+    drawIcon(ImGui::GetWindowDrawList(), Icon::Lock, {la.x + 20, (la.y + lb.y) * 0.5f}, lb.y - la.y,
+             ImGui::GetColorU32(ImGuiCol_Text));
+  }
+  if (lockHit) {
+    askOperatorPin_ = true;
+    operatorPin_.clear();
+    operatorPinWrong_ = false;
+  }
+  ImGui::SetItemTooltip("%s", T("Sair do Modo Operador (pede o PIN)"));
+  ImGui::Separator();
+
+  // The cues: one button per column of the chosen dashboard.
+  std::vector<int> cols;
+  for (size_t c = 0; c < p.columns.size(); ++c)
+    if (p.columns[c].board == board) cols.push_back(int(c));
+  const float bottomH = 96;
+  ImVec2 area = ImGui::GetContentRegionAvail();
+  area.y -= bottomH;
+  const float gap = 16;
+  int perRow = std::max(1, int((area.x + gap) / (300 + gap)));
+  perRow = std::min(perRow, std::max(1, int(cols.size())));
+  const float tileW = (area.x - gap * float(perRow - 1)) / float(perRow);
+  const float tileH = std::min(tileW * 0.72f, 360.0f);
+  ImGui::BeginChild("##opgrid", {area.x, area.y}, 0, ImGuiWindowFlags_NoBackground);
+  if (cols.empty())
+    ImGui::TextWrapped("%s", T("Este dashboard não tem colunas. Saia do Modo Operador (cadeado) e escolha outro "
+                               "em Janela → Modo Operador."));
+  for (size_t k = 0; k < cols.size(); ++k) {
+    const int c = cols[k];
+    Column &col = p.columns[size_t(c)];
+    if (k % size_t(perRow) != 0) ImGui::SameLine(0, gap);
+    ImGui::PushID(col.id);
+    ImVec2 a = ImGui::GetCursorScreenPos(), b{a.x + tileW, a.y + tileH};
+    if (ImGui::InvisibleButton("##cue", {tileW, tileH})) e.launchColumn(c);
+    const bool hovered = ImGui::IsItemHovered(), onAir = e.activeColumn() == c;
+    const bool colored = col.color[0] > 0 || col.color[1] > 0 || col.color[2] > 0;
+    ImU32 accent = colored ? ImGui::GetColorU32(ImVec4(col.color[0], col.color[1], col.color[2], 1))
+                           : ImGui::GetColorU32(kAccent);
+    dl->AddRectFilled(a, b, hovered ? IM_COL32(48, 48, 54, 255) : IM_COL32(30, 30, 34, 255), 12);
+    // Picture: the first media of the column.
+    const MediaItem *m = nullptr;
+    for (const Layer &l : p.layers) {
+      auto it = col.cells.find(l.id);
+      if (it != col.cells.end() && it->second.mediaId >= 0 && (m = p.media(it->second.mediaId))) break;
+    }
+    const float nameH = 44;
+    ImVec2 ta{a.x + 10, a.y + 10}, tb{b.x - 10, b.y - nameH};
+    dl->AddRectFilled(ta, tb, IM_COL32(8, 8, 10, 255), 8);
+    if (m) {
+      const Texture *thumb = e.cache.thumbnail(*m, e.generators, e.mesh);
+      if (thumb && !thumb->empty()) {
+        ImVec2 fa = ta, fb = tb;
+        fitToTexture(*thumb, fa, fb);
+        dl->AddImageRounded(texId(*thumb), fa, fb, {0, 0}, {1, 1}, IM_COL32_WHITE, 8);
+      }
+    }
+    // Name.
+    if (bigFont_) ImGui::PushFont(bigFont_);
+    dl->PushClipRect({a.x + 12, b.y - nameH}, {b.x - 12, b.y}, true);
+    dl->AddText({a.x + 14, b.y - nameH + 8}, onAir ? accent : IM_COL32(235, 235, 235, 255), col.name.c_str());
+    dl->PopClipRect();
+    if (bigFont_) ImGui::PopFont();
+    // On air: thick frame in the column's colour, "NO AR" and the time left.
+    if (onAir) {
+      dl->AddRect({a.x - 2, a.y - 2}, {b.x + 2, b.y + 2}, accent, 14, 0, 5);
+      double left = -1, total = 0;
+      for (const Layer &l : p.layers) {
+        const LayerState *st = e.layerState(l.id);
+        if (!st || !st->current || st->fadingOut || st->columnId != col.id) continue;
+        double dur = st->current->duration(), t = st->current->time();
+        if (dur > 0 && st->current->seekable()) {
+          double pos = st->current->loop ? std::fmod(t, dur) : std::min(t, dur);
+          left = std::max(left, (dur - pos) / std::max(0.01, double(st->current->speed)));
+          total = std::max(total, dur);
+        }
+      }
+      char badge[48];
+      if (left >= 0) {
+        int s = int(std::ceil(left));
+        std::snprintf(badge, sizeof(badge), T("NO AR  %d:%02d"), s / 60, s % 60);
+      } else {
+        std::snprintf(badge, sizeof(badge), "%s", T("NO AR"));
+      }
+      ImVec2 bs = ImGui::CalcTextSize(badge);
+      dl->AddRectFilled({ta.x + 6, ta.y + 6}, {ta.x + 20 + bs.x, ta.y + 12 + bs.y}, accent, 6);
+      dl->AddText({ta.x + 13, ta.y + 9}, IM_COL32(10, 10, 10, 255), badge);
+      if (total > 0 && left >= 0) {
+        float f = float(std::clamp(1.0 - left / total, 0.0, 1.0));
+        dl->AddRectFilled({ta.x, tb.y - 6}, {tb.x, tb.y}, IM_COL32(0, 0, 0, 180));
+        dl->AddRectFilled({ta.x, tb.y - 6}, {ta.x + (tb.x - ta.x) * f, tb.y}, accent);
+      }
+    }
+    ImGui::PopID();
+    if (k % size_t(perRow) == size_t(perRow - 1)) ImGui::Dummy({1, gap - ImGui::GetStyle().ItemSpacing.y});
+  }
+  ImGui::EndChild();
+
+  // Bottom: Stop, Blackout, volume.
+  ImGui::Separator();
+  ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.55f, 0.16f, 0.16f, 1));
+  ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.72f, 0.2f, 0.2f, 1));
+  if (bigFont_) ImGui::PushFont(bigFont_);
+  if (ImGui::Button(T("Parar##opstop"), {200, 64})) e.stopAll(); // ■
+  ImGui::PopStyleColor(2);
+  ImGui::SameLine(0, 16);
+  const bool black = e.blackout;
+  if (black) {
+    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.85f, 0.25f, 0.25f, 1));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.95f, 0.32f, 0.32f, 1));
+  }
+  if (ImGui::Button(black ? T("Blackout: LIGADO") : T("Blackout"), {260, 64})) e.blackout = !black;
+  if (black) ImGui::PopStyleColor(2);
+  ImGui::SameLine(0, 32);
+  ImGui::AlignTextToFramePadding();
+  ImGui::SetCursorPosY(ImGui::GetCursorPosY() + 14);
+  ImGui::TextUnformatted(T("Volume"));
+  ImGui::SameLine();
+  ImGui::SetCursorPosY(ImGui::GetCursorPosY() - 2);
+  ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, {10, 16});
+  ImGui::PushStyleVar(ImGuiStyleVar_GrabMinSize, 22);
+  ImGui::SetNextItemWidth(std::min(420.0f, ImGui::GetContentRegionAvail().x - 20));
+  float vol = p.masterVolume * 100;
+  if (ImGui::SliderFloat("##opvol", &vol, 0, 100, "%.0f %%")) p.masterVolume = vol / 100;
+  ImGui::PopStyleVar(2);
+  if (bigFont_) ImGui::PopFont();
+  ImGui::End();
+  ImGui::PopStyleColor();
+  ImGui::PopStyleVar();
+
+  // PIN to leave: a keypad (touch screens) and the keyboard.
+  if (askOperatorPin_) {
+    ImGui::OpenPopup("##oppin");
+    askOperatorPin_ = false;
+  }
+  ImGui::SetNextWindowPos({vp->Pos.x + vp->Size.x * 0.5f, vp->Pos.y + vp->Size.y * 0.5f}, ImGuiCond_Always, {0.5f, 0.5f});
+  if (ImGui::BeginPopupModal("##oppin", nullptr, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoTitleBar)) {
+    if (bigFont_) ImGui::PushFont(bigFont_);
+    ImGui::TextUnformatted(T("PIN para sair do Modo Operador"));
+    std::string dots(operatorPin_.size(), '*');
+    ImGui::TextColored(kAccent, "%s", dots.empty() ? " " : dots.c_str());
+    if (operatorPinWrong_) ImGui::TextColored({1, 0.4f, 0.4f, 1}, "%s", T("PIN errado"));
+    for (ImGuiKey k = ImGuiKey_0; k <= ImGuiKey_9; k = ImGuiKey(k + 1))
+      if (ImGui::IsKeyPressed(k, false) && operatorPin_.size() < 12) operatorPin_ += char('0' + (k - ImGuiKey_0));
+    for (ImGuiKey k = ImGuiKey_Keypad0; k <= ImGuiKey_Keypad9; k = ImGuiKey(k + 1))
+      if (ImGui::IsKeyPressed(k, false) && operatorPin_.size() < 12) operatorPin_ += char('0' + (k - ImGuiKey_Keypad0));
+    bool enter = ImGui::IsKeyPressed(ImGuiKey_Enter, false) || ImGui::IsKeyPressed(ImGuiKey_KeypadEnter, false);
+    if (ImGui::IsKeyPressed(ImGuiKey_Backspace) && !operatorPin_.empty()) operatorPin_.pop_back();
+    const char *keys[] = {"1", "2", "3", "4", "5", "6", "7", "8", "9", "<", "0", "OK"};
+    for (int i = 0; i < 12; ++i) {
+      if (i % 3) ImGui::SameLine();
+      if (ImGui::Button(keys[i], {84, 64})) {
+        if (i == 9) { if (!operatorPin_.empty()) operatorPin_.pop_back(); }
+        else if (i == 11) enter = true;
+        else if (operatorPin_.size() < 12) operatorPin_ += keys[i];
+      }
+    }
+    if (enter) {
+      if (app.checkOperatorPin(operatorPin_)) {
+        app.setOperatorMode(false);
+        ImGui::CloseCurrentPopup();
+      } else {
+        operatorPinWrong_ = true;
+      }
+      operatorPin_.clear();
+    }
+    if (ImGui::Button(T("Cancelar##oppin"), {-1, 44})) ImGui::CloseCurrentPopup();
+    if (bigFont_) ImGui::PopFont();
+    ImGui::EndPopup();
+  }
+}
+
+// Janela → Modo Operador: which dashboard the shop sees, start in it, the PIN.
+void Ui::operatorSetupWindow(App &app) {
+  if (!showOperatorSetup_) return;
+  Project &p = app.engine.project;
+  ImGui::SetNextWindowSize({480, 0}, ImGuiCond_Appearing);
+  if (!ImGui::Begin(T("Modo Operador (loja)###opsetup"), &showOperatorSetup_, ImGuiWindowFlags_NoCollapse)) {
+    ImGui::End();
+    return;
+  }
+  ImGui::TextWrapped("%s", T("Uma tela simples para quem dá play na loja: só os vídeos de um dashboard em botões "
+                             "grandes, Parar, Blackout e volume. Mapping, saídas e ajustes ficam escondidos; para "
+                             "sair, o cadeado pede o PIN."));
+  ImGui::Spacing();
+  int board = std::clamp(machineSettingInt("operatorBoard", 0), 0, std::max(0, int(p.boards.size()) - 1));
+  ImGui::SetNextItemWidth(240);
+  if (ImGui::BeginCombo(T("Dashboard dos botões"), board < int(p.boards.size()) ? p.boards[size_t(board)].c_str() : "")) {
+    for (size_t b = 0; b < p.boards.size(); ++b)
+      if (ImGui::Selectable(p.boards[b].c_str(), int(b) == board)) setMachineSetting("operatorBoard", int(b));
+    ImGui::EndCombo();
+  }
+  helpMarker(T("Dica: crie um dashboard \"Loja\" (botão Dashboard ▾) só com os vídeos do operador."));
+  bool atStart = machineSettingInt("operatorAtStart", 0) != 0;
+  if (ImGui::Checkbox(T("Abrir sempre no Modo Operador (com as saídas ligadas)"), &atStart))
+    setMachineSetting("operatorAtStart", atStart ? 1 : 0);
+  ImGui::SeparatorText(T("PIN"));
+  static char newPin[16] = "";
+  ImGui::SetNextItemWidth(160);
+  ImGui::InputText(T("Novo PIN"), newPin, sizeof(newPin), ImGuiInputTextFlags_CharsDecimal | ImGuiInputTextFlags_Password);
+  ImGui::SameLine();
+  ImGui::BeginDisabled(std::strlen(newPin) < 4);
+  if (ImGui::Button(T("Trocar PIN"))) {
+    app.setOperatorPin(newPin);
+    newPin[0] = 0;
+    app.status(T("PIN do Modo Operador trocado"));
+  }
+  ImGui::EndDisabled();
+  ImGui::TextDisabled("%s", T("Só números, 4 ou mais. Vale para este computador."));
+  ImGui::Separator();
+  pushPrimary();
+  if (ImGui::Button(T("Entrar no Modo Operador agora"), {-1, 40})) {
+    showOperatorSetup_ = false;
+    app.setOperatorMode(true);
+    app.outputsOpen = true;
+  }
+  popPrimary();
+  ImGui::End();
 }
 
 void Ui::panelWindows(App &app) {
