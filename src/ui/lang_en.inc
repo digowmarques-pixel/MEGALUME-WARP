@@ -986,6 +986,8 @@
 {"Este dashboard não tem colunas. Saia do Modo Operador (cadeado) e escolha outro em Janela → Modo Operador.", "This dashboard has no columns. Leave operator mode (padlock) and pick another in Window → Operator mode."},
 {"NO AR  %d:%02d", "ON AIR  %d:%02d"},
 {"NO AR", "ON AIR"},
+{"ao vivo", "live"},
+{"SELECIONADO", "SELECTED"},
 {"Parar##opstop", "Stop##opstop"},
 {"Blackout: LIGADO", "Blackout: ON"},
 {"PIN para sair do Modo Operador", "PIN to leave operator mode"},

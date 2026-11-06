@@ -2736,70 +2736,112 @@ void Ui::operatorScreen(App &app) {
   if (cols.empty())
     ImGui::TextWrapped("%s", T("Este dashboard não tem colunas. Saia do Modo Operador (cadeado) e escolha outro "
                                "em Janela → Modo Operador."));
+  // Selection: a click selects; Play (below) puts it on air.
+  bool selValid = false;
+  for (int c : cols) selValid |= p.columns[size_t(c)].id == operatorSel_;
+  if (!selValid && !cols.empty()) { // the cue after the one on air, or the first
+    int pick = cols.front();
+    for (size_t k = 0; k < cols.size(); ++k)
+      if (cols[k] == e.activeColumn()) pick = cols[(k + 1) % cols.size()];
+    operatorSel_ = p.columns[size_t(pick)].id;
+  }
+  auto fmtTime = [](double sec, char *buf, size_t n) {
+    int s = int(std::max(0.0, sec) + 0.5);
+    std::snprintf(buf, n, "%d:%02d", s / 60, s % 60);
+  };
   for (size_t k = 0; k < cols.size(); ++k) {
     const int c = cols[k];
     Column &col = p.columns[size_t(c)];
     if (k % size_t(perRow) != 0) ImGui::SameLine(0, gap);
     ImGui::PushID(col.id);
     ImVec2 a = ImGui::GetCursorScreenPos(), b{a.x + tileW, a.y + tileH};
-    if (ImGui::InvisibleButton("##cue", {tileW, tileH})) e.launchColumn(c);
-    const bool hovered = ImGui::IsItemHovered(), onAir = e.activeColumn() == c;
+    if (ImGui::InvisibleButton("##cue", {tileW, tileH})) operatorSel_ = col.id;
+    const bool hovered = ImGui::IsItemHovered(), onAir = e.activeColumn() == c, selected = operatorSel_ == col.id;
     const bool colored = col.color[0] > 0 || col.color[1] > 0 || col.color[2] > 0;
     ImU32 accent = colored ? ImGui::GetColorU32(ImVec4(col.color[0], col.color[1], col.color[2], 1))
                            : ImGui::GetColorU32(kAccent);
-    dl->AddRectFilled(a, b, hovered ? IM_COL32(48, 48, 54, 255) : IM_COL32(30, 30, 34, 255), 12);
-    // Picture: the first media of the column.
+    dl->AddRectFilled(a, b, selected ? IM_COL32(52, 56, 66, 255) : hovered ? IM_COL32(44, 44, 50, 255)
+                                                                   : IM_COL32(30, 30, 34, 255), 12);
+    // What plays in this cue (first layer with content) and its state.
     const MediaItem *m = nullptr;
+    int canvasId = 0;
     for (const Layer &l : p.layers) {
       auto it = col.cells.find(l.id);
-      if (it != col.cells.end() && it->second.mediaId >= 0 && (m = p.media(it->second.mediaId))) break;
+      if (it != col.cells.end() && it->second.mediaId >= 0 && (m = p.media(it->second.mediaId))) {
+        canvasId = l.canvasId;
+        break;
+      }
     }
-    const float nameH = 44;
-    ImVec2 ta{a.x + 10, a.y + 10}, tb{b.x - 10, b.y - nameH};
+    const Playback *pb = nullptr;
+    int pbLayer = -1;
+    if (onAir)
+      for (const Layer &l : p.layers) {
+        const LayerState *st = e.layerState(l.id);
+        if (st && st->current && !st->fadingOut && st->columnId == col.id) {
+          pb = st->current.get();
+          pbLayer = l.id;
+          break;
+        }
+      }
+    const float nameH = 40, timeH = onAir ? 30 : 0, vuW = (onAir && pb && pb->hasAudio()) ? 16 : 0;
+    ImVec2 ta{a.x + 10, a.y + 10}, tb{b.x - 10 - (vuW > 0 ? vuW + 6 : 0), b.y - nameH - timeH};
     dl->AddRectFilled(ta, tb, IM_COL32(8, 8, 10, 255), 8);
-    if (m) {
-      const Texture *thumb = e.cache.thumbnail(*m, e.generators, e.mesh);
-      if (thumb && !thumb->empty()) {
-        ImVec2 fa = ta, fb = tb;
-        fitToTexture(*thumb, fa, fb);
-        dl->AddImageRounded(texId(*thumb), fa, fb, {0, 0}, {1, 1}, IM_COL32_WHITE, 8);
+    // Picture: on air, the live canvas (the video playing); otherwise the thumbnail.
+    const Texture *pic = nullptr;
+    bool flip = false;
+    if (onAir) {
+      pic = &e.canvasTexture(canvasId);
+      flip = true;
+    } else if (m) {
+      pic = e.cache.thumbnail(*m, e.generators, e.mesh);
+    }
+    if (pic && !pic->empty()) {
+      ImVec2 fa = ta, fb = tb;
+      fitToTexture(*pic, fa, fb);
+      dl->AddImageRounded(texId(*pic), fa, fb, flip ? ImVec2(0, 1) : ImVec2(0, 0), flip ? ImVec2(1, 0) : ImVec2(1, 1),
+                          IM_COL32_WHITE, 8);
+    }
+    if (vuW > 0) vuMeter(dl, {tb.x + 6, ta.y}, {tb.x + 6 + vuW, tb.y}, pb->audioPeak(), 7000 + pbLayer);
+    // Timeline of the cue on air: elapsed / total, and the time left.
+    if (onAir) {
+      double dur = pb ? pb->duration() : 0, t = pb ? pb->time() : 0;
+      bool timed = pb && pb->seekable() && dur > 0;
+      double pos = timed ? (pb->loop ? std::fmod(t, dur) : std::min(t, dur)) : 0;
+      float y0 = tb.y + 8, y1 = tb.y + 16;
+      dl->AddRectFilled({a.x + 10, y0}, {b.x - 10, y1}, IM_COL32(60, 60, 66, 255), 4);
+      if (timed)
+        dl->AddRectFilled({a.x + 10, y0}, {a.x + 10 + (b.x - a.x - 20) * float(pos / dur), y1}, accent, 4);
+      char el[16], to[16], le[24];
+      fmtTime(pos, el, sizeof(el));
+      fmtTime(dur, to, sizeof(to));
+      std::snprintf(le, sizeof(le), "-%s", "");
+      fmtTime(timed ? (dur - pos) / std::max(0.01, double(pb->speed)) : 0, le + 1, sizeof(le) - 1);
+      std::string left = timed ? std::string(el) + " / " + to : std::string(T("ao vivo"));
+      dl->AddText({a.x + 12, y1 + 2}, IM_COL32(200, 200, 205, 255), left.c_str());
+      if (timed) {
+        ImVec2 ls = ImGui::CalcTextSize(le);
+        dl->AddText({b.x - 12 - ls.x, y1 + 2}, accent, le);
       }
     }
     // Name.
     if (bigFont_) ImGui::PushFont(bigFont_);
     dl->PushClipRect({a.x + 12, b.y - nameH}, {b.x - 12, b.y}, true);
-    dl->AddText({a.x + 14, b.y - nameH + 8}, onAir ? accent : IM_COL32(235, 235, 235, 255), col.name.c_str());
+    dl->AddText({a.x + 14, b.y - nameH + 6}, onAir ? accent : IM_COL32(235, 235, 235, 255), col.name.c_str());
     dl->PopClipRect();
     if (bigFont_) ImGui::PopFont();
-    // On air: thick frame in the column's colour, "NO AR" and the time left.
     if (onAir) {
       dl->AddRect({a.x - 2, a.y - 2}, {b.x + 2, b.y + 2}, accent, 14, 0, 5);
-      double left = -1, total = 0;
-      for (const Layer &l : p.layers) {
-        const LayerState *st = e.layerState(l.id);
-        if (!st || !st->current || st->fadingOut || st->columnId != col.id) continue;
-        double dur = st->current->duration(), t = st->current->time();
-        if (dur > 0 && st->current->seekable()) {
-          double pos = st->current->loop ? std::fmod(t, dur) : std::min(t, dur);
-          left = std::max(left, (dur - pos) / std::max(0.01, double(st->current->speed)));
-          total = std::max(total, dur);
-        }
-      }
-      char badge[48];
-      if (left >= 0) {
-        int s = int(std::ceil(left));
-        std::snprintf(badge, sizeof(badge), T("NO AR  %d:%02d"), s / 60, s % 60);
-      } else {
-        std::snprintf(badge, sizeof(badge), "%s", T("NO AR"));
-      }
+      const char *badge = T("NO AR");
       ImVec2 bs = ImGui::CalcTextSize(badge);
       dl->AddRectFilled({ta.x + 6, ta.y + 6}, {ta.x + 20 + bs.x, ta.y + 12 + bs.y}, accent, 6);
       dl->AddText({ta.x + 13, ta.y + 9}, IM_COL32(10, 10, 10, 255), badge);
-      if (total > 0 && left >= 0) {
-        float f = float(std::clamp(1.0 - left / total, 0.0, 1.0));
-        dl->AddRectFilled({ta.x, tb.y - 6}, {tb.x, tb.y}, IM_COL32(0, 0, 0, 180));
-        dl->AddRectFilled({ta.x, tb.y - 6}, {ta.x + (tb.x - ta.x) * f, tb.y}, accent);
-      }
+    }
+    if (selected) { // white frame inside (on air: inside the coloured one)
+      dl->AddRect({a.x + 3, a.y + 3}, {b.x - 3, b.y - 3}, IM_COL32(255, 255, 255, 230), 10, 0, 2.5f);
+      const char *tag = T("SELECIONADO");
+      ImVec2 ts = ImGui::CalcTextSize(tag);
+      dl->AddRectFilled({tb.x - ts.x - 20, ta.y + 6}, {tb.x - 6, ta.y + 12 + ts.y}, IM_COL32(255, 255, 255, 235), 6);
+      dl->AddText({tb.x - ts.x - 13, ta.y + 9}, IM_COL32(10, 10, 10, 255), tag);
     }
     ImGui::PopID();
     if (k % size_t(perRow) == size_t(perRow - 1)) ImGui::Dummy({1, gap - ImGui::GetStyle().ItemSpacing.y});
@@ -2808,9 +2850,31 @@ void Ui::operatorScreen(App &app) {
 
   // Bottom: Stop, Blackout, volume.
   ImGui::Separator();
+  if (bigFont_) ImGui::PushFont(bigFont_);
+  {
+    // PLAY: the selected cue goes on air (a click on a cue only selects it).
+    int selCol = -1;
+    for (int c : cols)
+      if (p.columns[size_t(c)].id == operatorSel_) selCol = c;
+    std::string label = selCol >= 0 ? std::string("      PLAY  ") + p.columns[size_t(selCol)].name : std::string("      PLAY");
+    if (label.size() > 30) label = label.substr(0, 28) + "...";
+    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.13f, 0.55f, 0.27f, 1));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.18f, 0.68f, 0.34f, 1));
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.22f, 0.78f, 0.40f, 1));
+    ImGui::BeginDisabled(selCol < 0);
+    if (ImGui::Button((label + "##opplay").c_str(), {340, 64}) && selCol >= 0) {
+      e.launchColumn(selCol);
+      operatorSel_ = -1; // next: the cue after this one
+    }
+    ImGui::EndDisabled();
+    ImGui::PopStyleColor(3);
+    ImVec2 pa = ImGui::GetItemRectMin(), pbm = ImGui::GetItemRectMax();
+    float cy = (pa.y + pbm.y) * 0.5f, x = pa.x + 26;
+    ImGui::GetWindowDrawList()->AddTriangleFilled({x, cy - 13}, {x, cy + 13}, {x + 22, cy}, IM_COL32(255, 255, 255, 255));
+  }
+  ImGui::SameLine(0, 16);
   ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.55f, 0.16f, 0.16f, 1));
   ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.72f, 0.2f, 0.2f, 1));
-  if (bigFont_) ImGui::PushFont(bigFont_);
   if (ImGui::Button(T("Parar##opstop"), {200, 64})) e.stopAll(); // ■
   ImGui::PopStyleColor(2);
   ImGui::SameLine(0, 16);

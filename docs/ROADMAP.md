@@ -95,6 +95,13 @@ Ordem pensada para **videomapping** e **instalações interativas**.
 - *Seek* preciso de vídeo e áudio (também por OSC: `/lumen/layer/<l>/time`)
 - Testes de integração no CI (`scripts/test-integration.sh`)
 
+## ✅ v0.10.47
+- **Modo Operador: vídeo, tempo e áudio no botão; play só no PLAY** — o botão que está no ar mostra
+  o **vídeo passando ao vivo**, uma **linha de tempo** (decorrido / total e o que falta) e o
+  **medidor de áudio** ao lado da imagem. Clicar num vídeo agora **só seleciona** (moldura branca,
+  "SELECIONADO"); o botão verde **PLAY** embaixo põe o selecionado no ar. Depois do play, o próximo
+  da lista já fica selecionado.
+
 ## ✅ v0.10.46
 - **Modo Operador (loja)** — *Janela → Modo Operador (loja)...*: uma tela simples para quem dá play
   na loja, sem menus, mapping, saídas ou ajustes: os vídeos de um dashboard escolhido em **botões

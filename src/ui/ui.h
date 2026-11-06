@@ -115,6 +115,7 @@ private:
   bool askOperatorPin_ = false;
   std::string operatorPin_;
   bool operatorPinWrong_ = false;
+  int operatorSel_ = -1; // column id selected (Play puts it on air)
   // Preview (double click on a cell or a library item, or its menu): plays one
   // media item in its own window, silent and outside the outputs, to check it
   // before giving GO.
