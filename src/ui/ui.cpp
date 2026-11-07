@@ -167,6 +167,28 @@ static bool inputInt2Deferred(const char *label, int v[2]) {
   return false;
 }
 
+// Same for one number, for settings that reopen something (a port, a serial
+// line: most Arduinos reset when it opens): typing 115200 opened it at 1, 11,
+// 115... baud, and a new OSC port rebound the socket at every digit.
+static bool inputIntDeferred(const char *label, int *v, int step = 1) {
+  static std::map<ImGuiID, int> editing;
+  ImGuiID id = ImGui::GetID(label);
+  auto it = editing.find(id);
+  int buf = it != editing.end() ? it->second : *v;
+  bool stepped = false;
+  if (ImGui::InputInt(label, &buf, step)) {
+    editing[id] = buf;
+    stepped = !ImGui::IsItemActive(); // the +/- buttons: apply at once
+  }
+  if (stepped || ImGui::IsItemDeactivatedAfterEdit()) {
+    *v = buf;
+    editing.erase(id);
+    return true;
+  }
+  if (!ImGui::IsItemActive()) editing.erase(id);
+  return false;
+}
+
 bool inputText(const char *label, std::string &s) {
   char buf[512];
   std::snprintf(buf, sizeof(buf), "%s", s.c_str());
@@ -507,6 +529,20 @@ void Ui::setup() {
 
 void Ui::draw(App &app) {
   ImGuiViewport *vp = ImGui::GetMainViewport();
+  // Cells of the dashboard as drawn this frame only: with its tab hidden (the
+  // Timeline in front), last frame's rectangles took files dropped there.
+  dashCells_.clear();
+  dashWindow_ = nullptr;
+  // The selected cell follows its column (by id) when an earlier column is
+  // removed or columns are reordered; gone (or undone) clears it.
+  if (app.sel.cellColumnId >= 0) {
+    const auto &cols = app.engine.project.columns;
+    int at = -1;
+    for (size_t i = 0; i < cols.size(); ++i)
+      if (cols[i].id == app.sel.cellColumnId) at = int(i);
+    app.sel.cellColumn = at;
+    if (at < 0) app.sel.cellColumnId = -1;
+  }
   if (app.operatorMode) { // the shop screen only: no menus, panels or editing
     operatorScreen(app);
     recoveryPopup(app);
@@ -581,6 +617,8 @@ void Ui::draw(App &app) {
   ImGui::BeginDisabled(locked);
   workspace.draw(app, ImGui::GetContentRegionAvail());
   ImGui::EndDisabled();
+  workspace.keysActive = ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows) ||
+                         ImGui::IsWindowFocused(ImGuiFocusedFlags_ChildWindows);
   ImGui::End();
   ImGui::PopStyleVar();
 
@@ -654,7 +692,9 @@ void Ui::draw(App &app) {
     if (ImGui::Begin(T("Diagnóstico do sistema"), &showDiag_)) {
       if (ImGui::Button(T("Copiar"))) ImGui::SetClipboardText(diagReport_.c_str());
       ImGui::SameLine();
+      ImGui::BeginDisabled(app.outputsOpen);
       if (ImGui::Button(T("Testar de novo"))) diagReport_ = app.diagnosticReport();
+      ImGui::EndDisabled();
       ImGui::SameLine();
       ImGui::TextDisabled("%s", T("Envie este texto junto com qualquer relato de problema."));
       ImGui::InputTextMultiline("##diag", diagReport_.data(), diagReport_.size() + 1, {-1, -1}, ImGuiInputTextFlags_ReadOnly);
@@ -734,7 +774,7 @@ static bool gearButton(const char *id, float size) {
 void Ui::relinkDialog(App &app) {
   std::string dir = platform::folderDialog(T("Pasta onde procurar as mídias"));
   if (dir.empty()) return;
-  int before = app.missingMedia();
+  int before = app.missingMediaNow();
   int fixed = app.relinkMissing(dir);
   app.status(std::to_string(fixed) + T(" de ") + std::to_string(before) + T(" mídia(s) encontradas"), fixed < before);
 }
@@ -756,7 +796,7 @@ void Ui::menuBar(App &app) {
     ImGui::Separator();
     ImGui::MenuItem(T("Modo show (travar edição)"), T("Ctrl+Shift+L"), &app.showLocked);
     ImGui::Separator();
-    if (ImGui::MenuItem(T("Sair"))) app.requestQuit = true;
+    if (ImGui::MenuItem(T("Sair"))) app.unlessUnsaved([&app] { app.requestQuit = true; });
     ImGui::EndMenu();
   }
   Engine &e = app.engine;
@@ -832,15 +872,21 @@ void Ui::menuBar(App &app) {
       app.edited();
     }
     if (ImGui::MenuItem(T("Remover colunas vazias"))) {
-      auto empty = [](const Column &col) {
+      // Only on the dashboard on screen, and only columns that do nothing at
+      // all: one holding states (fades), notes, an auto-GO, a stinger or a
+      // timecode cue is a real cue, and removing one renumbers the others.
+      const int board = p.currentBoard;
+      auto empty = [board](const Column &col) {
+        if (col.board != board) return false;
         for (auto &[id, cell] : col.cells)
           if (cell.mediaId >= 0) return false;
-        return col.oscActions.empty() && col.commands.empty() && col.timelineId < 0;
+        return col.oscActions.empty() && col.commands.empty() && col.timelineId < 0 && col.states.empty() &&
+               col.notes.empty() && col.autoGo < 0 && col.stingerMediaId < 0 && col.timecodeCue < 0;
       };
       size_t before = p.columns.size();
       p.columns.erase(std::remove_if(p.columns.begin(), p.columns.end(), empty), p.columns.end());
       if (p.columns.size() != before) {
-        app.sel.cellColumn = -1;
+        app.sel.cellColumn = app.sel.cellColumnId = -1;
         app.edited();
       }
     }
@@ -919,10 +965,13 @@ void Ui::menuBar(App &app) {
     ImGui::SetItemTooltip("%s", T("Mostra a ferramenta LED, a aba LED e as fitas no workspace. As fitas do "
                                   "projeto continuam funcionando mesmo escondidas."));
     ImGui::Separator();
-    if (ImGui::MenuItem(T("Diagnóstico do sistema..."))) {
+    // It compiles every shader, benchmarks uploads and probes devices on this
+    // thread: seconds with the projectors frozen. Not while the outputs are on.
+    if (ImGui::MenuItem(T("Diagnóstico do sistema..."), nullptr, false, !app.outputsOpen)) {
       diagReport_ = app.diagnosticReport();
       showDiag_ = true;
     }
+    if (app.outputsOpen) ImGui::SetItemTooltip("%s", T("Feche as saídas para rodar o diagnóstico (ele congela a imagem por alguns segundos)."));
     ImGui::EndMenu();
   }
   if (ImGui::BeginMenu("Idioma / Language")) {
@@ -938,10 +987,13 @@ void Ui::menuBar(App &app) {
   }
   if (ImGui::BeginMenu(T("Ajuda"))) {
     if (ImGui::MenuItem(T("Atalhos e ajuda"), "F1")) showHelp_ = true;
-    if (ImGui::MenuItem(T("Diagnóstico do sistema..."))) {
+    // It compiles every shader, benchmarks uploads and probes devices on this
+    // thread: seconds with the projectors frozen. Not while the outputs are on.
+    if (ImGui::MenuItem(T("Diagnóstico do sistema..."), nullptr, false, !app.outputsOpen)) {
       diagReport_ = app.diagnosticReport();
       showDiag_ = true;
     }
+    if (app.outputsOpen) ImGui::SetItemTooltip("%s", T("Feche as saídas para rodar o diagnóstico (ele congela a imagem por alguns segundos)."));
     ImGui::MenuItem(T("Demo do ImGui"), nullptr, &showDemo_);
     if (ImGui::MenuItem(T("Sobre o Lumen..."))) showAbout_ = true;
     ImGui::Separator();
@@ -1158,7 +1210,7 @@ void Ui::removeColumnsWindow(App &app) {
   ImGui::BeginDisabled(count == 0 || app.showLocked);
   if (dangerButton(btn)) {
     std::erase_if(p.columns, [&](const Column &c) { return c.board == p.currentBoard && ticked(c.id); });
-    app.sel.cellColumn = -1;
+    app.sel.cellColumn = app.sel.cellColumnId = -1;
     removeColumnIds_.clear();
     showRemoveColumns_ = false;
     app.edited();
@@ -1369,6 +1421,13 @@ void Ui::library(App &app) {
 
 bool Ui::dashboardCellAt(float x, float y, int &column, int &layerId) const {
   column = layerId = -1;
+  // Only where the dashboard is the window on top (not under the HAP
+  // converter or any other window that covers it): elsewhere the files only
+  // go into the library, never into a cue nobody sees.
+  ImGuiWindow *top = nullptr, *under = nullptr;
+  ImGui::FindHoveredWindowEx({x, y}, false, &top, &under);
+  auto *dash = static_cast<ImGuiWindow *>(dashWindow_);
+  if (!dash || !top || (top != dash && top->RootWindow != dash->RootWindow)) return false;
   for (const CellRect &r : dashCells_)
     if (x >= r.x0 && x < r.x1 && y >= r.y0 && y < r.y1) {
       column = r.column;
@@ -1379,7 +1438,6 @@ bool Ui::dashboardCellAt(float x, float y, int &column, int &layerId) const {
 }
 
 void Ui::dashboard(App &app) {
-  dashCells_.clear();
   Engine &e = app.engine;
   Project &p = e.project;
   const bool locked = app.showLocked; // show mode: launching only, no editing
@@ -1433,7 +1491,7 @@ void Ui::dashboard(App &app) {
           if (c.board > removeBoard) --c.board;
         p.boards.erase(p.boards.begin() + removeBoard);
         p.currentBoard = std::max(0, removeBoard - 1);
-        app.sel.cellColumn = -1;
+        app.sel.cellColumn = app.sel.cellColumnId = -1;
         app.edited();
       }
       ImGui::EndPopup();
@@ -1922,19 +1980,23 @@ void Ui::dashboard(App &app) {
       ImVec2 pos = ImGui::GetCursorScreenPos();
       ImVec2 size{cellW - 6, cellH - 6};
       ImGui::InvisibleButton("##cell", size);
-      if (ImGui::IsItemVisible()) dashCells_.push_back({pos.x, pos.y, pos.x + size.x, pos.y + size.y, c, l.id});
+      if (ImGui::IsItemVisible()) {
+        dashCells_.push_back({pos.x, pos.y, pos.x + size.x, pos.y + size.y, c, l.id});
+        dashWindow_ = ImGui::GetCurrentWindow();
+      }
       bool hovered = ImGui::IsItemHovered();
       if (hovered && m && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) openPreview(app, m->id);
       // A click only selects (to edit the cell); it goes on air with the column's
       // play, GO, or "Disparar só esta célula".
       if (ImGui::IsItemClicked(ImGuiMouseButton_Left)) {
         app.sel.cellColumn = c;
+        app.sel.cellColumnId = col.id;
         app.sel.cellLayer = l.id;
         app.sel.layerId = l.id;
         if (m) app.sel.inspector = Inspector::Cell;
       }
       if (cell && !locked && ImGui::BeginDragDropSource()) {
-        int payload[2] = {c, l.id};
+        int payload[2] = {col.id, l.id}; // by id: an undo while dragging can remove the column
         ImGui::SetDragDropPayload("LUMEN_CELL", payload, sizeof(payload));
         ImGui::Text(T("%s  (Ctrl = copiar)"), m ? m->name.c_str() : "");
         ImGui::EndDragDropSource();
@@ -1948,11 +2010,14 @@ void Ui::dashboard(App &app) {
         }
         if (const ImGuiPayload *pl = ImGui::AcceptDragDropPayload("LUMEN_CELL")) {
           const int *src = static_cast<const int *>(pl->Data);
-          if (src[0] != c || src[1] != l.id) {
-            Column &sc = p.columns[size_t(src[0])];
-            Cell copy = sc.cells[src[1]];
+          Column *sc = nullptr;
+          for (auto &other : p.columns)
+            if (other.id == src[0]) sc = &other;
+          auto from = sc ? sc->cells.find(src[1]) : std::map<int, Cell>::iterator();
+          if (sc && from != sc->cells.end() && (sc != &col || src[1] != l.id)) {
+            Cell copy = from->second;
+            if (!ImGui::GetIO().KeyCtrl) sc->cells.erase(from);
             col.cells[l.id] = copy;
-            if (!ImGui::GetIO().KeyCtrl) sc.cells.erase(src[1]);
             app.edited();
           }
         }
@@ -2681,6 +2746,15 @@ void Ui::previewWindow(App &app) {
   }
 }
 
+// The shop's dashboard: by name (indices shift when another one is deleted or
+// another project is open); the index only for settings saved before 0.10.48.
+static int operatorBoard(const Project &p) {
+  const std::string name = machineSetting("operatorBoardName");
+  for (size_t b = 0; b < p.boards.size(); ++b)
+    if (!name.empty() && p.boards[b] == name) return int(b);
+  return std::clamp(machineSettingInt("operatorBoard", 0), 0, std::max(0, int(p.boards.size()) - 1));
+}
+
 // ---------------------------------------------------------------- operator mode
 // The shop screen: the cues of one dashboard as big buttons (a click puts it
 // on air), the one on air highlighted with its time left, and Stop, Blackout
@@ -2697,7 +2771,10 @@ void Ui::operatorScreen(App &app) {
                ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings |
                    ImGuiWindowFlags_NoBringToFrontOnFocus);
   ImDrawList *dl = ImGui::GetWindowDrawList();
-  const int board = std::clamp(machineSettingInt("operatorBoard", 0), 0, std::max(0, int(p.boards.size()) - 1));
+  const int board = operatorBoard(p);
+  // GO from OSC/MIDI (and anything else that follows the current dashboard)
+  // acts on the shop's dashboard, not on the one last open in the editor.
+  if (p.currentBoard != board) p.currentBoard = board;
 
   // Top: name of the dashboard, and the lock that leaves operator mode.
   if (bigFont_) ImGui::PushFont(bigFont_);
@@ -2712,11 +2789,7 @@ void Ui::operatorScreen(App &app) {
     drawIcon(ImGui::GetWindowDrawList(), Icon::Lock, {la.x + 20, (la.y + lb.y) * 0.5f}, lb.y - la.y,
              ImGui::GetColorU32(ImGuiCol_Text));
   }
-  if (lockHit) {
-    askOperatorPin_ = true;
-    operatorPin_.clear();
-    operatorPinWrong_ = false;
-  }
+  if (lockHit) requestOperatorPin();
   ImGui::SetItemTooltip("%s", T("Sair do Modo Operador (pede o PIN)"));
   ImGui::Separator();
 
@@ -2929,15 +3002,23 @@ void Ui::operatorScreen(App &app) {
         else if (operatorPin_.size() < 12) operatorPin_ += keys[i];
       }
     }
-    if (enter) {
+    // Five wrong PINs in a row: 30 s before the next try (no guessing it).
+    const double now = ImGui::GetTime(), wait = operatorPinLockUntil_ - now;
+    if (wait > 0) ImGui::TextColored({1, 0.6f, 0.3f, 1}, T("Muitas tentativas: aguarde %d s"), int(std::ceil(wait)));
+    if (enter && wait <= 0) {
       if (app.checkOperatorPin(operatorPin_)) {
+        operatorPinFails_ = 0;
         app.setOperatorMode(false);
         ImGui::CloseCurrentPopup();
       } else {
         operatorPinWrong_ = true;
+        if (++operatorPinFails_ >= 5) {
+          operatorPinFails_ = 0;
+          operatorPinLockUntil_ = now + 30;
+        }
       }
-      operatorPin_.clear();
     }
+    if (enter) operatorPin_.clear();
     if (ImGui::Button(T("Cancelar##oppin"), {-1, 44})) ImGui::CloseCurrentPopup();
     if (bigFont_) ImGui::PopFont();
     ImGui::EndPopup();
@@ -2957,11 +3038,14 @@ void Ui::operatorSetupWindow(App &app) {
                              "grandes, Parar, Blackout e volume. Mapping, saídas e ajustes ficam escondidos; para "
                              "sair, o cadeado pede o PIN."));
   ImGui::Spacing();
-  int board = std::clamp(machineSettingInt("operatorBoard", 0), 0, std::max(0, int(p.boards.size()) - 1));
+  int board = operatorBoard(p);
   ImGui::SetNextItemWidth(240);
   if (ImGui::BeginCombo(T("Dashboard dos botões"), board < int(p.boards.size()) ? p.boards[size_t(board)].c_str() : "")) {
     for (size_t b = 0; b < p.boards.size(); ++b)
-      if (ImGui::Selectable(p.boards[b].c_str(), int(b) == board)) setMachineSetting("operatorBoard", int(b));
+      if (ImGui::Selectable(p.boards[b].c_str(), int(b) == board)) {
+        setMachineSetting("operatorBoard", int(b));
+        setMachineSetting("operatorBoardName", p.boards[b]); // by name: deleting another dashboard shifts indices
+      }
     ImGui::EndCombo();
   }
   helpMarker(T("Dica: crie um dashboard \"Loja\" (botão Dashboard ▾) só com os vídeos do operador."));
@@ -2969,18 +3053,30 @@ void Ui::operatorSetupWindow(App &app) {
   if (ImGui::Checkbox(T("Abrir sempre no Modo Operador (com as saídas ligadas)"), &atStart))
     setMachineSetting("operatorAtStart", atStart ? 1 : 0);
   ImGui::SeparatorText(T("PIN"));
-  static char newPin[16] = "";
+  // Digits only (CharsDecimal also lets "," "." "+" through, invisible in a
+  // password field, and the keypad that unlocks has only digits), at most 12
+  // (what the keypad takes), typed twice: a PIN that cannot be typed back
+  // locked the shop out for good.
+  static char newPin[13] = "", newPin2[13] = "";
+  auto digitsOnly = [](ImGuiInputTextCallbackData *d) -> int { return d->EventChar < '0' || d->EventChar > '9'; };
+  const ImGuiInputTextFlags pinFlags = ImGuiInputTextFlags_CallbackCharFilter | ImGuiInputTextFlags_Password;
   ImGui::SetNextItemWidth(160);
-  ImGui::InputText(T("Novo PIN"), newPin, sizeof(newPin), ImGuiInputTextFlags_CharsDecimal | ImGuiInputTextFlags_Password);
-  ImGui::SameLine();
-  ImGui::BeginDisabled(std::strlen(newPin) < 4);
+  ImGui::InputText(T("Novo PIN"), newPin, sizeof(newPin), pinFlags, digitsOnly);
+  ImGui::SetNextItemWidth(160);
+  ImGui::InputText(T("Repita o PIN"), newPin2, sizeof(newPin2), pinFlags, digitsOnly);
+  const bool pinOk = std::strlen(newPin) >= 4 && std::strcmp(newPin, newPin2) == 0;
+  ImGui::BeginDisabled(!pinOk);
   if (ImGui::Button(T("Trocar PIN"))) {
     app.setOperatorPin(newPin);
-    newPin[0] = 0;
+    newPin[0] = newPin2[0] = 0;
     app.status(T("PIN do Modo Operador trocado"));
   }
   ImGui::EndDisabled();
-  ImGui::TextDisabled("%s", T("Só números, 4 ou mais. Vale para este computador."));
+  if (std::strlen(newPin2) > 0 && std::strcmp(newPin, newPin2) != 0) {
+    ImGui::SameLine();
+    ImGui::TextColored({1, 0.5f, 0.4f, 1}, "%s", T("os dois não conferem"));
+  }
+  ImGui::TextDisabled("%s", T("Só números, de 4 a 12. Vale para este computador."));
   ImGui::Separator();
   pushPrimary();
   if (ImGui::Button(T("Entrar no Modo Operador agora"), {-1, 40})) {
@@ -3993,7 +4089,7 @@ void Ui::inputMeshWindow(App &app) {
   }
   int grid[2] = {w->meshCols, w->meshRows};
   ImGui::SetNextItemWidth(140);
-  if (ImGui::InputInt2(T("Divisão"), grid)) { w->resampleMesh(grid[0], grid[1]); app.edited(); }
+  if (inputInt2Deferred(T("Divisão"), grid)) { w->resampleMesh(grid[0], grid[1]); app.edited(); }
   ImGui::SameLine();
   if (ImGui::Button(T("Grade regular"))) { w->uvMesh.clear(); app.edited(); }
   ImGui::SameLine();
@@ -4328,7 +4424,7 @@ void Ui::mappingSection(App &app, Layer &layer, float CW, float CH) {
       }
       if (warping) {
         int div[2] = {s.warp.meshCols - 1, s.warp.meshRows - 1};
-        if (ImGui::InputInt2(T("Divisão"), div)) {
+        if (inputInt2Deferred(T("Divisão"), div)) {
           s.warp.resampleMesh(std::clamp(div[0], 1, 32) + 1, std::clamp(div[1], 1, 32) + 1); // keeps the current warp
           app.edited();
         }
@@ -4441,7 +4537,7 @@ void Ui::mediaInspector(App &app) {
       app.edited();
     }
     int size[2] = {m->width, m->height};
-    if (ImGui::InputInt2(T("Resolução"), size)) {
+    if (inputInt2Deferred(T("Resolução"), size)) {
       m->width = std::clamp(size[0], 16, 8192);
       m->height = std::clamp(size[1], 16, 8192);
       app.edited();
@@ -4502,7 +4598,7 @@ void Ui::mediaInspector(App &app) {
     if (colorEdit(T("Cor"), m->color1, true)) app.edited();
     if (colorEdit(T("Fundo"), m->color2, true)) app.edited();
     int sz[2] = {m->width, m->height};
-    if (ImGui::InputInt2(T("Tamanho (px)"), sz)) { m->width = std::clamp(sz[0], 16, 8192); m->height = std::clamp(sz[1], 16, 8192); app.edited(); }
+    if (inputInt2Deferred(T("Tamanho (px)"), sz)) { m->width = std::clamp(sz[0], 16, 8192); m->height = std::clamp(sz[1], 16, 8192); app.edited(); }
   } else if (m->type == MediaType::NDI) {
     if (inputText(T("Fonte NDI"), m->path)) { app.engine.cache.invalidate(m->id); app.edited(); }
     if (!ndiAvailable()) ImGui::TextColored({1, 0.6f, 0.3f, 1}, "%s", ndiStatus().c_str());
@@ -4512,7 +4608,7 @@ void Ui::mediaInspector(App &app) {
   } else if (m->type == MediaType::Shader) {
     ImGui::TextWrapped(T("Arquivo: %s"), m->path.c_str());
     int sz[2] = {m->width, m->height};
-    if (ImGui::InputInt2(T("Tamanho (px)"), sz)) {
+    if (inputInt2Deferred(T("Tamanho (px)"), sz)) {
       m->width = std::clamp(sz[0], 16, 8192);
       m->height = std::clamp(sz[1], 16, 8192);
       app.edited();
@@ -4751,7 +4847,7 @@ void Ui::outputInspector(App &app) {
       if (ImGui::Checkbox(T("Sem janela (só Spout)"), &o->windowless)) app.edited();
       if (o->windowless) {
         int sz[2] = {o->winW, o->winH};
-        if (ImGui::InputInt2(T("Tamanho (px)"), sz)) {
+        if (inputInt2Deferred(T("Tamanho (px)"), sz)) {
           o->winW = std::max(16, sz[0]);
           o->winH = std::max(16, sz[1]);
           app.edited();
@@ -4763,7 +4859,7 @@ void Ui::outputInspector(App &app) {
   }
   if (o->monitor < 0) {
     int sz[2] = {o->winW, o->winH};
-    if (ImGui::InputInt2(T("Tamanho da janela"), sz)) {
+    if (inputInt2Deferred(T("Tamanho da janela"), sz)) {
       o->winW = std::max(64, sz[0]);
       o->winH = std::max(64, sz[1]);
       app.edited();
@@ -4808,7 +4904,7 @@ void Ui::outputInspector(App &app) {
   helpMarker(T("Mostra esta saída no workspace. Use Perspectiva (M) ou Malha (G) para corrigir "
              "a geometria do projetor inteiro (keystone / superfícies curvas)."));
   int grid[2] = {o->warp.meshCols, o->warp.meshRows};
-  if (ImGui::InputInt2(T("Malha (col × lin)"), grid)) {
+  if (inputInt2Deferred(T("Malha (col × lin)"), grid)) {
     o->warp.resampleMesh(grid[0], grid[1]); // keeps the current warp
     app.edited();
   }
@@ -5118,7 +5214,7 @@ void Ui::interactionInspector(App &app) {
   sectionTitle(T("Entrada OSC"));
   bool changed = ImGui::Checkbox(T("Ativar OSC"), &p.oscEnabled);
   ImGui::SetNextItemWidth(120);
-  changed |= ImGui::InputInt(T("Porta UDP"), &p.oscPort);
+  changed |= inputIntDeferred(T("Porta UDP"), &p.oscPort);
   if (changed) {
     p.oscPort = std::clamp(p.oscPort, 1, 65535);
     e.restartOsc();
@@ -5198,7 +5294,8 @@ void Ui::interactionInspector(App &app) {
     }
     ImGui::SameLine();
     ImGui::SetNextItemWidth(90);
-    ch |= ImGui::InputInt(T("baud"), &si.baud, 0);
+    ch |= inputIntDeferred(T("baud"), &si.baud, 0);
+    si.baud = std::clamp(si.baud, 300, 4000000);
     if (ch) app.edited();
     if (e.serialInput().connected()) ImGui::TextColored(kAccent, T("Lendo %s"), e.serialInput().port().c_str());
     else if (e.serialInput().running())
@@ -5291,9 +5388,9 @@ void Ui::interactionInspector(App &app) {
     ch |= ImGui::Combo("##dmxproto", &proto, "Art-Net\0sACN\0");
     d.protocol = DmxProtocol(proto);
     ImGui::SetNextItemWidth(90);
-    ch |= ImGui::InputInt(T("Universo inicial"), &d.universe);
+    ch |= inputIntDeferred(T("Universo inicial"), &d.universe);
     ImGui::SetNextItemWidth(90);
-    ch |= ImGui::InputInt(T("Quantidade"), &d.count);
+    ch |= inputIntDeferred(T("Quantidade"), &d.count);
     d.universe = std::clamp(d.universe, 0, 32767);
     d.count = std::clamp(d.count, 1, 64);
     if (ch) { e.restartDmxInput(); app.edited(); }
@@ -5399,7 +5496,12 @@ void Ui::interactionInspector(App &app) {
   }
   if (remove >= 0) {
     p.mappings.erase(p.mappings.begin() + remove);
+    // Indices after the removed one move up by one: "Aprender" / "Calibrar"
+    // waiting on mapping C kept the old index and wrote into D.
     if (e.learnMapping == remove) e.learnMapping = -1;
+    else if (e.learnMapping > remove) --e.learnMapping;
+    if (calibrating_ == remove) calibrating_ = -1;
+    else if (calibrating_ > remove) --calibrating_;
     app.edited();
   }
   if (ImGui::Button(T("+ Mapeamento"))) {
@@ -5588,7 +5690,7 @@ void Ui::ledInspector(App &app) {
       ImGui::EndCombo();
     }
     int size[2] = {m->cols, m->rows};
-    if (ImGui::InputInt2(T("LEDs (col × lin)"), size)) {
+    if (inputInt2Deferred(T("LEDs (col × lin)"), size)) {
       m->cols = std::clamp(size[0], 1, 4096);
       m->rows = std::clamp(size[1], 1, 4096);
       app.edited();

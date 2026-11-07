@@ -7,7 +7,10 @@
 
 namespace lumen {
 
-static int nominal(double fps) { return int(std::lround(fps)); }
+// A rate that is not a timecode rate (0 from a hand-edited file) divided by
+// zero below (the program closed): anything outside 1..120 counts as 25.
+static double usableFps(double fps) { return fps >= 1 && fps <= 120 ? fps : 25.0; }
+static int nominal(double fps) { return int(std::lround(usableFps(fps))); }
 
 double Timecode::seconds() const {
   int n = nominal(fps);
@@ -22,8 +25,9 @@ double Timecode::seconds() const {
 
 Timecode Timecode::fromSeconds(double t, double fps) {
   Timecode tc;
+  fps = usableFps(fps);
   tc.fps = fps;
-  t = std::max(0.0, t);
+  t = std::isfinite(t) ? std::max(0.0, t) : 0.0;
   int n = nominal(fps);
   long frames = long(std::floor(t * fps + 1e-6));
   if (std::fabs(fps - 29.97) < 0.01) {

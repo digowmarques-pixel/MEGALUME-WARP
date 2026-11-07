@@ -18,6 +18,8 @@
 #include <cstdio>
 #include <fstream>
 #include <algorithm>
+#include <chrono>
+#include <thread>
 #include <sstream>
 #include <filesystem>
 #include <map>
@@ -99,9 +101,17 @@ void App::newProject() {
 bool App::openProject(const std::string &path) {
   Project p;
   std::string err;
+  bool fromBackup = false;
   if (!loadProject(path, p, &err)) {
-    status(T("Erro ao abrir: ") + err, true);
-    return false;
+    // Damaged (power cut, full disk): the previous save, kept next to it.
+    std::string bakErr;
+    if (loadProject(path + ".bak", p, &bakErr)) {
+      p.filePath = path;
+      fromBackup = true;
+    } else {
+      status(T("Erro ao abrir: ") + err, true);
+      return false;
+    }
   }
   engine.setProject(std::move(p), false);
   sel = {};
@@ -111,7 +121,7 @@ bool App::openProject(const std::string &path) {
   history_.reset(serializeProject(engine.project, ""));
   dirty = false;
   // Files moved with the project folder: find them next to it.
-  int missing = missingMedia();
+  int missing = missingMediaNow();
   if (missing > 0) {
     int fixed = relinkMissing(platform::toUtf8(platform::toPath(path).parent_path()));
     history_.reset(serializeProject(engine.project, ""));
@@ -121,6 +131,10 @@ bool App::openProject(const std::string &path) {
            fixed < missing);
   } else {
     status(T("Projeto aberto: ") + path);
+  }
+  if (fromBackup) {
+    dirty = true; // saving rewrites the damaged file
+    status(T("O arquivo do projeto estava danificado: foi aberto o último salvamento anterior (.bak). Salve para consertar."), true);
   }
   checkRecovery();
   return true;
@@ -143,6 +157,7 @@ void App::autosave() {
   // never touched.
   double now = glfwGetTime();
   if (!dirty || now - lastAutosave_ < 60) return;
+  if (recoveryPending()) return; // that file holds the changes the crash left: not over them
   lastAutosave_ = now;
   std::string base = engine.project.filePath.empty() ? std::string()
                                                      : platform::toUtf8(platform::toPath(engine.project.filePath).parent_path());
@@ -158,6 +173,10 @@ void App::clearAutosave(const std::string &projectPath) {
 }
 
 void App::checkRecovery() {
+  // Whatever was offered belonged to the project that was open before.
+  recoveryFile_.clear();
+  recoveryInfo_.clear();
+  recoveryProject_.clear();
   std::error_code ec;
   const std::string &path = engine.project.filePath;
   auto file = platform::toPath(autosaveFile(path));
@@ -173,9 +192,14 @@ void App::checkRecovery() {
   }
   recoveryFile_ = autosaveFile(path);
   recoveryInfo_ = orig.empty() ? T("um projeto não salvo") : orig;
+  recoveryProject_ = path;
 }
 
 void App::recover(bool yes) {
+  if (recoveryProject_ != engine.project.filePath) { // another project was opened meanwhile
+    recoveryFile_.clear();
+    return;
+  }
   if (yes) {
     std::string text;
     Project p;
@@ -197,16 +221,36 @@ void App::recover(bool yes) {
 // ---------------------------------------------------------------- missing media
 
 bool App::mediaMissing(const MediaItem &m) const {
-  // The library is drawn every frame: check the disk at most every 2 s.
+  // The library is drawn every frame: the disk is checked every 2 s, on
+  // another thread (a network share or USB disk that does not answer stalled
+  // this thread, and every output with it, for seconds each time).
   double now = glfwGetTime();
-  if (now - missingCheckedAt_ > 2) {
-    missingCache_.clear();
+  if (missingJob_.valid() && missingJob_.wait_for(std::chrono::seconds(0)) == std::future_status::ready)
+    missingCache_ = missingJob_.get();
+  if (!missingJob_.valid() && now - missingCheckedAt_ > 2) {
     missingCheckedAt_ = now;
+    std::vector<MediaItem> items;
+    for (auto &x : engine.project.library) {
+      MediaItem copy;
+      copy.id = x.id;
+      copy.type = x.type;
+      copy.path = x.path;
+      items.push_back(std::move(copy));
+    }
+    missingJob_ = std::async(std::launch::async, [items = std::move(items)] {
+      std::map<std::pair<int, std::string>, bool> out;
+      for (auto &x : items) out[{x.id, x.path}] = checkMissing(x);
+      return out;
+    });
   }
-  auto key = std::make_pair(m.id, m.path);
-  auto it = missingCache_.find(key);
-  if (it != missingCache_.end()) return it->second;
-  return missingCache_[key] = checkMissing(m);
+  auto it = missingCache_.find({m.id, m.path});
+  return it != missingCache_.end() && it->second; // not checked yet: not shown as missing
+}
+
+int App::missingMediaNow() const {
+  int n = 0;
+  for (auto &m : engine.project.library) n += checkMissing(m);
+  return n;
 }
 
 bool App::checkMissing(const MediaItem &m) {
@@ -228,13 +272,17 @@ int App::relinkMissing(const std::string &dir) {
   std::map<std::string, std::string> byName; // file name -> first match
   std::error_code ec;
   int scanned = 0;
-  for (auto it = std::filesystem::recursive_directory_iterator(platform::toPath(dir), std::filesystem::directory_options::skip_permission_denied, ec);
-       !ec && it != std::filesystem::recursive_directory_iterator() && scanned < 200000; it.increment(ec), ++scanned) {
-    if (!it->is_regular_file(ec)) continue;
-    std::string n = platform::toUtf8(it->path().filename());
-    std::transform(n.begin(), n.end(), n.begin(), ::tolower);
-    byName.emplace(n, platform::toUtf8(it->path()));
-  }
+  // Up to 200 000 files (a whole drive): on another thread, with the show
+  // running meanwhile.
+  platform::runKeepingShow([&] {
+    for (auto it = std::filesystem::recursive_directory_iterator(platform::toPath(dir), std::filesystem::directory_options::skip_permission_denied, ec);
+         !ec && it != std::filesystem::recursive_directory_iterator() && scanned < 200000; it.increment(ec), ++scanned) {
+      if (!it->is_regular_file(ec)) continue;
+      std::string n = platform::toUtf8(it->path().filename());
+      std::transform(n.begin(), n.end(), n.begin(), ::tolower);
+      byName.emplace(n, platform::toUtf8(it->path()));
+    }
+  });
   int fixed = 0;
   for (auto &m : engine.project.library) {
     if (!checkMissing(m)) continue;
@@ -247,6 +295,7 @@ int App::relinkMissing(const std::string &dir) {
     ++fixed;
   }
   missingCheckedAt_ = -10;
+  missingCache_.clear();
   if (fixed) edited();
   return fixed;
 }
@@ -300,6 +349,7 @@ void App::setOperatorMode(bool on) {
   if (on) lockedBefore = showLocked;
   operatorMode = on;
   showLocked = on ? true : lockedBefore; // nothing can be edited behind the operator screen
+  if (on) showOutputControls = false;    // no calibration handles on the shop's screens
 }
 
 bool App::checkOperatorPin(const std::string &pin) const {
@@ -347,6 +397,7 @@ void App::unlessUnsaved(std::function<void()> action) {
   }
   afterUnsaved_ = std::move(action);
   askUnsaved_ = true;
+  discardedOnQuit_ = false;
 }
 
 void App::openDialog() {
@@ -585,10 +636,21 @@ int App::run(const Options &opts) {
     std::fflush(stdout);
     return bad == 0 && n > 0 ? 0 : 2;
   }
+  bool projectMissing = false;
   if (!opts.projectPath.empty()) {
     if (!openProject(opts.projectPath)) {
       newProject();
       checkRecovery();
+      // Not there yet (a USB disk or network share mounted after logon):
+      // tried again every 2 s for 2 minutes. Meanwhile nothing of the empty
+      // project is launched (--launch put its test card on the shop screen).
+      std::error_code ec;
+      if (!std::filesystem::exists(platform::toPath(opts.projectPath), ec)) {
+        pendingProject_ = opts.projectPath;
+        pendingUntil_ = glfwGetTime() + 120;
+        status(T("Aguardando o projeto (disco ainda não disponível): ") + opts.projectPath, true);
+      }
+      projectMissing = true;
     }
   } else {
     newProject();
@@ -627,10 +689,32 @@ int App::run(const Options &opts) {
     showOutputControls = true;
     sel.outputId = engine.project.outputs.front().id;
   }
-  if (opts.launchColumn > 0) engine.launchColumn(opts.launchColumn - 1);
+  if (projectMissing) {
+    // nothing launched (see above)
+  } else if (opts.launchColumn > 0) engine.launchColumn(opts.launchColumn - 1);
   else if (engine.project.startColumn > 0) engine.launchColumn(engine.project.startColumn - 1);
+  const int launchAfterLoad = opts.launchColumn;
 
   double last = glfwGetTime(), fpsTimer = last, started = last;
+  // While a file dialog is open (it runs on another thread), keep the show
+  // going behind it: video, OSC, timecode, redundancy heartbeat, outputs.
+  platform::setDialogPump([this, &last, &opts] {
+    glfwPollEvents();                // no "not responding" ghost on the projectors
+    ImGui::GetIO().ClearEventsQueue(); // clicks behind the dialog act on nothing later
+    double now = glfwGetTime();
+    double dt = std::clamp(now - last, 0.0, 0.1);
+    last = now;
+    engine.update(dt);
+    engine.render();
+    if (!opts.noOutputs && outputsOpen && outputs.openCount() > 0) {
+      outputs.sync(engine.project);
+      outputs.render(engine.project, [this](int id) -> const Texture & { return engine.canvasTexture(id); },
+                     engine.time(), engine.blackout, nullptr);
+      glfwMakeContextCurrent(window);
+    } else {
+      std::this_thread::sleep_for(std::chrono::milliseconds(15));
+    }
+  });
   bool testDropDone = false;
   bool audioStallDone = false;
   for (size_t at = 0; at < opts.testTimecode.size();) {
@@ -646,6 +730,22 @@ int App::run(const Options &opts) {
   while (!requestQuit) {
     glfwPollEvents();
     double now = glfwGetTime();
+    if (!pendingProject_.empty() && now >= pendingNextTry_) { // the start-up project, once its disk is there
+      pendingNextTry_ = now + 2;
+      std::error_code ec;
+      if (std::filesystem::exists(platform::toPath(pendingProject_), ec)) {
+        std::string path = std::move(pendingProject_);
+        pendingProject_.clear();
+        if (openProject(path)) {
+          outputsOpen = outputsOpen || engine.project.startOutputs;
+          if (launchAfterLoad > 0) engine.launchColumn(launchAfterLoad - 1);
+          else if (engine.project.startColumn > 0) engine.launchColumn(engine.project.startColumn - 1);
+        }
+      } else if (now >= pendingUntil_) {
+        status(T("Projeto não encontrado: ") + pendingProject_, true);
+        pendingProject_.clear();
+      }
+    }
     double dt = std::clamp(now - last, 0.0, 0.1);
     if (opts.frames > 0) dt = 1.0 / 60.0; // deterministic for automated runs
     last = now;
@@ -724,19 +824,23 @@ int App::run(const Options &opts) {
         showLocked = !showLocked;
         status(showLocked ? T("Modo show: edição travada (Ctrl+Shift+L destrava)") : T("Edição liberada"));
       }
-      if (!ctrl && ImGui::IsKeyPressed(ImGuiKey_Space, false)) shift ? engine.back() : engine.go();
+      // Operator mode: only its own on-screen buttons act. Space (GO), B, the
+      // save dialogs (a file browser that opens other programs) and the
+      // calibration handles on the shop's screens are all off.
+      const bool op = operatorMode;
+      if (!op && !ctrl && ImGui::IsKeyPressed(ImGuiKey_Space, false)) shift ? engine.back() : engine.go();
       // Esc only closes an open menu (ImGui does it only with keyboard
       // navigation on). It never stops the show: a key pressed to leave a menu
       // or a field must not take the media off the air.
       if (!ctrl && ImGui::IsKeyPressed(ImGuiKey_Escape, false) && popupWasOpen_) ImGui::ClosePopupsExceptModals();
-      if (!ctrl && ImGui::IsKeyPressed(ImGuiKey_B, false)) engine.blackout = !engine.blackout;
-      if (ctrl && ImGui::IsKeyPressed(ImGuiKey_S, false)) saveProject(shift);
+      if (!op && !ctrl && ImGui::IsKeyPressed(ImGuiKey_B, false)) engine.blackout = !engine.blackout;
+      if (!op && ctrl && ImGui::IsKeyPressed(ImGuiKey_S, false)) saveProject(shift);
       if (!showLocked && ctrl && ImGui::IsKeyPressed(ImGuiKey_O, false)) unlessUnsaved([this] { openDialog(); });
       if (!showLocked && ctrl && ImGui::IsKeyPressed(ImGuiKey_N, false)) unlessUnsaved([this] { newProject(); });
       if (!showLocked && ctrl && ImGui::IsKeyPressed(ImGuiKey_I, false)) importDialog();
       if (ctrl && !shift && ImGui::IsKeyPressed(ImGuiKey_P, false) && !operatorMode) outputsOpen = !outputsOpen;
       if (ctrl && shift && ImGui::IsKeyPressed(ImGuiKey_P, false) && !operatorMode) ui_->openOutputs();
-      if (ctrl && shift && ImGui::IsKeyPressed(ImGuiKey_D, false)) showOutputControls = !showOutputControls;
+      if (!op && ctrl && shift && ImGui::IsKeyPressed(ImGuiKey_D, false)) showOutputControls = !showOutputControls;
       if (!showLocked) {
         if (ctrl && ImGui::IsKeyPressed(ImGuiKey_Z)) shift ? redo() : undo();
         if (ctrl && ImGui::IsKeyPressed(ImGuiKey_Y)) redo();
@@ -751,7 +855,8 @@ int App::run(const Options &opts) {
 
     if (g_closeRequested) {
       g_closeRequested = false;
-      unlessUnsaved([this] { requestQuit = true; });
+      if (operatorMode) ui_->requestOperatorPin(); // the close button (Alt+F4) is no way out of the lock
+      else unlessUnsaved([this] { requestQuit = true; });
     }
     if (askUnsaved_) {
       ImGui::OpenPopup("###unsaved");
@@ -771,6 +876,7 @@ int App::run(const Options &opts) {
       }
       ImGui::SameLine();
       if (ImGui::Button(T("Descartar"))) {
+        discardedOnQuit_ = true; // on purpose: no recovery offered next time
         run();
         ImGui::CloseCurrentPopup();
       }
@@ -894,7 +1000,10 @@ int App::run(const Options &opts) {
     if (lastFrame) break;
   }
 
-  clearAutosave(); // only a crash leaves something to recover
+  platform::setDialogPump(nullptr);
+  // Only a crash leaves something to recover: changes still unsaved here were
+  // discarded on purpose (the quit asked first), or the autosave is kept.
+  if (!dirty || discardedOnQuit_) clearAutosave();
   outputs.shutdown();
   engine.shutdown();
   // GPU objects must die while the context is alive (before glfwTerminate).

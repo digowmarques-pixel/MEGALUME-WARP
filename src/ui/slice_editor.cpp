@@ -127,6 +127,9 @@ void ringHandle(ImDrawList *dl, ImVec2 p, bool hot, ImU32 col) {
 bool propRow(const char *label, float &v, float step, float /*speed*/, const char *fmt) {
   static ImGuiID editing = 0; // the field being typed in, and its text
   static char text[64];
+  // ...and the value it belongs to: the fields of every slice share their ids,
+  // and clicking another slice while typing applied the text to that one.
+  static const float *editingValue = nullptr;
   ImGui::PushID(label);
   ImGui::AlignTextToFramePadding();
   ImGui::TextUnformatted(label);
@@ -139,16 +142,19 @@ bool propRow(const char *label, float &v, float step, float /*speed*/, const cha
   ImGui::InputText("##v", buf, sizeof(text), ImGuiInputTextFlags_AutoSelectAll);
   if (ImGui::IsItemActivated()) {
     editing = id;
+    editingValue = &v;
     std::snprintf(text, sizeof(text), "%s", shown);
   }
   bool changed = false;
   if (ImGui::IsItemDeactivated() && editing == id) {
-    if (ImGui::IsItemDeactivatedAfterEdit()) {
+    if (ImGui::IsItemDeactivatedAfterEdit() && editingValue == &v) {
       std::string t;
       for (const char *c = text; *c; ++c)
         if (static_cast<unsigned char>(*c) < 0x80) t += *c; // drops "°" and other units
       double r;
-      if (evalNumber(t, v, r)) {
+      // Within a million (px, degrees, counts): 1e39 became infinity, which
+      // was saved as null and made the project impossible to open.
+      if (evalNumber(t, v, r) && std::isfinite(r) && std::fabs(r) <= 1e6) {
         v = float(r);
         changed = true;
       }
@@ -332,14 +338,38 @@ void Ui::sliceEditor(App &app, OutputConfig &o, bool out) {
     app.outputs.renderPreview(p, o, index, e.canvasTexture(o.canvasId), stagePreview_, e.mesh, e.time(), false);
     dl->AddImage(texId(stagePreview_.texture()), origin, cMax, {0, 1}, {1, 0});
     // Output guide: a picture of the surface over the output, here only.
-    if (guideLoaded_ != o.guideImage) {
-      guideLoaded_ = o.guideImage;
-      guideTex_.reset();
-      VideoFrame f;
-      if (!o.guideImage.empty() && decodeStill(o.guideImage, f) && f.width > 0) {
+    // Decoded on another thread and at most 4096 px: a 100 MP venue plan, or
+    // a picture on a network share that does not answer, froze every output
+    // while it loaded (at each switch between two outputs, too).
+    if (guideJob_.valid() && guideJob_.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
+      VideoFrame f = guideJob_.get();
+      if (guideJobPath_ == o.guideImage && f.width > 0) {
         guideTex_ = std::make_unique<Texture>();
         guideTex_->upload(f.rgba().data(), f.width, f.height, f.stride[0]);
       }
+    }
+    if (guideLoaded_ != o.guideImage && !guideJob_.valid()) {
+      guideLoaded_ = guideJobPath_ = o.guideImage;
+      guideTex_.reset();
+      if (!o.guideImage.empty())
+        guideJob_ = std::async(std::launch::async, [path = o.guideImage] {
+          VideoFrame f;
+          if (!decodeStill(path, f) || f.width <= 0 || f.height <= 0) return VideoFrame{};
+          const int k = std::max(1, (std::max(f.width, f.height) + 4095) / 4096);
+          if (k > 1) { // an underlay: every k-th pixel is plenty
+            VideoFrame s;
+            s.width = f.width / k;
+            s.height = f.height / k;
+            s.stride[0] = s.width * 4;
+            s.rgba().resize(size_t(s.width) * size_t(s.height) * 4);
+            for (int y = 0; y < s.height; ++y)
+              for (int x = 0; x < s.width; ++x)
+                std::copy_n(&f.rgba()[size_t(y * k) * size_t(f.stride[0]) + size_t(x * k) * 4], 4,
+                            &s.rgba()[(size_t(y) * size_t(s.width) + size_t(x)) * 4]);
+            return s;
+          }
+          return f;
+        });
     }
     if (!o.guideImage.empty() && guideTex_ && !guideTex_->empty())
       dl->AddImage(texId(*guideTex_), origin, cMax, {0, 0}, {1, 1},
@@ -449,7 +479,10 @@ void Ui::sliceEditor(App &app, OutputConfig &o, bool out) {
   }
 
   // Start of a drag.
-  if (ImGui::IsItemClicked(ImGuiMouseButton_Left) && !stageHand_) {
+  // The second click of a double click adds mesh lines (below): it must not
+  // start a drag first (that left the double click with nothing to do).
+  const bool meshDouble = out && editPoints && !screenSel && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left);
+  if (ImGui::IsItemClicked(ImGuiMouseButton_Left) && !stageHand_ && !meshDouble) {
     stageDrag_ = 0;
     if (hoverSquare >= 0) { stageDrag_ = 2; stageHandle_ = hoverSquare; }
     else if (hoverRing >= 0) { stageDrag_ = 3; stageHandle_ = hoverRing; }
@@ -543,8 +576,9 @@ void Ui::sliceEditor(App &app, OutputConfig &o, bool out) {
         float deg = (std::atan2(a1.y, a1.x) - std::atan2(a0.y, a0.x)) * 180.0f / kPi;
         float rot = stageStart_[4] + deg;
         if (io.KeyShift) rot = std::round(rot / 15.0f) * 15.0f;
-        while (rot > 180) rot -= 360;
-        while (rot <= -180) rot += 360;
+        // remainder, not a loop: a huge value typed in the field (1e10 or
+        // more is a fixed point of rot - 360 in float) spun here forever.
+        rot = std::isfinite(rot) ? std::remainder(rot, 360.0f) : 0.0f;
         cur.inRot = rot;
       } else if (stageDrag_ == 4 && stagePoint_ >= 0 && stagePoint_ < int(cur.warp.uvMesh.size())) {
         Vec2 lm = turn(m - c0, -cur.inRot);
@@ -604,7 +638,7 @@ void Ui::sliceEditor(App &app, OutputConfig &o, bool out) {
     app.edited();
   }
   // Double click in Edit Points (output): a new row and column of mesh points.
-  if (out && editPoints && !screenSel && hovered && stageDrag_ == 0 && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
+  if (meshDouble && hovered && stageDrag_ == 0) {
     Vec2 uv;
     if (s.warp.unmap({mouse.x / ow, mouse.y / oh}, uv) && s.warp.insertLines(uv.x, uv.y)) app.edited();
   }

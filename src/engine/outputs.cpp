@@ -7,6 +7,7 @@
 #endif
 
 #include <algorithm>
+#include <map>
 #include <cmath>
 
 namespace lumen {
@@ -362,13 +363,49 @@ std::vector<GLFWwindow *> OutputManager::handles() const {
   return out;
 }
 
+// Finds the screen an output belongs to. Returns false when it is not
+// connected now: the output stays closed (never on another screen).
+static bool resolveMonitor(OutputConfig &o, const std::vector<MonitorInfo> &mons) {
+  if (o.monitor < 0) {
+    o.monitorRecorded = -1;
+    return true;
+  }
+  if (o.monitorName.empty() || o.monitor != o.monitorRecorded) { // just chosen (or an older file)
+    if (o.monitor >= int(mons.size())) return false;
+    const MonitorInfo &m = mons[size_t(o.monitor)];
+    o.monitorName = m.name;
+    o.monitorX = m.x;
+    o.monitorY = m.y;
+    o.monitorRecorded = o.monitor;
+    return true;
+  }
+  int exact = -1, byName = -1, named = 0;
+  for (size_t i = 0; i < mons.size(); ++i) {
+    if (mons[i].name != o.monitorName) continue;
+    ++named;
+    byName = int(i);
+    if (mons[i].x == o.monitorX && mons[i].y == o.monitorY) exact = int(i);
+  }
+  const int at = exact >= 0 ? exact : named == 1 ? byName : -1; // moved in the arrangement: same name, only one
+  if (at < 0) return false;
+  o.monitor = o.monitorRecorded = at;
+  o.monitorX = mons[size_t(at)].x;
+  o.monitorY = mons[size_t(at)].y;
+  return true;
+}
+
 void OutputManager::sync(Project &p) {
   auto mons = monitors();
+  std::map<int, bool> present; // output id -> its screen is connected
+  for (auto &o : p.outputs) present[o.id] = resolveMonitor(o, mons);
+  for (auto *cache : {&masks2_, &previewMasks_}) // mask buffers of removed outputs
+    for (auto it = cache->begin(); it != cache->end();)
+      it = present.count(it->first) ? std::next(it) : cache->erase(it);
 
   // Close windows whose output was removed or disabled.
   for (auto it = windows_.begin(); it != windows_.end();) {
     OutputConfig *o = p.output((*it)->outputId);
-    if (!o || !o->enabled || o->windowless || (virtualMonitors && !onDisplay(*o, mons))) {
+    if (!o || !o->enabled || o->windowless || !present[o->id] || (virtualMonitors && !onDisplay(*o, mons))) {
       destroy(**it);
       it = windows_.erase(it);
     } else {
@@ -378,6 +415,7 @@ void OutputManager::sync(Project &p) {
 
   for (auto &o : p.outputs) {
     if (!o.enabled || o.windowless) continue;
+    if (!present[o.id]) continue; // its projector is unplugged or off: opens when it is back
     if (virtualMonitors && !onDisplay(o, mons)) continue; // shown in the virtual monitors
     auto it = std::find_if(windows_.begin(), windows_.end(),
                            [&](auto &w) { return w->outputId == o.id; });
@@ -516,7 +554,7 @@ void OutputManager::draw(const Project &p, const OutputConfig &o, int index,
   shader_.set("uIndex", index);
   shader_.set("uRes", float(w), float(h));
   shader_.set("uCanvasPx", cw, ch);
-  shader_.set("uTime", float(time));
+  shader_.set("uTime", shaderTime(time));
   shader_.set("uBlack", blackout || o.muted ? 1.0f : 0.0f); // the screen toggle shows black
   shader_.set("uColorAdj", o.color.brightness, o.color.contrast, o.color.gamma, o.opacity);
   shader_.set("uGain", o.color.gain.r, o.color.gain.g, o.color.gain.b);

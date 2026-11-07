@@ -34,6 +34,8 @@ public:
   // `src` (row 0 = top) placed at rect {x, y, w, h} of a W x H transparent image.
   void place(const Texture &src, int W, int H, const std::array<float, 4> &rect, Framebuffer &target,
              DynamicMesh &mesh);
+  // `src` (row 0 = top) turned clockwise by 90, 180 or 270 degrees into `target`.
+  void rotate(const Texture &src, int degrees, Framebuffer &target, DynamicMesh &mesh);
 
 private:
   Shader shaders_[int(GeneratorKind::COUNT)];
@@ -148,6 +150,7 @@ private:
   const Texture *videoTex_ = nullptr;
   bool hasFrame_ = false;
   std::unique_ptr<Framebuffer> genFb_;
+  std::unique_ptr<Framebuffer> rotFb_; // the frame turned upright (rotation metadata)
   std::unique_ptr<IsfRenderer> isf_;
   std::unique_ptr<TextRenderer> text_;
   std::shared_ptr<LiveInput> live_;

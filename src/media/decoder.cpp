@@ -6,6 +6,7 @@ extern "C" {
 #include <libavcodec/avcodec.h>
 #include <libavdevice/avdevice.h>
 #include <libavformat/avformat.h>
+#include <libavutil/display.h>
 #include <libavutil/hwcontext.h>
 #include <libavutil/imgutils.h>
 #include <libavutil/pixdesc.h>
@@ -102,6 +103,20 @@ struct Pipeline {
     return p->deadlineNs && steadyNs() > p->deadlineNs ? 1 : 0;
   }
   void arm(double seconds) { deadlineNs = live ? steadyNs() + (long long)(seconds * 1e9) : 0; }
+  // Capture devices (DirectShow...) wait for the next frame with no timeout
+  // and never ask the interrupt callback: a card whose HDMI input lost its
+  // signal blocked the read forever, and stopping that layer then froze the
+  // whole program (it waits for this thread). They are read non-blocking here
+  // and polled, so the deadline and closing work.
+  bool pollDevice = false;
+  int readFrame() {
+    while (true) {
+      int r = av_read_frame(fmt, pkt);
+      if (r != AVERROR(EAGAIN) || !pollDevice) return r;
+      if (interrupted(this)) return AVERROR_EXIT;
+      std::this_thread::sleep_for(std::chrono::milliseconds(3));
+    }
+  }
 
   ~Pipeline() {
     if (sws) sws_freeContext(sws);
@@ -173,6 +188,10 @@ struct Pipeline {
     arm(15);
     r = avformat_find_stream_info(fmt, nullptr);
     if (r < 0) { if (error) *error = "stream info: " + averr(r); return false; }
+    if (src.live && ifmt && src.url.find("://") == std::string::npos && src.format != "lavfi") {
+      fmt->flags |= AVFMT_FLAG_NONBLOCK;
+      pollDevice = true;
+    }
 
     for (unsigned i = 0; i < fmt->nb_streams; ++i)
       if (fmt->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_AUDIO) info.hasAudio = true;
@@ -189,6 +208,13 @@ struct Pipeline {
     info.hasVideo = true;
     info.width = st->codecpar->width;
     info.height = st->codecpar->height;
+    if (const AVPacketSideData *sd = av_packet_side_data_get(st->codecpar->coded_side_data, st->codecpar->nb_coded_side_data,
+                                                             AV_PKT_DATA_DISPLAYMATRIX);
+        sd && sd->size >= 9 * sizeof(int32_t)) {
+      const double a = -av_display_rotation_get(reinterpret_cast<const int32_t *>(sd->data));
+      if (std::isfinite(a)) info.rotation = ((int(std::lround(a / 90.0)) * 90) % 360 + 360) % 360;
+    }
+    if (info.rotation == 90 || info.rotation == 270) std::swap(info.width, info.height);
     if (const AVPixFmtDescriptor *pd = av_pix_fmt_desc_get(AVPixelFormat(st->codecpar->format)))
       info.alpha = pd->flags & AV_PIX_FMT_FLAG_ALPHA;
     info.fps = 1.0 / frameDuration;
@@ -233,7 +259,7 @@ struct Pipeline {
   int readPacket() {
     while (true) {
       arm(5);
-      int r = av_read_frame(fmt, pkt);
+      int r = readFrame();
       if (r < 0) return r == AVERROR_EOF ? 0 : r;
       if (pkt->stream_index == stream) return 1;
       av_packet_unref(pkt);
@@ -268,7 +294,7 @@ struct Pipeline {
       if (r == AVERROR_EOF) return 0;
       if (r != AVERROR(EAGAIN)) return r;
       arm(5);
-      r = av_read_frame(fmt, pkt);
+      r = readFrame();
       if (r < 0) {
         avcodec_send_packet(codec, nullptr); // flush remaining frames
         continue;
@@ -314,7 +340,16 @@ struct Pipeline {
     out.width = w;
     out.height = h;
     out.stride[0] = w * 4;
-    out.plane[0].resize(size_t(w) * size_t(h) * 4);
+    out.plane[0].resize(size_t(std::max(w, 0)) * size_t(std::max(h, 0)) * 4);
+    if (!sws || w <= 0 || h <= 0) {
+      // A pixel format swscale does not take (exotic HDR/float images, some
+      // hardware formats): a black frame instead of sws_scale(NULL) crashing.
+      for (size_t i = 0; i < out.plane[0].size(); i += 4) {
+        out.plane[0][i] = out.plane[0][i + 1] = out.plane[0][i + 2] = 0;
+        out.plane[0][i + 3] = 255;
+      }
+      return;
+    }
     uint8_t *dst[4] = {out.plane[0].data(), nullptr, nullptr, nullptr};
     int dstStride[4] = {w * 4, 0, 0, 0};
     sws_scale(sws, frame->data, frame->linesize, 0, h, dst, dstStride);
@@ -420,6 +455,24 @@ bool decodeStill(const std::string &path, VideoFrame &out, std::string *error) {
   if (p.next() != 1) { if (error) *error = "could not decode a frame"; return false; }
   p.toRGBA(out);
   out.pts = 0;
+  if (info.rotation) { // thumbnails and stills upright, like the playback
+    VideoFrame r;
+    const bool quarter = info.rotation != 180;
+    r.width = quarter ? out.height : out.width;
+    r.height = quarter ? out.width : out.height;
+    r.stride[0] = r.width * 4;
+    r.rgba().resize(size_t(r.width) * size_t(r.height) * 4);
+    for (int y = 0; y < r.height; ++y)
+      for (int x = 0; x < r.width; ++x) {
+        int sx, sy; // the source pixel shown at (x, y)
+        if (info.rotation == 90) { sx = y; sy = out.height - 1 - x; }
+        else if (info.rotation == 180) { sx = out.width - 1 - x; sy = out.height - 1 - y; }
+        else { sx = out.width - 1 - y; sy = x; }
+        std::copy_n(&out.rgba()[size_t(sy) * size_t(out.stride[0]) + size_t(sx) * 4], 4,
+                    &r.rgba()[(size_t(y) * size_t(r.width) + size_t(x)) * 4]);
+      }
+    out = std::move(r);
+  }
   return true;
 }
 
@@ -537,6 +590,7 @@ void VideoDecoder::run() {
   DecoderSettings settings = settings_;
   // lavfi test sources make frames as fast as they are read: pace them in real time.
   const bool pace = src_.live && src_.format == "lavfi";
+  int errorReopens = 0; // read/decode errors in a row in a file (see below)
   while (running_) {
     Pipeline p;
     p.keepRunning = &running_;
@@ -658,6 +712,7 @@ void VideoDecoder::run() {
       }
       if (r == 1) {
         skipBefore = -1;
+        errorReopens = 0;
         if (pace) {
           if (!paceStart) { paceStart = steadyNs(); paceFirst = pts; }
           long long due = paceStart + (long long)((pts - paceFirst) * 1e9);
@@ -698,6 +753,22 @@ void VideoDecoder::run() {
       } else {
         if (r < 0 && running_) std::fprintf(stderr, "[decoder] %s: %s\n", src_.url.c_str(), averr(r).c_str());
         if (src_.live) { reopen = true; continue; }
+        // A read or decoding error in a file (a USB or network disk that
+        // hiccups, the GPU decoder lost after a driver reset): open it again,
+        // in software, and go on from the last frame. It used to stop for good
+        // ("end" of a looping clip: a frozen picture until someone relaunched it).
+        if (r < 0 && running_ && errorReopens < 3) {
+          ++errorReopens;
+          settings.hardware = false;
+          reopen = switchDecoder = true;
+          for (int i = 0; i < 5 * errorReopens && running_; ++i) std::this_thread::sleep_for(std::chrono::milliseconds(100));
+          std::lock_guard<std::mutex> lock(mutex_);
+          if (!restart_) {
+            seekTo_ = loopOffset + maxPts + p.frameDuration;
+            restart_ = true;
+          }
+          continue;
+        }
         std::lock_guard<std::mutex> lock(mutex_);
         if (!restart_) eof_ = true; // a seek that came meanwhile wins: no stuck "end"
       }

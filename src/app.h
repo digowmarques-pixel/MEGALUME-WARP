@@ -7,6 +7,7 @@
 
 #include <functional>
 #include <memory>
+#include <future>
 #include <map>
 #include <string>
 #include <vector>
@@ -60,6 +61,7 @@ struct Selection {
   int corner = -1;    // 0..3, perspective handles
   int meshPoint = -1; // index into the mesh
   int cellColumn = -1, cellLayer = -1;
+  int cellColumnId = -1; // the column's id: cellColumn follows it when columns are removed or moved
   int mediaId = -1;
   int outputId = -1;
   int ledId = -1, dmxDeviceId = -1;
@@ -131,11 +133,13 @@ public:
   void setOperatorPin(const std::string &pin);
   // Missing media: relinks every missing file found (by name) under `dir`.
   int relinkMissing(const std::string &dir);
-  int missingMedia() const;
+  int missingMedia() const;     // from the last background check (every 2 s)
+  int missingMediaNow() const;  // checks the disk now
   bool mediaMissing(const MediaItem &m) const;
   static bool checkMissing(const MediaItem &m);
   mutable std::map<std::pair<int, std::string>, bool> missingCache_;
   mutable double missingCheckedAt_ = -10;
+  mutable std::future<std::map<std::pair<int, std::string>, bool>> missingJob_;
   // Crash recovery (autosave of the last session that did not close cleanly).
   bool recoveryPending() const { return !recoveryFile_.empty(); }
   const std::string &recoveryInfo() const { return recoveryInfo_; }
@@ -156,13 +160,16 @@ private:
   void commitIfNeeded();
   std::function<void()> afterUnsaved_;
   bool askUnsaved_ = false;
+  bool discardedOnQuit_ = false;
+  std::string pendingProject_; // start-up project not reachable yet: retried
+  double pendingUntil_ = 0, pendingNextTry_ = 0;
   bool popupWasOpen_ = false; // a menu or dialog was open in the last frame
   void autosave();
   void clearAutosave() { clearAutosave(engine.project.filePath); }
   void clearAutosave(const std::string &projectPath);
   void checkRecovery();
   double lastAutosave_ = 0;
-  std::string recoveryFile_, recoveryInfo_;
+  std::string recoveryFile_, recoveryInfo_, recoveryProject_;
   void pollKeyboard(bool mainWindowKeys);
   std::vector<bool> keyDown_;
   void updateTitle();

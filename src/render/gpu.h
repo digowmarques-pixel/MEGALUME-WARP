@@ -3,10 +3,17 @@
 
 #include "gl/gl.h"
 
+#include <cmath>
 #include <string>
 #include <vector>
 
 namespace lumen {
+
+// Animation time for shaders, wrapped every 3 hours: a 32-bit float counting
+// seconds since the program started steps by 8 ms after a day and 31 ms after
+// three, and animations stuttered on installations that run for days. The
+// wrap is one jump every 3 hours instead.
+inline float shaderTime(double t) { return float(std::fmod(t, 10800.0)); }
 
 class Shader {
 public:

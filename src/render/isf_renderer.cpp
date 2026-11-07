@@ -75,7 +75,7 @@ const Texture *IsfRenderer::render(int w, int h, double time, const std::map<std
   }
   double dt = lastTime_ < 0 ? 0.0 : time - lastTime_;
   lastTime_ = time;
-  shader_.set("TIME", float(time));
+  shader_.set("TIME", shaderTime(time));
   shader_.set("TIMEDELTA", float(std::max(0.0, dt)));
   shader_.set("FRAMEINDEX", frame_++);
   {

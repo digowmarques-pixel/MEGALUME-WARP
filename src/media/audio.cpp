@@ -23,6 +23,11 @@ extern "C" {
 #endif
 
 #include <algorithm>
+#include <thread>
+#include <mutex>
+#include <future>
+#include <deque>
+#include <condition_variable>
 #include <cstring>
 #include <chrono>
 #include <cmath>
@@ -208,6 +213,7 @@ bool AudioEngine::start(const std::string &name, const AudioDeviceOptions &opt) 
   snd_lib_error_set_handler(silentAlsa);
 #endif
   stop();
+  requested_ = name;
   error_.clear();
   silent_ = false;
   exclusive_ = false;
@@ -498,6 +504,34 @@ void AudioDecoder::run() {
     cleanup();
     return;
   }
+  // What the resampler was set up for: broadcast/TS recordings and joined files
+  // switch layout (5.1 -> 2.0) or rate mid-stream; a resampler still set for 6
+  // planes read past the 2 a frame has (crash), and an old rate changed the
+  // speed of the sound (and of the picture it paces).
+  struct Layout {
+    AVChannelLayout l{};
+    ~Layout() { av_channel_layout_uninit(&l); }
+  } inLayout;
+  av_channel_layout_copy(&inLayout.l, &codec->ch_layout);
+  int inFormat = codec->sample_fmt, inRate = codec->sample_rate;
+  auto inputChanged = [&](const AVFrame *f) {
+    return f->format != inFormat || f->sample_rate != inRate ||
+           (f->ch_layout.nb_channels > 0 && av_channel_layout_compare(&f->ch_layout, &inLayout.l) != 0);
+  };
+  auto rebuildResampler = [&](const AVFrame *f) -> bool {
+    swr_free(&swr);
+    const AVChannelLayout *in = f->ch_layout.nb_channels > 0 ? &f->ch_layout : &inLayout.l;
+    if (swr_alloc_set_opts2(&swr, &outLayout, AV_SAMPLE_FMT_FLT, kAudioRate, in, AVSampleFormat(f->format),
+                            f->sample_rate, 0, nullptr) < 0 || swr_init(swr) < 0) {
+      swr_free(&swr);
+      return false;
+    }
+    av_channel_layout_uninit(&inLayout.l);
+    av_channel_layout_copy(&inLayout.l, in);
+    inFormat = f->format;
+    inRate = f->sample_rate;
+    return true;
+  };
 
   // Exact frame count of each loop: the video's loop length, with the
   // fraction of a sample carried from one loop to the next, so the sound never
@@ -525,7 +559,7 @@ void AudioDecoder::run() {
     if (av_seek_frame(fmt, stream, ts, AVSEEK_FLAG_BACKWARD) < 0)
       av_seek_frame(fmt, stream, st->start_time != AV_NOPTS_VALUE ? st->start_time : 0, AVSEEK_FLAG_BACKWARD);
     avcodec_flush_buffers(codec);
-    swr_init(swr);
+    if (swr) swr_init(swr);
     loopFrames = int64_t(std::llround(inside * kAudioRate));
     pending.clear();
     pendingPos = 0;
@@ -590,7 +624,7 @@ void AudioDecoder::run() {
     }
     if (r == AVERROR_EOF) {
       // Drain the resampler.
-      int out = swr_get_out_samples(swr, 0);
+      int out = swr ? swr_get_out_samples(swr, 0) : 0;
       if (out > 0) {
         buf.resize(size_t(out) * size_t(ch));
         uint8_t *dst = reinterpret_cast<uint8_t *>(buf.data());
@@ -616,6 +650,11 @@ void AudioDecoder::run() {
       }
       measureSkip = false;
     }
+    if (inputChanged(frame) && !rebuildResampler(frame)) { // a format nothing converts: skip it
+      av_frame_unref(frame);
+      continue;
+    }
+    if (!swr) { av_frame_unref(frame); continue; }
     int out = swr_get_out_samples(swr, frame->nb_samples);
     buf.resize(size_t(std::max(out, 1)) * size_t(ch));
     uint8_t *dst = reinterpret_cast<uint8_t *>(buf.data());
@@ -659,6 +698,61 @@ static void captureCallback(ma_device *d, void *, const void *in, ma_uint32 fram
 LtcCapture::LtcCapture() : impl_(std::make_unique<Impl>()) {}
 LtcCapture::~LtcCapture() { stop(); }
 
+namespace {
+// One long-lived thread with one audio context lists the devices for the
+// engine's "is the chosen card back?" checks. A context made and destroyed at
+// each check (every few seconds, for days) leaked a little of the audio
+// system each time; and on Windows the listing needs COM on its own thread.
+struct DeviceLister {
+  std::mutex m;
+  std::condition_variable cv;
+  std::deque<std::pair<bool, std::promise<std::vector<std::string>>>> jobs; // capture?, result
+  DeviceLister() { std::thread([this] { run(); }).detach(); }
+  void run() {
+    ma_context ctx;
+    bool ok = false;
+    int tries = 0;
+    while (true) {
+      std::unique_lock<std::mutex> lock(m);
+      cv.wait(lock, [&] { return !jobs.empty(); });
+      auto job = std::move(jobs.front());
+      jobs.pop_front();
+      lock.unlock();
+      // Not available yet (audio service starting): a few more tries, not forever.
+      if (!ok && tries < 10) {
+        ++tries;
+        ok = ma_context_init(nullptr, 0, nullptr, &ctx) == MA_SUCCESS;
+      }
+      std::vector<std::string> names;
+      ma_device_info *playback = nullptr, *capture = nullptr;
+      ma_uint32 np = 0, nc = 0;
+      if (ok && ma_context_get_devices(&ctx, &playback, &np, &capture, &nc) == MA_SUCCESS) {
+        if (job.first) for (ma_uint32 i = 0; i < nc; ++i) names.emplace_back(capture[i].name);
+        else for (ma_uint32 i = 0; i < np; ++i) names.emplace_back(playback[i].name);
+      }
+      job.second.set_value(std::move(names));
+    }
+  }
+  std::future<std::vector<std::string>> request(bool capture) {
+    std::promise<std::vector<std::string>> p;
+    auto f = p.get_future();
+    {
+      std::lock_guard<std::mutex> lock(m);
+      jobs.emplace_back(capture, std::move(p));
+    }
+    cv.notify_one();
+    return f;
+  }
+};
+DeviceLister &deviceLister() {
+  static DeviceLister *l = new DeviceLister(); // lives as long as the program
+  return *l;
+}
+} // namespace
+
+std::future<std::vector<std::string>> AudioEngine::listOutputsAsync() { return deviceLister().request(false); }
+std::future<std::vector<std::string>> LtcCapture::listInputsAsync() { return deviceLister().request(true); }
+
 std::vector<std::string> LtcCapture::devices() {
   std::vector<std::string> names;
   ma_context ctx;
@@ -692,6 +786,13 @@ bool LtcCapture::start(const std::string &name, int channel, std::string *error)
     if (ma_context_get_devices(&impl_->context, nullptr, nullptr, &capture, &count) == MA_SUCCESS)
       for (ma_uint32 i = 0; i < count; ++i)
         if (name == capture[i].name) { id = capture[i].id; cfg.capture.pDeviceID = &id; }
+    // Not there: an error (the engine tries again), never the default input
+    // instead, which is usually a microphone and silently gave no timecode.
+    if (!cfg.capture.pDeviceID) {
+      if (error) *error = "entrada \"" + name + "\" não encontrada";
+      stop();
+      return false;
+    }
   }
   if (ma_device_init(&impl_->context, &cfg, &impl_->device) != MA_SUCCESS) {
     if (error) *error = "não foi possível abrir a entrada de áudio";

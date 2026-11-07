@@ -19,6 +19,7 @@
 
 #include <array>
 #include <deque>
+#include <future>
 #include <map>
 #include <memory>
 #include <set>
@@ -47,6 +48,11 @@ struct LayerState {
   bool endHandled = false; // the end of the current media was acted upon
   float chaseBase = -1;    // following the timecode: the speed before the catch-up nudges
   const Texture *currentTex = nullptr, *previousTex = nullptr;
+  // The incoming media has no picture yet (its decoder just opened): the
+  // transition waits for it (at most a second) with the outgoing one on
+  // screen, instead of a cut to black for a frame or two.
+  bool waitFrame = false, cutAfterWait = false;
+  double waitSince = 0;
 };
 
 struct MappingState {
@@ -87,6 +93,11 @@ public:
   // True while the backup mirrors the main: local triggers (inputs, auto-GO,
   // schedule, timecode cues, column commands) must not fire twice.
   bool following() const { return syncState_ == SyncState::Waiting || syncState_ == SyncState::Following; }
+  // The main machine while its backup says it took over the show (after the
+  // main stalled): it stops driving the shared devices (LED/Art-Net, OSC,
+  // equipment commands) so the two never fight over them.
+  bool standingDown() const { return syncRole_ == SyncRole::Main && syncPeerActive_; }
+  bool quietOutputs() const { return following() || standingDown(); }
   // Show commands from this computer are ignored while following (only the
   // follower itself, applying the main's state, may launch).
   bool localBlocked() const { return following() && !syncApplying_; }
@@ -261,7 +272,7 @@ private:
   DmxReceiver dmxIn_;
   DmxInputConfig dmxInConfig_;
   std::string dmxInError_;
-  int lastScheduleMinute_ = -1;
+  long long lastScheduleSerial_ = -1, scheduleHighWater_ = -1; // local minutes (updateSchedule)
   EffectTools effectTools_;
   std::map<int, EffectChain> chains_;      // 2 * layer id + (0 current, 1 previous)
   std::map<int, BlobReport> blobReports_;  // by layer
@@ -276,6 +287,9 @@ private:
   LtcCapture ltcIn_;
   std::string ltcDeviceInUse_ = "\x01", tcError_;
   int ltcChannelInUse_ = -1;
+  double ltcRetryAt_ = 0; // next look for a missing LTC input
+  int ltcProbePresent_ = -1;
+  std::future<std::vector<std::string>> ltcProbe_;
   MidiOutPort mtcOut_;
   std::string mtcPortInUse_ = "\x01";
   double mtcRetryAt_ = 0;
@@ -343,7 +357,11 @@ private:
   double midiRescanAt_ = 0;
   std::vector<OscMessage> inbox_;
   std::string audioInUse_ = "\x01"; // device + options in use; forces the first start
+  bool syncPeerActive_ = false; // main: the backup reports it is running the show
   double audioRetryAt_ = 0;         // next reopen of a sound card that stopped
+  double audioRecheckAt_ = 0;       // next look for the chosen card (on a fallback)
+  int audioProbePresent_ = -1;      // it was listed at the last look (1), not (0), unknown (-1)
+  std::future<std::vector<std::string>> audioProbe_;
   uint64_t heldDmxVersion_ = 0;     // of the "dmx" command values copied to the LEDs
   std::string audioKey() const;
   SpoutOut spoutOut_;

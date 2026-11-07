@@ -61,10 +61,12 @@ void Warp::setRect(Vec2 tl, Vec2 size) {
 }
 
 void Warp::resetMesh(int cols, int rows) {
-  meshCols = std::max(2, cols);
-  meshRows = std::max(2, rows);
+  // 33 is the most the editor makes (resample, insert lines): a file asking for
+  // 65536 x 65536 overflowed the int product and wrote past the vector.
+  meshCols = std::clamp(cols, 2, 33);
+  meshRows = std::clamp(rows, 2, 33);
   uvMesh.clear();
-  mesh.resize(size_t(meshCols * meshRows));
+  mesh.resize(size_t(meshCols) * size_t(meshRows));
   for (int r = 0; r < meshRows; ++r)
     for (int c = 0; c < meshCols; ++c)
       meshAt(c, r) = {float(c) / float(meshCols - 1), float(r) / float(meshRows - 1)};

@@ -73,6 +73,21 @@ void Compositor::renderMask(const Layer &l, int w, int h, DynamicMesh &mesh) {
 
 void Compositor::render(const Project &p, int canvasId, const std::vector<LayerDraw> &draws,
                         DynamicMesh &mesh, float master) {
+  // Canvas-sized buffers of layers that were deleted, lost their masks or left
+  // a matte blend: freed (they stayed for the rest of the session).
+  auto layerById = [&](int id) -> const Layer * {
+    for (auto &l : p.layers)
+      if (l.id == id) return &l;
+    return nullptr;
+  };
+  for (auto it = maskFbs_.begin(); it != maskFbs_.end();) {
+    const Layer *l = layerById(it->first);
+    it = l && MaskRenderer::anyActive(l->masks) ? std::next(it) : maskFbs_.erase(it);
+  }
+  for (auto it = matteFbs_.begin(); it != matteFbs_.end();) {
+    const Layer *l = layerById(it->first);
+    it = l && isMatte(l->blend) ? std::next(it) : matteFbs_.erase(it);
+  }
   int W = p.canvasWidth(canvasId), H = p.canvasHeight(canvasId);
 
   // Masks first: they need their own framebuffer bindings.

@@ -75,16 +75,46 @@ bool ChildProcess::start(const std::vector<std::string> &args, std::string *erro
     return false;
   }
   SetHandleInformation(readEnd, HANDLE_FLAG_INHERIT, 0);
-  STARTUPINFOW si{};
-  si.cb = sizeof(si);
-  si.dwFlags = STARTF_USESTDHANDLES;
-  si.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
-  si.hStdOutput = writeEnd;
-  si.hStdError = writeEnd;
+  // Only the pipe is handed to the child. With plain inheritance it also got
+  // every inheritable handle of Lumen, the OSC, sync and Art-Net sockets among
+  // them: after a restart (or a crash) during a conversion those ports stayed
+  // taken by ffmpeg, and OSC control and the backup link did not come back.
+  SIZE_T attrSize = 0;
+  InitializeProcThreadAttributeList(nullptr, 1, 0, &attrSize);
+  std::vector<unsigned char> attrBuf(attrSize);
+  auto *attrs = reinterpret_cast<LPPROC_THREAD_ATTRIBUTE_LIST>(attrBuf.data());
+  bool haveList = InitializeProcThreadAttributeList(attrs, 1, 0, &attrSize) &&
+                  UpdateProcThreadAttribute(attrs, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST, &writeEnd, sizeof(writeEnd),
+                                            nullptr, nullptr);
+  STARTUPINFOEXW si{};
+  si.StartupInfo.cb = sizeof(si);
+  si.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
+  si.StartupInfo.hStdInput = nullptr; // -nostdin
+  si.StartupInfo.hStdOutput = writeEnd;
+  si.StartupInfo.hStdError = writeEnd;
+  si.lpAttributeList = haveList ? attrs : nullptr;
   PROCESS_INFORMATION pi{};
   BOOL ok = CreateProcessW(nullptr, cmd.data(), nullptr, nullptr, TRUE,
-                           CREATE_NO_WINDOW | BELOW_NORMAL_PRIORITY_CLASS, nullptr, nullptr, &si, &pi);
+                           CREATE_NO_WINDOW | BELOW_NORMAL_PRIORITY_CLASS | CREATE_SUSPENDED |
+                               (haveList ? EXTENDED_STARTUPINFO_PRESENT : 0),
+                           nullptr, nullptr, &si.StartupInfo, &pi);
+  if (haveList) DeleteProcThreadAttributeList(attrs);
   CloseHandle(writeEnd);
+  if (ok) {
+    // In a job that ends with Lumen: a crash no longer leaves an ffmpeg
+    // converting in the background (half the processor, files held open).
+    static HANDLE job = [] {
+      HANDLE j = CreateJobObjectW(nullptr, nullptr);
+      if (j) {
+        JOBOBJECT_EXTENDED_LIMIT_INFORMATION info{};
+        info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+        SetInformationJobObject(j, JobObjectExtendedLimitInformation, &info, sizeof(info));
+      }
+      return j;
+    }();
+    if (job) AssignProcessToJobObject(job, pi.hProcess);
+    ResumeThread(pi.hThread);
+  }
   if (!ok) {
     CloseHandle(readEnd);
     if (error) *error = "could not start " + args[0] + " (error " + std::to_string(GetLastError()) + ")";
@@ -107,12 +137,14 @@ bool ChildProcess::fill() {
 }
 
 void ChildProcess::kill() {
+  std::lock_guard<std::mutex> lock(handleMutex_);
   if (process_) TerminateProcess(process_, 1);
 }
 
 int ChildProcess::wait() {
   if (!started_) return -1;
-  WaitForSingleObject(process_, INFINITE);
+  WaitForSingleObject(process_, INFINITE); // the handle stays open until below
+  std::lock_guard<std::mutex> lock(handleMutex_);
   DWORD code = DWORD(-1);
   GetExitCodeProcess(process_, &code);
   CloseHandle(process_);
@@ -170,11 +202,17 @@ bool ChildProcess::fill() {
 }
 
 void ChildProcess::kill() {
+  std::lock_guard<std::mutex> lock(handleMutex_);
   if (pid_ > 0) ::kill(pid_, SIGKILL);
 }
 
 int ChildProcess::wait() {
   if (!started_) return -1;
+  // Wait without reaping (the pid stays ours, so a kill() meanwhile cannot hit
+  // another process that got the same number), then reap under the lock.
+  siginfo_t info{};
+  while (waitid(P_PID, id_t(pid_), &info, WEXITED | WNOWAIT) < 0 && errno == EINTR) {}
+  std::lock_guard<std::mutex> lock(handleMutex_);
   int status = 0;
   while (waitpid(pid_, &status, 0) < 0 && errno == EINTR) {}
   close(pipe_);

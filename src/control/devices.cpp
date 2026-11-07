@@ -214,10 +214,19 @@ void DeviceCommands::runBatch(const std::vector<std::string> &lines, const Proje
   if (j.lines.empty()) return;
   j.dmx = p.dmxDevices;
   j.projectors = p.projectors;
+  bool dropped = false;
   {
     std::lock_guard<std::mutex> lock(mutex_);
+    // A device that does not answer makes every line wait for its timeout:
+    // with a looping timeline sending to it, the queue grew for hours and
+    // every command ran minutes late. The oldest ones are dropped instead.
+    while (jobs_.size() >= 64) {
+      jobs_.pop_front();
+      dropped = true;
+    }
     jobs_.push_back(std::move(j));
   }
+  if (dropped) log("[comandos] fila cheia (equipamento sem resposta?): os mais antigos foram descartados");
   cv_.notify_one();
 }
 
@@ -431,9 +440,21 @@ void DeviceCommands::exec(const std::string &line, const Job &job) {
     else if (type == "cc") msg = {(unsigned char)(0xB0 | ch), (unsigned char)num(3), (unsigned char)num(4)};
     else if (type == "pc") msg = {(unsigned char)(0xC0 | ch), (unsigned char)num(3)};
     else { log("[midi] comando desconhecido: " + line); return; }
-    RtMidiOut *out = midiPort(port);
-    if (!out) { log("[midi] nenhuma saída MIDI" + (port.empty() ? std::string() : " com \"" + port + "\"")); return; }
-    out->sendMessage(&msg);
+    // A port that was unplugged and plugged back stays dead in the cache
+    // (every send fails): on a failure it is dropped, opened again, and the
+    // message sent once more.
+    bool sent = false;
+    for (int attempt = 0; attempt < 2 && !sent; ++attempt) {
+      RtMidiOut *out = midiPort(port);
+      if (!out) { log("[midi] nenhuma saída MIDI" + (port.empty() ? std::string() : " com \"" + port + "\"")); return; }
+      try {
+        out->sendMessage(&msg);
+        sent = true;
+      } catch (const std::exception &e) {
+        midi_.erase(port);
+        if (attempt == 1) { log(std::string("[midi] ") + e.what()); return; }
+      }
+    }
     log("[midi] " + line);
     return;
   }
@@ -462,14 +483,27 @@ void DeviceCommands::exec(const std::string &line, const Job &job) {
     std::string host;
     int port;
     if (!hostPort(w[1], host, port)) { log("[" + cmd + "] use host:porta"); return; }
+    // A name (qlab.local, a projector's hostname) is resolved here, on the
+    // commands' own thread: OscSender only looks names up in the background
+    // and dropped the first message to each one, logging it as sent.
+    std::string ip = host;
+    if (cmd != "tcp") {
+      sockaddr_in a{};
+      if (!resolve(host, port, a)) { log("[" + cmd + "] " + host + ": nome não encontrado na rede"); return; }
+      char buf[INET_ADDRSTRLEN] = {};
+      if (inet_ntop(AF_INET, &a.sin_addr, buf, sizeof(buf))) ip = buf;
+    }
     if (cmd == "osc") {
       OscMessage m;
       if (!parseOscText(rest(line, 2), m)) { log("[osc] mensagem inválida: " + line); return; }
-      OscSender().send(host, port, m);
+      if (!OscSender().send(ip, port, m)) { log("[osc] " + w[1] + ": não enviado"); return; }
     } else {
       std::string text = expandDeviceText(rest(line, 2));
       if (cmd == "udp") {
-        OscSender().sendRaw(host, port, reinterpret_cast<const uint8_t *>(text.data()), text.size());
+        if (!OscSender().sendRaw(ip, port, reinterpret_cast<const uint8_t *>(text.data()), text.size())) {
+          log("[udp] " + w[1] + ": não enviado");
+          return;
+        }
       } else {
         std::string err, reply;
         if (!tcpExchange(host, port, text, &reply, 1500, &err)) { log("[tcp] " + w[1] + ": " + err); return; }

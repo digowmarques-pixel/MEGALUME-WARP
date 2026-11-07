@@ -1097,7 +1097,7 @@ static void testHapConvert() {
   CHECK(a.front() == "ffmpeg" && a.back() == "out.mov.part");
   CHECK(has(a, "-i", "in.mp4") && has(a, "-c:v", "hap") && has(a, "-format", "hap_q"));
   CHECK(has(a, "-chunks", "4") && has(a, "-f", "mov") && has(a, "-c:a", "pcm_s24le"));
-  CHECK(has(a, "-vf", "pad=ceil(iw/4)*4:ceil(ih/4)*4"));
+  CHECK(has(a, "-vf", "pad=ceil(iw/4)*4:ceil(ih/4)*4:color=black@0")); // transparent border (HAP Alpha)
   CHECK(has(hapArgs("f", "i", "o", HapVariant::Hap, 1920, 1080), "-chunks", "1"));
   CHECK(has(hapArgs("f", "i", "o", HapVariant::Hap, 7680, 4320), "-chunks", "8"));
   CHECK(has(hapArgs("f", "i", "o", HapVariant::HapAlpha, 640, 360), "-format", "hap_alpha"));
@@ -1259,7 +1259,185 @@ static void testAudioRoute() {
   CHECK(q.audioChannels == 16 && q.audioExclusive && q.audioBufferMs == 5);
 }
 
+// Production review (0.10.48): inputs that used to crash or stall a show.
+static void testProductionReview() {
+  // A preset file that is valid JSON but not an object threw out of the loader.
+  {
+    Project p;
+    std::string err;
+    for (const char *bad : {"3", "[]", "\"x\"", "null", "{\"format\":3}", "{\"format\":\"lumen-outputs\",\"outputs\":{}}"})
+      CHECK(!loadOutputSetup(bad, "", p, &err));
+  }
+  // Speed: no reverse (froze the clip and it never ended), no NaN, at most 8x.
+  CHECK(clampSpeed(-1) == 0.0f);
+  CHECK(clampSpeed(0.5f) == 0.5f);
+  CHECK(clampSpeed(100) == 8.0f);
+  CHECK(clampSpeed(std::nanf("")) == 1.0f);
+  CHECK(clampSpeed(INFINITY) == 1.0f);
+  {
+    Project p;
+    std::string j = R"({"format":"lumen","version":1,"library":[{"id":1,"name":"v","type":0,"path":"a.mp4"}],
+      "layers":[{"id":1,"name":"L"}],"columns":[{"id":2,"name":"A","cells":[{"layer":1,"media":1,"end":3,"speed":-2}]}]})";
+    CHECK(deserializeProject(j, "", p));
+    CHECK(!p.columns.empty() && !p.columns[0].cells.empty() && p.columns[0].cells.begin()->second.speed == 0.0f);
+  }
+}
+
+// More of the production review: files, timecode, names and layouts.
+static void testProductionReview2() {
+  // A null (a NaN or infinity saved by an older version) no longer makes the
+  // whole project unopenable: the field takes its default.
+  {
+    Project p;
+    std::string j = R"({"format":"lumen","version":1,"canvas":{"width":1920,"height":1080},
+      "layers":[{"id":1,"name":"L","opacity":null,"transform":{"position":[null,5],"scale":null}}],"columns":[]})";
+    CHECK(deserializeProject(j, "", p));
+    CHECK(p.layers.size() == 1 && p.layers[0].opacity == 1.0f);
+  }
+  // Not a project: refused cleanly (an output preset, an array, a newer version).
+  {
+    Project p;
+    std::string err;
+    CHECK(!deserializeProject("[1,2]", "", p, &err));
+    CHECK(!deserializeProject(R"({"format":"lumen-outputs","outputs":[]})", "", p, &err));
+    CHECK(!deserializeProject(R"({"format":"lumen","version":2})", "", p, &err) && err.find("newer") != std::string::npos);
+  }
+  // A mesh of 65536 x 65536 in a file: clamped, no overflow.
+  {
+    Warp w;
+    w.resetMesh(65536, 65536);
+    CHECK(w.meshCols == 33 && w.meshRows == 33 && w.mesh.size() == 33u * 33u);
+    w.resetMesh(-5, 1);
+    CHECK(w.meshCols == 2 && w.meshRows == 2);
+  }
+  // Timecode at a rate of 0 (or NaN) divided by zero.
+  {
+    Timecode t = Timecode::fromSeconds(3600, 0);
+    CHECK(t.h == 1 && t.m == 0 && t.s == 0 && t.f == 0);
+    Timecode n = Timecode::fromSeconds(std::nan(""), 0.3);
+    CHECK(n.h == 0 && n.f == 0);
+  }
+  // The generated timecode's start survives save and reopen to the frame.
+  {
+    Project p = Project::makeDefault();
+    p.timecode.genFps = 29.97;
+    p.timecode.genStart = Timecode{1, 0, 0, 0, 29.97, true}.seconds();
+    Project q;
+    CHECK(deserializeProject(serializeProject(p, ""), "", q));
+    Timecode a = Timecode::fromSeconds(q.timecode.genStart, q.timecode.genFps);
+    CHECK(a.h == 1 && a.m == 0 && a.s == 0 && a.f == 0);
+  }
+  // Name lookups never index past their tables.
+  CHECK(std::string(mappingTargetName(MappingTarget(999))) == "?");
+  CHECK(std::string(endModeName(EndMode(-1))) == "?");
+  // Column states with a parameter this version does not know are dropped.
+  {
+    Project p;
+    std::string j = R"({"format":"lumen","version":1,"layers":[{"id":1,"name":"L"}],
+      "columns":[{"id":2,"name":"A","states":[{"layer":1,"param":999,"value":0},{"layer":1,"param":0,"value":0.5}]}]})";
+    CHECK(deserializeProject(j, "", p));
+    CHECK(p.columns.size() == 1 && p.columns[0].states.size() == 1);
+  }
+  // Text cut inside a UTF-8 character (or OSC text in Latin-1) is saved
+  // instead of throwing out of the save (which closed Lumen).
+  {
+    Project p = Project::makeDefault();
+    p.layers[0].name = std::string("Promo\xe7\xe3o") + "\xc3"; // Latin-1, then half a character
+    std::string out = serializeProject(p, "");
+    Project q;
+    CHECK(!out.empty() && deserializeProject(out, "", q));
+  }
+  // Files from before 0.10.14 (no "fit"): stretched, as they were made.
+  {
+    Project p;
+    CHECK(deserializeProject(R"({"format":"lumen","version":1,"layers":[{"id":1,"name":"L"}]})", "", p));
+    CHECK(p.layers[0].fit == MediaFit::Stretch);
+  }
+  // The blend layout keeps its seams (in px) through save and reopen, and
+  // re-applying it keeps the names the projectors were given.
+  {
+    Project p = Project::makeDefault();
+    BlendLayoutParams b;
+    b.cols = 3;
+    b.overlapX = 0.15f;
+    applyBlendLayout(p, b, -1, false);
+    CHECK(p.outputLayout.gapsX.size() == 2 && p.outputLayout.gapsX[0] == 288);
+    p.outputs[1].name = "Centro";
+    Project q;
+    CHECK(deserializeProject(serializeProject(p, ""), "", q));
+    CHECK(q.outputLayout.gapsX.size() == 2 && q.outputLayout.gapsX[1] == 288);
+    applyBlendLayout(q, q.outputLayout, -1, false);
+    CHECK(q.outputs[1].name == "Centro" && q.canvasW == p.canvasW);
+  }
+  // Older files without seams: read back from where the projectors sit.
+  {
+    Project p = Project::makeDefault();
+    BlendLayoutParams b;
+    b.cols = 2;
+    b.overlapX = 0.25f;
+    applyBlendLayout(p, b, -1, false);
+    std::string j = serializeProject(p, "");
+    size_t at = j.find("\"gapsX\"");
+    CHECK(at != std::string::npos);
+    size_t end = j.find(']', at);
+    j.erase(at, end - at + 2); // "gapsX": [480],
+    Project q;
+    CHECK(deserializeProject(j, "", q));
+    CHECK(q.outputLayout.gapsX.size() == 1 && q.outputLayout.gapsX[0] == 480);
+  }
+  // Damaged numbers: a 1e25 canvas is clamped; an arc with zero radius or
+  // huge coordinates is a line (no NaN segment count).
+  {
+    Project p;
+    CHECK(deserializeProject(R"({"format":"lumen","version":1,"canvas":{"width":1e25,"height":-5}})", "", p));
+    CHECK(p.canvasW == 16384 && p.canvasH == 16);
+    auto m = masksFromSvg(R"(<svg viewBox="0 0 100 100"><path d="M0 0 A 0 0 0 1 1 3e38 3e38 L 10 10 Z"/></svg>)", 100, 100);
+    CHECK(m.size() <= 1);
+  }
+  // Blend layout with "scale content": animated positions follow the canvas.
+  {
+    Project p = Project::makeDefault();
+    int lid = p.layers[0].id;
+    p.columns[0].states.push_back({lid, int(MappingTarget::PositionX), 100});
+    InputMapping im;
+    im.target = MappingTarget::PositionX;
+    im.layerId = lid;
+    im.outMin = 0;
+    im.outMax = 1920;
+    p.mappings.push_back(im);
+    BlendLayoutParams b;
+    b.cols = 2;
+    b.overlapX = 0;
+    applyBlendLayout(p, b, -1, true); // 1920 -> 3840 wide
+    CHECK(p.canvasW == 3840);
+    CHECK(std::fabs(p.columns[0].states[0].value - 200) < 0.01f);
+    CHECK(std::fabs(p.mappings[0].outMax - 3840) < 0.01f);
+  }
+  // A mask name with '>' survives an SVG export and import.
+  {
+    Mask m;
+    m.name = "Porta > esquerda";
+    m.points = {{0, 0}, {10, 0}, {10, 10}};
+    CHECK(masksFromSvg(masksToSvg({m, m}, 100, 100), 100, 100).size() == 2);
+  }
+  // Saving keeps the previous file as .bak, and the file is whole.
+  {
+    auto dir = std::filesystem::temp_directory_path() / "lumen-test-save";
+    std::filesystem::create_directories(dir);
+    std::string f = platform::toUtf8(dir / "show.lumen");
+    CHECK(platform::writeFile(f, "one", true));
+    CHECK(platform::writeFile(f, "two", true));
+    std::string a, b;
+    CHECK(platform::readFile(f, a) && a == "two");
+    CHECK(platform::readFile(f + ".bak", b) && b == "one");
+    CHECK(!std::filesystem::exists(dir / "show.lumen.tmp"));
+    std::filesystem::remove_all(dir);
+  }
+}
+
 int main() {
+  testProductionReview();
+  testProductionReview2();
   testAudioRoute();
   testMediaFit();
   testParallel();

@@ -2,6 +2,7 @@
 #pragma once
 
 #include <filesystem>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -12,7 +13,10 @@ std::filesystem::path toPath(const std::string &utf8);
 std::string toUtf8(const std::filesystem::path &p);
 
 bool readFile(const std::string &path, std::string &out);
-bool writeFile(const std::string &path, const std::string &data);
+// Writes through a temp file that is flushed to the disk before it replaces
+// `path`, so a crash or power cut leaves either the old or the new file, never
+// a half-written one. keepBackup: the previous file stays as `path`.bak.
+bool writeFile(const std::string &path, const std::string &data, bool keepBackup = false);
 
 // Native file dialogs. Return empty when cancelled or unavailable.
 // `filter` example: "Media|*.mp4;*.mov;*.png|Lumen project|*.lumen"
@@ -22,6 +26,12 @@ std::string saveFileDialog(const std::string &title, const std::string &filter,
                            const std::string &defaultName);
 std::string folderDialog(const std::string &title);
 bool hasNativeDialogs();
+// Called over and over on the calling thread while a file dialog is open, so
+// the outputs (and the backup machine's heartbeat) keep running behind it.
+void setDialogPump(std::function<void()> pump);
+// Runs `work` on another thread and keeps the show running (the same pump)
+// until it is done: long file work started from the interface.
+void runKeepingShow(const std::function<void()> &work);
 
 // Opens a file or folder with its default program (Explorer, Finder, xdg-open).
 void openInShell(const std::string &path);

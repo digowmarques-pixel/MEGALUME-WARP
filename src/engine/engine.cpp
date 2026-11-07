@@ -1,4 +1,5 @@
 #include "engine/engine.h"
+#include "media/asio_out.h"
 
 #include <algorithm>
 #include <cmath>
@@ -106,6 +107,7 @@ const Texture &Engine::canvasTexture(int id) {
 }
 
 void Engine::setProject(Project p, bool keepPlayback) {
+  learnMapping = -1; // an index into the old project's mappings
   bool portChanged = p.oscPort != project.oscPort || p.oscEnabled != project.oscEnabled;
   bool midiChanged = p.midiEnabled != project.midiEnabled;
   project = std::move(p);
@@ -203,6 +205,7 @@ void Engine::startTransition(int layerId, const Cell *cell, float duration, int 
 
   if (media && st.current && st.current->mediaId() == media->id && !st.fadingOut) {
     // Same media continues in the next cue: keep it running (no restart, no fade).
+    st.current->paused = false; // a cue that is launched plays
     st.current->loop = cell->loop;
     st.current->speed = cell->speed;
     st.cellSpeed = cell->speed;
@@ -213,14 +216,30 @@ void Engine::startTransition(int layerId, const Cell *cell, float duration, int 
   }
   if (!media && !st.current) return;
 
-  st.previous = std::move(st.current);
-  st.previousTex = st.currentTex;
-  st.currentTex = nullptr;
+  if (st.previous && st.current && st.fade < 0.5f && !st.fadingOut) {
+    // GO again in the first half of a transition: what is mostly on screen is
+    // still the outgoing content, so it stays the outgoing one and the
+    // half-faded-in one is dropped (making that one the outgoing content at
+    // full opacity jumped from 90% A to 100% B).
+    st.current.reset();
+    if (st.composed) st.previousTex = st.currentTex; // the mix, until the next frame
+    st.currentTex = nullptr;
+  } else {
+    st.previous = std::move(st.current);
+    st.previousTex = st.currentTex;
+    st.currentTex = nullptr;
+  }
   if (media) {
     MediaContext ctx = context();
     st.current = std::make_unique<Playback>(*media, *cell, ctx);
   }
   st.fade = duration > 0 ? 0.0f : 1.0f;
+  st.waitFrame = media && st.previous;
+  if (st.waitFrame) {
+    st.waitSince = time_;
+    st.cutAfterWait = duration <= 0;
+    st.fade = 0;
+  }
   st.fadeDuration = duration;
   st.type = type;
   st.manual = false; // launchColumnNow sets it again for a manual column
@@ -234,7 +253,7 @@ void Engine::startTransition(int layerId, const Cell *cell, float duration, int 
 }
 
 void Engine::sendOsc(const OscMessage &m, bool feedbackOnly) {
-  if (following()) return;
+  if (quietOutputs()) return;
   for (auto &t : project.oscTargets) {
     if (!t.enabled || (feedbackOnly && !t.feedback)) continue;
     if (oscOut_.send(t.host, t.port, m)) ++oscSent_;
@@ -242,7 +261,7 @@ void Engine::sendOsc(const OscMessage &m, bool feedbackOnly) {
 }
 
 void Engine::runColumnActions(const Column &c, int index) {
-  if (following()) return; // the main runs them; the backup must not repeat them
+  if (quietOutputs()) return; // the main runs them; the backup must not repeat them
   if (!c.commands.empty()) devices.runBatch(c.commands, project);
   if (project.oscTargets.empty()) return;
   OscMessage status{"/lumen/status/column", {int32_t(index + 1), c.name}, ""};
@@ -485,7 +504,7 @@ void Engine::updateTimelines(double dt) {
       double ft = f.time;
       bool hit = wrapped ? (ft > before || (ft >= ls && ft <= r.time))
                          : (ft > before && ft <= r.time) || (before == 0 && ft == 0 && r.time > 0);
-      if (hit && !f.command.empty() && !following()) commands.push_back(f.command);
+      if (hit && !f.command.empty() && !quietOutputs()) commands.push_back(f.command);
     }
     if (r.playing || tl->followTimecode || before != r.time) applyTimeline(*tl, r.time);
     ++it;
@@ -512,7 +531,10 @@ void Engine::chaseTimecode() {
     if (!p) continue;
     const bool chased = on && st.columnId == c->id && !st.fadingOut && p->seekable();
     if (!chased) {
-      if (st.chaseBase >= 0) p->speed = st.chaseBase; // back to the cell's speed
+      if (st.chaseBase >= 0) {
+        p->speed = st.chaseBase; // back to the cell's speed
+        p->paused = false;       // paused by the timecode stopping, not by anyone
+      }
       st.chaseBase = -1;
       continue;
     }
@@ -541,8 +563,26 @@ void Engine::updateTimecode(double dt) {
   if (wantLtc && (ltcDeviceInUse_ != cfg.ltcDevice || ltcChannelInUse_ != cfg.ltcChannel)) {
     ltcDeviceInUse_ = cfg.ltcDevice;
     ltcChannelInUse_ = cfg.ltcChannel;
+    ltcProbePresent_ = 1; // tried just now: a retry only after it disappears and comes back
     tcError_.clear();
     if (!ltcIn_.start(cfg.ltcDevice, cfg.ltcChannel, &tcError_)) std::fprintf(stderr, "[ltc] %s\n", tcError_.c_str());
+  } else if (wantLtc && !ltcIn_.running()) {
+    // The interface was not there (plugged in after Lumen started, or it
+    // dropped out): look for it every 3 s on another thread, and open it when
+    // it appears. It used to stay without timecode until a setting changed.
+    if (ltcProbe_.valid() && ltcProbe_.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
+      std::vector<std::string> names = ltcProbe_.get();
+      bool there = cfg.ltcDevice.empty() ? !names.empty()
+                                         : std::find(names.begin(), names.end(), cfg.ltcDevice) != names.end();
+      if (there && ltcProbePresent_ != 1) { // when it appears, not again while it stays listed
+        tcError_.clear();
+        if (!ltcIn_.start(cfg.ltcDevice, cfg.ltcChannel, &tcError_)) std::fprintf(stderr, "[ltc] %s\n", tcError_.c_str());
+      }
+      ltcProbePresent_ = there ? 1 : 0;
+    } else if (!ltcProbe_.valid() && time_ >= ltcRetryAt_) {
+      ltcRetryAt_ = time_ + 3;
+      ltcProbe_ = LtcCapture::listInputsAsync();
+    }
   } else if (!wantLtc && ltcIn_.running()) {
     ltcIn_.stop();
     ltcDeviceInUse_ = "\x01";
@@ -688,6 +728,7 @@ void Engine::runCommand(const std::string &line) {
     if (!handleOsc(m)) sendOsc(m);
     return;
   }
+  if (standingDown()) return; // the backup drives the devices now
   devices.run(l, project);
 }
 
@@ -742,6 +783,10 @@ float Engine::autoGoRemaining() const {
   if (c.autoGo < 0) return -1;
   float wait = c.autoGo + (c.autoGoAfterTransition && c.transitionType != TransitionType::Cut
                                ? columnTransition(activeColumn_) : 0.0f);
+  // At least a quarter of a second on air: a 0 s wait (allowed in the field)
+  // relaunched the next column every frame, opening a decoder each time and
+  // flooding the devices with its commands.
+  wait = std::max(0.25f, wait);
   return std::max(0.0f, wait - float(time_ - columnLaunchedAt_));
 }
 
@@ -771,13 +816,37 @@ void Engine::updateSchedule() {
 #else
   localtime_r(&now, &lt);
 #endif
-  int minuteOfWeek = (lt.tm_wday * 24 + lt.tm_hour) * 60 + lt.tm_min;
-  if (minuteOfWeek == lastScheduleMinute_) return;
-  bool first = lastScheduleMinute_ < 0;
-  lastScheduleMinute_ = minuteOfWeek;
-  if (first) return; // do not fire an entry of the minute the program started in
+  // Local wall-clock minutes since 1970 (days from the civil date): every
+  // minute between the last check and now is looked at, so an entry is not
+  // skipped when the clock steps forward (summer time, an NTP correction, a
+  // slow frame at hh:mm:59), and none fires twice when it steps back (the
+  // repeated hour in autumn): only minutes after the latest one seen count.
+  auto daysFromCivil = [](long long y, unsigned m, unsigned d) {
+    y -= m <= 2;
+    const long long era = (y >= 0 ? y : y - 399) / 400;
+    const unsigned yoe = unsigned(y - era * 400);
+    const unsigned doy = (153 * (m + (m > 2 ? -3 : 9)) + 2) / 5 + d - 1;
+    const unsigned doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    return era * 146097 + (long long)doe - 719468;
+  };
+  const long long nowSerial = daysFromCivil(lt.tm_year + 1900LL, unsigned(lt.tm_mon + 1), unsigned(lt.tm_mday)) * 1440 +
+                              lt.tm_hour * 60 + lt.tm_min;
+  if (nowSerial == lastScheduleSerial_) return;
+  const bool first = lastScheduleSerial_ < 0;
+  lastScheduleSerial_ = nowSerial;
+  if (first) { // do not fire an entry of the minute the program started in
+    scheduleHighWater_ = nowSerial;
+    return;
+  }
+  long long from = scheduleHighWater_ + 1;
+  if (nowSerial - from > 70) from = nowSerial; // a big jump (date changed, computer slept): only now
+  scheduleHighWater_ = std::max(scheduleHighWater_, nowSerial);
+  for (long long m = from; m <= nowSerial; ++m) {
+    const long long days = m / 1440;
+    const int wday = int(((days % 7) + 7 + 4) % 7); // 1970-01-01 was a Thursday
+    const int hour = int((m % 1440) / 60), minute = int(m % 60);
   for (auto &e : project.schedule) {
-    if (!e.enabled || !(e.days & (1 << lt.tm_wday)) || e.hour != lt.tm_hour || e.minute != lt.tm_min) continue;
+    if (!e.enabled || !(e.days & (1 << wday)) || e.hour != hour || e.minute != minute) continue;
     switch (e.action) {
     case ScheduleAction::LaunchColumn: launchColumn(e.column - 1); break;
     case ScheduleAction::Go: go(); break;
@@ -788,6 +857,7 @@ void Engine::updateSchedule() {
     default: break;
     }
     oscLog.push_back(std::string("[agenda] ") + scheduleActionName(e.action));
+  }
   }
 }
 
@@ -826,6 +896,7 @@ void Engine::launchCell(int columnIndex, int layerId) {
   LayerState &st = states_[layerId];
   if (st.current && st.current->mediaId() == it->second.mediaId && st.columnId == col.id) {
     st.current->restart(); // clicking a playing cell restarts it
+    st.current->paused = false; // ...and plays (a paused one stayed frozen on frame 0)
     ++st.run;
     return;
   }
@@ -910,6 +981,30 @@ void Engine::update(double dt) {
     std::fprintf(stderr, "[audio] a placa de som parou; reabrindo\n");
     audioRetryAt_ = time_ + 3;
     restartAudio();
+  } else if (!audio.onFallback()) {
+    audioProbePresent_ = -1; // healthy: a later fallback starts afresh
+  } else if (audio.requested().rfind(kAsioPrefix, 0) != 0) {
+    // The chosen card was missing (USB interface plugged in after Lumen
+    // started, a TV's HDMI sound gone while it was off): every 5 s, list the
+    // devices on another thread and go back to it when it is there. Without
+    // this the sound stayed on the PC speakers (or silent) for the day.
+    // ASIO drivers are always listed (installed, not plugged): not retried.
+    if (audioProbe_.valid() && audioProbe_.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
+      std::vector<std::string> names = audioProbe_.get();
+      const std::string &want = audio.requested();
+      bool back = want.empty() ? !names.empty() : std::find(names.begin(), names.end(), want) != names.end();
+      // Only when it appears (absent at the last look, or the first look): a
+      // device that is listed but does not open would be reopened every 5 s,
+      // cutting the sound each time.
+      if (back && audioProbePresent_ != 1) {
+        oscLog.push_back("[audio] o dispositivo escolhido voltou; reabrindo");
+        restartAudio();
+      }
+      audioProbePresent_ = back ? 1 : 0;
+    } else if (!audioProbe_.valid() && time_ >= audioRecheckAt_) {
+      audioRecheckAt_ = time_ + 5;
+      audioProbe_ = AudioEngine::listOutputsAsync();
+    }
   }
   audio.purge();
   audio.master = project.masterVolume;
@@ -1007,6 +1102,29 @@ void Engine::update(double dt) {
   }
 
   MediaContext ctx = context();
+  // Buffers of layers that left a transition: freed here, before this frame
+  // points anything at them. Freed after the loop (as before), a cue launched by
+  // a clip's end (below) could hand a just-freed buffer to render() as the
+  // outgoing picture.
+  for (auto it = fitFbs_.begin(); it != fitFbs_.end();) // layer gone
+    it = states_.count(it->first / 2) ? std::next(it) : fitFbs_.erase(it);
+  for (auto it = crossfadeFbs_.begin(); it != crossfadeFbs_.end();) {
+    auto st = states_.find(it->first);
+    bool busy = st != states_.end() && st->second.type == TransitionType::Crossfade && st->second.fade < 1;
+    it = busy ? std::next(it) : crossfadeFbs_.erase(it);
+  }
+  // Shader transitions: the canvas-sized buffers go when the transition ends;
+  // the compiled shader stays with its layer (recompiling it, and decoding its
+  // images, at every cue stalled the outputs on the first frame of each cue).
+  for (auto it = transitionIsf_.begin(); it != transitionIsf_.end();) {
+    auto st = states_.find(it->first);
+    bool busy = st != states_.end() && st->second.type == TransitionType::Shader && st->second.fade < 1;
+    if (busy) { ++it; continue; }
+    transitionIn_[0].erase(it->first);
+    transitionIn_[1].erase(it->first);
+    transitionOut_.erase(it->first);
+    it = project.layer(it->first) ? std::next(it) : transitionIsf_.erase(it);
+  }
   std::vector<int> ended;
   for (auto it = states_.begin(); it != states_.end();) {
     if (!project.layer(it->first)) { // layer removed during the show: stop its media
@@ -1016,10 +1134,17 @@ void Engine::update(double dt) {
       continue;
     }
     LayerState &st = it->second;
+    if (st.waitFrame) { // until the incoming media shows its first picture
+      const bool ready = st.currentTex && !st.currentTex->empty();
+      if (!st.current || ready || st.manual || time_ - st.waitSince > 1.0) {
+        st.waitFrame = false;
+        if (st.cutAfterWait) st.fade = 1;
+      }
+    }
     if (st.manual) {
       st.fade = manualActive_ ? manualProgress_ : 1.0f;
       if (!manualActive_) st.manual = false;
-    } else if (st.fade < 1) {
+    } else if (st.fade < 1 && !st.waitFrame) {
       st.fade = st.fadeDuration > 0 ? std::min(1.0f, st.fade + float(dt) / st.fadeDuration) : 1.0f;
     }
     if (st.fade >= 1 && st.previous) {
@@ -1124,9 +1249,12 @@ void Engine::update(double dt) {
     else ++it;
   }
   // Effect chains and blob data of layers without effects / playback.
+  // Kept while the layer has effects, playing or not: a chain rebuilt at
+  // every relaunch recompiled its shaders, and the blob tracker forgot the
+  // background it had learnt (a nightly stop/start changed how it tracked).
   for (auto it = chains_.begin(); it != chains_.end();) {
     const Layer *l = project.layer(it->first / 2);
-    bool keep = l && !l->effects.empty() && states_.count(it->first / 2);
+    bool keep = l && !l->effects.empty();
     it = keep ? std::next(it) : chains_.erase(it);
   }
   for (auto it = blobReports_.begin(); it != blobReports_.end();)
@@ -1152,22 +1280,6 @@ void Engine::update(double dt) {
       stingerTex_ = stinger_->update(dt, *sm, ctx);
       stinger_->setGain(1);
     }
-  }
-  for (auto it = fitFbs_.begin(); it != fitFbs_.end();) // layer gone
-    it = states_.count(it->first / 2) ? std::next(it) : fitFbs_.erase(it);
-  for (auto it = crossfadeFbs_.begin(); it != crossfadeFbs_.end();) {
-    auto st = states_.find(it->first);
-    bool busy = st != states_.end() && st->second.type == TransitionType::Crossfade && st->second.fade < 1;
-    it = busy ? std::next(it) : crossfadeFbs_.erase(it);
-  }
-  for (auto it = transitionIsf_.begin(); it != transitionIsf_.end();) {
-    auto st = states_.find(it->first);
-    bool busy = st != states_.end() && st->second.type == TransitionType::Shader && st->second.fade < 1;
-    if (busy) { ++it; continue; }
-    transitionIn_[0].erase(it->first);
-    transitionIn_[1].erase(it->first);
-    transitionOut_.erase(it->first);
-    it = transitionIsf_.erase(it);
   }
   updateAutoGo();
   cache.pruneLive();
@@ -1211,7 +1323,7 @@ void Engine::render() {
   // the DMX master dims only the LEDs.
   leds.transmit = !following(); // the main drives the lights; the backup only previews
   devices.heldDmx(leds.held, heldDmxVersion_); // values of "dmx" commands, sent with the LEDs
-  leds.update(project, [this](int id) -> const Texture & { return canvasTexture(id); }, mesh, time_);
+  if (!standingDown()) leds.update(project, [this](int id) -> const Texture & { return canvasTexture(id); }, mesh, time_);
 
   // NDI of the main canvas: asynchronous read back, sent a frame later.
   if (project.ndiSend) {

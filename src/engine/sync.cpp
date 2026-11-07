@@ -20,6 +20,10 @@
 
 namespace lumen {
 
+// A number from the network, kept in 0..hi (or the old value if it is not one).
+static float unit(float v, float old, float hi = 1.0f) { return std::isfinite(v) ? std::clamp(v, 0.0f, hi) : old; }
+
+
 namespace {
 
 // Wall clock: the engine clock stops when the app stalls, this one does not.
@@ -85,6 +89,7 @@ void Engine::setSync(SyncRole role, const std::string &peer, int port) {
   syncSession_ = (static_cast<long long>(rd() & 0xFFFFFF) << 24) | (rd() & 0xFFFFFF);
   syncStatus_.clear();
   syncPeerStatus_.clear();
+  syncPeerActive_ = false;
   if (role == SyncRole::Off) return;
   std::string err;
   // Both sides listen: the backup for the state, the main for the backup's status.
@@ -148,7 +153,7 @@ void Engine::syncSendState() {
   std::string host;
   int port;
   splitPeer(syncPeer_, syncPort_, host, port);
-  syncOut_.send(host, port, OscMessage{"/lumen/sync/state", {j.dump()}, ""});
+  syncOut_.send(host, port, OscMessage{"/lumen/sync/state", {j.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace)}, ""});
   syncLastTx_ = wallNow();
   syncSentColumnRun_ = columnRun_;
   syncSentBlackout_ = blackout;
@@ -206,7 +211,7 @@ void Engine::syncApply(const std::string &text) {
     int id = jl.value("id", -1);
     Layer *layer = project.layer(id);
     if (!layer) continue;
-    layer->opacity = jl.value("op", layer->opacity);
+    layer->opacity = unit(jl.value("op", layer->opacity), layer->opacity);
     layer->visible = jl.value("vis", layer->visible);
     int run = jl.value("run", 0), media = jl.value("m", -1), columnId = jl.value("col", -1);
     auto applied = syncAppliedRun_.find(id);
@@ -258,10 +263,12 @@ void Engine::syncApply(const std::string &text) {
   }
 
   blackout = j.value("blackout", blackout);
-  masterOpacity = j.value("master", masterOpacity);
-  project.masterVolume = j.value("volume", project.masterVolume);
-  project.dmxMaster = j.value("dmx", project.dmxMaster);
-  transitionFader = j.value("fader", transitionFader);
+  // Same ranges as the controls: a bad packet (volume 1e9) must not distort
+  // the sound or be saved into the project.
+  masterOpacity = unit(j.value("master", masterOpacity), masterOpacity);
+  project.masterVolume = unit(j.value("volume", project.masterVolume), project.masterVolume, 2.0f);
+  project.dmxMaster = unit(j.value("dmx", project.dmxMaster), project.dmxMaster);
+  transitionFader = unit(j.value("fader", transitionFader), transitionFader);
 
   std::map<int, bool> mainTimelines;
   for (auto &jt : j.value("tl", nlohmann::json::array())) {
@@ -375,7 +382,8 @@ void Engine::updateSync() {
         continue;
       }
       std::string who = "reserva " + hostOf(m.sender) + ": ";
-      if (state == "active") syncPeerStatus_ = who + "ASSUMIU o show";
+      syncPeerActive_ = state == "active";
+      if (state == "active") syncPeerStatus_ = who + "ASSUMIU o show (esta parou de enviar LED, DMX e comandos)";
       else if (!sig.empty() && sig != syncSignature_) syncPeerStatus_ = who + "projeto DIFERENTE";
       else if (state == "following") syncPeerStatus_ = who + "seguindo";
       else syncPeerStatus_ = who + "aguardando";
@@ -387,7 +395,10 @@ void Engine::updateSync() {
     // Every 100 ms, and at once when a cue or the blackout changes.
     if (now - syncLastTx_ >= 0.1 || columnRun_ != syncSentColumnRun_ || blackout != syncSentBlackout_) syncSendState();
     if (syncLastPeerRx_ < 0) syncPeerStatus_ = "nenhuma reserva respondeu ainda";
-    else if (now - syncLastPeerRx_ > 3) syncPeerStatus_ = "reserva sem contato há " + std::to_string(int(now - syncLastPeerRx_)) + " s";
+    else if (now - syncLastPeerRx_ > 3) {
+      syncPeerStatus_ = "reserva sem contato há " + std::to_string(int(now - syncLastPeerRx_)) + " s";
+      syncPeerActive_ = false; // the backup is gone: this one drives the devices again
+    }
     return;
   }
 
@@ -403,7 +414,7 @@ void Engine::updateSync() {
     int port;
     splitPeer(syncPeer_, syncPort_, host, port);
     if (syncPeer_.empty() && !syncMainHost_.empty()) host = syncMainHost_;
-    syncOut_.send(host, port, OscMessage{"/lumen/sync/backup", {j.dump()}, ""});
+    syncOut_.send(host, port, OscMessage{"/lumen/sync/backup", {j.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace)}, ""});
     syncLastTx_ = now;
   }
   switch (syncState_) {

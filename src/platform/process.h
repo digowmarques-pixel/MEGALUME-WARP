@@ -3,6 +3,7 @@
 // failing conversion can never take the show down.
 #pragma once
 
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -29,6 +30,9 @@ private:
   bool fill();
   std::string buffer_;
   bool eof_ = false, started_ = false;
+  // kill() may come from another thread (cancel) while wait() ends the child:
+  // the handle (pid) is released under this lock, never while kill() uses it.
+  std::mutex handleMutex_;
 #ifdef _WIN32
   void *process_ = nullptr, *pipe_ = nullptr;
 #else

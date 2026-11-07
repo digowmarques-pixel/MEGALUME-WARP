@@ -13,26 +13,51 @@
 #include <filesystem>
 #include <cmath>
 #include <cstdio>
+#include <map>
 
 namespace lumen {
 
 namespace {
 
-// Small "number [-][+]" field like Millumin's steppers.
-bool stepper(const char *id, int &v, int lo, int hi) {
+// A number typed here applies when the field is left (Enter, Tab, a click
+// elsewhere); the [-][+] buttons apply at once. Each digit used to re-apply the
+// layout: typing "12" columns first made 1, and the other projectors lost
+// their warps, masks and monitors; "3840" px first made 16 px wide projectors.
+bool deferredInt(const char *id, int &v, int lo, int hi, int step, float width) {
+  static std::map<ImGuiID, int> editing;
   ImGui::PushID(id);
-  ImGui::SetNextItemWidth(90);
-  bool changed = ImGui::InputInt("##v", &v, 1, 1);
-  v = std::clamp(v, lo, hi);
+  ImGui::SetNextItemWidth(width);
+  const ImGuiID key = ImGui::GetID("##v");
+  auto it = editing.find(key);
+  int buf = it != editing.end() ? it->second : v;
+  bool apply = false;
+  if (ImGui::InputInt("##v", &buf, step, step)) {
+    editing[key] = buf;
+    apply = !ImGui::IsItemActive(); // a [-][+] button
+  }
+  if (apply || ImGui::IsItemDeactivatedAfterEdit()) {
+    auto e = editing.find(key);
+    if (e != editing.end()) {
+      int nv = std::clamp(e->second, lo, hi);
+      apply = nv != v;
+      v = nv;
+      editing.erase(e);
+    }
+  } else if (!ImGui::IsItemActive()) {
+    editing.erase(key);
+  }
   ImGui::PopID();
-  return changed;
+  return apply;
 }
+
+// Small "number [-][+]" field like Millumin's steppers.
+bool stepper(const char *id, int &v, int lo, int hi) { return deferredInt(id, v, lo, hi, 1, 90); }
 
 bool pxField(const char *id, int &v, int hi) {
   ImGui::PushID(id);
   ImGui::SetNextItemWidth(70);
   bool changed = ImGui::DragInt("##px", &v, 1.0f, 0, hi, T("%d px"));
-  v = std::clamp(v, 0, hi);
+  if (changed) v = std::clamp(v, 0, hi); // only when edited: not every frame
   ImGui::PopID();
   return changed;
 }
@@ -124,8 +149,7 @@ void Ui::outputsWindow(App &app) {
     return;
   }
 
-  OutputConfig *sel = p.output(outputsSel_);
-  if (outputsPage_ == 1 && !sel) outputsPage_ = 0;
+  if (outputsPage_ == 1 && !p.output(outputsSel_)) outputsPage_ = 0;
 
   // ---------------------------------------------------------------- left column
   ImGui::BeginChild("##left", {220, -ImGui::GetFrameHeightWithSpacing() * 2.6f}, ImGuiChildFlags_Borders);
@@ -293,6 +317,10 @@ void Ui::outputsWindow(App &app) {
     app.edited();
   };
 
+  // Looked up here, after the left column: a preset loaded there replaces the
+  // outputs vector, and a pointer taken before it read freed memory (crash).
+  OutputConfig *sel = p.output(outputsSel_);
+  if (outputsPage_ == 1 && !sel) outputsPage_ = 0;
   if (outputsPage_ == 0) {
     // Layout row: "layout [2] x [1] de [1920] px [1080] px"
     ImGui::AlignTextToFramePadding();
@@ -306,13 +334,11 @@ void Ui::outputsWindow(App &app) {
     ImGui::SameLine(0, 18);
     ImGui::TextDisabled("%s", T("de"));
     ImGui::SameLine();
-    ImGui::SetNextItemWidth(90);
-    changed |= ImGui::InputInt("##w", &L.projW, 0);
+    changed |= deferredInt("##w", L.projW, 16, 16384, 0, 90);
     ImGui::SameLine();
     ImGui::TextDisabled("×");
     ImGui::SameLine();
-    ImGui::SetNextItemWidth(90);
-    changed |= ImGui::InputInt("##h", &L.projH, 0);
+    changed |= deferredInt("##h", L.projH, 16, 16384, 0, 90);
     ImGui::SameLine();
     ImGui::TextDisabled("%s", T("px por projetor"));
     L.projW = std::clamp(L.projW, 16, 16384);

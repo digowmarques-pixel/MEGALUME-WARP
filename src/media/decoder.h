@@ -47,6 +47,10 @@ struct MediaInfo {
   bool hasVideo = false;
   bool hasAudio = false;
   bool alpha = false; // the video carries transparency (pixel format with alpha)
+  // Clockwise turn (0, 90, 180, 270) that shows the picture upright: phone
+  // videos are stored sideways with a rotation in their metadata. width and
+  // height above are already those of the upright picture.
+  int rotation = 0;
   std::string codec;
   std::string hwaccel; // name of the hardware decoder in use, if any
 };
@@ -100,6 +104,7 @@ public:
   // fetched start exactly there (thread-safe).
   void seek(double time);
   void setLoop(bool loop) { loop_ = loop; }
+  bool loop() const { return loop_; }
 
   // Returns true and fills `out` with the newest frame whose pts <= time.
   // If `force` is set and nothing is due yet, returns the earliest queued frame.

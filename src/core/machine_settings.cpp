@@ -14,18 +14,31 @@ std::mutex g_mutex;
 
 std::string file() { return platform::toUtf8(platform::toPath(platform::settingsDir()) / "settings.json"); }
 
-nlohmann::json load() {
+nlohmann::json loadFrom(const std::string &path, bool &ok) {
   std::string text;
-  if (!platform::readFile(file(), text)) return nlohmann::json::object();
+  ok = false;
+  if (!platform::readFile(path, text)) return nlohmann::json::object();
   auto j = nlohmann::json::parse(text, nullptr, false);
-  return j.is_object() ? j : nlohmann::json::object();
+  ok = j.is_object();
+  return ok ? j : nlohmann::json::object();
+}
+
+// Unreadable or damaged (antivirus lock, power cut): the copy from the save
+// before. Writing after a failed read used to keep only the new key, and the
+// PIN, the backup role and "open in operator mode" were gone.
+nlohmann::json load() {
+  bool ok;
+  nlohmann::json j = loadFrom(file(), ok);
+  if (ok) return j;
+  nlohmann::json bak = loadFrom(file() + ".bak", ok);
+  return ok ? bak : j;
 }
 
 template <class T> void store(const std::string &key, const T &value) {
   std::lock_guard<std::mutex> lock(g_mutex);
   nlohmann::json j = load();
   j[key] = value;
-  platform::writeFile(file(), j.dump(2));
+  platform::writeFile(file(), j.dump(2, ' ', false, nlohmann::json::error_handler_t::replace), true);
 }
 
 } // namespace

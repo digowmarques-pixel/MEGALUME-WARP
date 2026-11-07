@@ -160,7 +160,8 @@ void arcTo(Shape &s, Vec2 p0, float rx, float ry, float phiDeg, bool large, bool
   float dt = ang((x1 - cxp) / rx, (y1 - cyp) / ry, (-x1 - cxp) / rx, (-y1 - cyp) / ry);
   if (!sweep && dt > 0) dt -= 2 * 3.14159265f;
   if (sweep && dt < 0) dt += 2 * 3.14159265f;
-  int segs = std::max(1, int(std::ceil(std::fabs(dt) / (3.14159265f / 2))));
+  if (!std::isfinite(dt) || !std::isfinite(cx) || !std::isfinite(cy)) dt = 0; // degenerate arc: a straight line
+  int segs = std::clamp(int(std::ceil(std::fabs(dt) / (3.14159265f / 2))), 1, 8);
   float step = dt / float(segs), alpha = 4.0f / 3.0f * std::tan(step / 4);
   auto pt = [&](float t) {
     return Vec2{cx + rx * std::cos(t) * cs - ry * std::sin(t) * sn, cy + rx * std::cos(t) * sn + ry * std::sin(t) * cs};
@@ -311,7 +312,7 @@ std::string masksToSvg(const std::vector<Mask> &masks, float w, float h) {
   for (auto &m : masks) {
     if (!m.enabled || m.points.size() < 3) continue;
     std::string name;
-    for (char c : m.name) name += (c == '"' || c == '<' || c == '&') ? '_' : c;
+    for (char c : m.name) name += (c == '"' || c == '<' || c == '>' || c == '&') ? '_' : c; // '>' ended the tag on import
     out += "  <path id=\"" + name + "\" fill=\"" + (m.subtract ? "black" : "white") + "\" d=\"";
     size_t n = m.points.size();
     Vec2 c = maskCenter(m);

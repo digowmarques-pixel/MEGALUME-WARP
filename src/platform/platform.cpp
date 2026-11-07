@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -46,20 +47,91 @@ bool readFile(const std::string &path, std::string &out) {
   return true;
 }
 
-bool writeFile(const std::string &path, const std::string &data) {
-  // Write to a temp file then rename so a crash never leaves a half-written project.
+#ifdef _WIN32
+static bool writeDurable(const std::filesystem::path &file, const std::string &data) {
+  HANDLE h = CreateFileW(file.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+  if (h == INVALID_HANDLE_VALUE) return false;
+  bool ok = true;
+  for (size_t done = 0; ok && done < data.size();) {
+    DWORD chunk = DWORD(std::min<size_t>(data.size() - done, 1 << 20)), wrote = 0;
+    ok = WriteFile(h, data.data() + done, chunk, &wrote, nullptr) && wrote == chunk;
+    done += wrote;
+  }
+  ok = ok && FlushFileBuffers(h); // on the disk, not in the cache, before the rename
+  return CloseHandle(h) && ok;
+}
+static bool moveOver(const std::filesystem::path &from, const std::filesystem::path &to) {
+  return MoveFileExW(from.c_str(), to.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH);
+}
+#else
+static bool writeDurable(const std::filesystem::path &file, const std::string &data) {
+  FILE *f = std::fopen(file.c_str(), "wb");
+  if (!f) return false;
+  bool ok = std::fwrite(data.data(), 1, data.size(), f) == data.size();
+  ok = ok && std::fflush(f) == 0 && fsync(fileno(f)) == 0;
+  return std::fclose(f) == 0 && ok;
+}
+static bool moveOver(const std::filesystem::path &from, const std::filesystem::path &to) {
+  std::error_code ec;
+  std::filesystem::rename(from, to, ec);
+  return !ec;
+}
+#endif
+
+bool writeFile(const std::string &path, const std::string &data, bool keepBackup) {
+  // A temp file, flushed to the disk, then renamed over the target: a crash, a
+  // full disk or a power cut never leaves a truncated or zero-filled project
+  // (an unchecked close used to rename a short file over the good one).
   auto target = toPath(path);
   auto tmp = target;
   tmp += ".tmp";
-  {
-    std::ofstream f(tmp, std::ios::binary | std::ios::trunc);
-    if (!f) return false;
-    f << data;
-    if (!f) return false;
-  }
   std::error_code ec;
-  std::filesystem::rename(tmp, target, ec);
-  return !ec;
+  if (!writeDurable(tmp, data)) {
+    std::filesystem::remove(tmp, ec);
+    return false;
+  }
+  if (keepBackup && std::filesystem::exists(target, ec)) {
+    auto bak = target;
+    bak += ".bak";
+    moveOver(target, bak); // the previous version, whole (only renamed)
+  }
+  if (!moveOver(tmp, target)) {
+    std::filesystem::remove(tmp, ec);
+    return false;
+  }
+  return true;
+}
+
+static std::function<void()> g_dialogPump;
+void setDialogPump(std::function<void()> pump) { g_dialogPump = std::move(pump); }
+
+// Runs a blocking dialog on a thread of its own and keeps the show running on
+// this one until it closes (a join() here froze every output for as long as
+// the dialog stayed open, and the backup machine took over).
+template <class R> static R whileDialogOpen(const std::function<R()> &f) {
+  static bool busy = false; // a dialog from inside the pump: just wait
+  R result{};
+  std::atomic<bool> done{false};
+  std::thread t([&] {
+    result = f();
+    done = true;
+  });
+  bool pump = !busy && g_dialogPump;
+  busy = true;
+  while (!done) {
+    if (pump) g_dialogPump();
+    else std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+  busy = false;
+  t.join();
+  return result;
+}
+
+void runKeepingShow(const std::function<void()> &work) {
+  whileDialogOpen<bool>([&] {
+    work();
+    return true;
+  });
 }
 
 #ifdef _WIN32
@@ -95,13 +167,12 @@ static std::wstring win32Filter(const std::string &filter) {
 // CoInitializeEx fails): the folder picker then silently did nothing. They run
 // on a thread of their own while the caller waits (they are modal anyway).
 template <class R> static R onStaThread(const std::function<R()> &f) {
-  R result{};
-  std::thread([&] {
+  return whileDialogOpen<R>([&] {
     HRESULT hr = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
-    result = f();
+    R result = f();
     if (SUCCEEDED(hr)) CoUninitialize();
-  }).join();
-  return result;
+    return result;
+  });
 }
 
 static std::vector<std::string> openFileDialogSta(const std::string &title, const std::string &filter,
@@ -315,7 +386,7 @@ std::string executableDir() {
 
 #else // macOS (osascript) and Linux (zenity)
 
-static std::string runCapture(const std::string &cmd) {
+static std::string runCaptureBlocking(const std::string &cmd) {
   std::string out;
   FILE *f = popen(cmd.c_str(), "r");
   if (!f) return out;
@@ -324,6 +395,9 @@ static std::string runCapture(const std::string &cmd) {
   pclose(f);
   while (!out.empty() && (out.back() == '\n' || out.back() == '\r')) out.pop_back();
   return out;
+}
+static std::string runCapture(const std::string &cmd) {
+  return whileDialogOpen<std::string>([&] { return runCaptureBlocking(cmd); });
 }
 
 #ifdef __APPLE__

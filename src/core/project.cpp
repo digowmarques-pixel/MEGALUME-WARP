@@ -24,7 +24,12 @@ static const char *kTargetNames[] = {"Opacity",    "Position X", "Position Y",  
                                      "Stop all",   "Volume",     "Master opacity", "Master volume",
                                      "Blackout",   "DMX master", "Transition fader"};
 
-const char *generatorName(GeneratorKind k) { return kGeneratorNames[int(k)]; }
+// Every name lookup is bounds-checked: a value from a newer Lumen (or a hand
+// edit) reached these as an index and printed a garbage pointer (crash).
+template <size_t N> static const char *nameAt(const char *const (&names)[N], int i) {
+  return i >= 0 && size_t(i) < N ? names[i] : "?";
+}
+const char *generatorName(GeneratorKind k) { return nameAt(kGeneratorNames, int(k)); }
 
 std::string composeAccents(const std::string &in) {
   // Decode UTF-8 (invalid bytes are kept as they are).
@@ -75,12 +80,12 @@ std::string composeAccents(const std::string &in) {
   }
   return out;
 }
-const char *blendName(BlendMode b) { return kBlendNames[int(b)]; }
-const char *mappingTargetName(MappingTarget t) { return kTargetNames[int(t)]; }
+const char *blendName(BlendMode b) { return nameAt(kBlendNames, int(b)); }
+const char *mappingTargetName(MappingTarget t) { return nameAt(kTargetNames, int(t)); }
 
 const char *endModeName(EndMode m) {
   static const char *n[] = {"Loop", "Freeze", "Stop", "Next column"};
-  return n[int(m)];
+  return nameAt(n, int(m));
 }
 std::array<float, 4> mediaFitRect(MediaFit f, int mw, int mh, int W, int H) {
   if (f == MediaFit::Stretch || mw <= 0 || mh <= 0 || W <= 0 || H <= 0) return {0, 0, float(W), float(H)};
@@ -92,11 +97,11 @@ std::array<float, 4> mediaFitRect(MediaFit f, int mw, int mh, int W, int H) {
 
 const char *transformerName(Transformer t) {
   static const char *n[] = {"Linear", "Switch", "Toggle", "Accumulator"};
-  return n[int(t)];
+  return nameAt(n, int(t));
 }
 const char *scheduleActionName(ScheduleAction a) {
   static const char *n[] = {"Launch column", "Go (next)", "Stop all", "Blackout on", "Blackout off", "Command"};
-  return n[int(a)];
+  return nameAt(n, int(a));
 }
 
 bool Mask::isBezier(size_t i) const {
@@ -150,7 +155,7 @@ std::vector<Vec2> maskOutline(const Mask &m, int steps) {
 
 const char *easeName(Ease e) {
   static const char *n[] = {"Linear", "Suave", "Acelera", "Desacelera", "Degrau"};
-  return n[int(e)];
+  return nameAt(n, int(e));
 }
 
 float TimelineTrack::valueAt(float t) const {
@@ -545,6 +550,15 @@ Project Project::makeDefault() {
 
 void applyBlendLayout(Project &p, const BlendLayoutParams &params, int firstMonitor, bool scaleContent) {
   p.outputLayout = params;
+  // The seams in pixels, always: the fraction they came from was not saved, so
+  // a reopened project showed 0 px seams and the next layout edit wiped the blend.
+  {
+    BlendLayoutParams &L = p.outputLayout;
+    L.gapsX.resize(size_t(std::max(0, params.cols - 1)));
+    L.gapsY.resize(size_t(std::max(0, params.rows - 1)));
+    for (size_t i = 0; i < L.gapsX.size(); ++i) L.gapsX[i] = params.gapX(int(i));
+    for (size_t i = 0; i < L.gapsY.size(); ++i) L.gapsY[i] = params.gapY(int(i));
+  }
   BlendLayout lay = computeBlendLayout(params);
   if (scaleContent && p.canvasW > 0 && p.canvasH > 0) {
     float sx = float(lay.canvasW) / float(p.canvasW), sy = float(lay.canvasH) / float(p.canvasH);
@@ -559,7 +573,30 @@ void applyBlendLayout(Project &p, const BlendLayoutParams &params, int firstMoni
         for (auto &pt : m.tanOut) scale(pt);
       }
       scale(l.transform.position);
+      for (auto &m : l.masks) m.feather *= (sx + sy) * 0.5f;
     }
+    // Animated positions too (timeline keyframes, column states, controller
+    // ranges), or the next keyframe or cue moved the layer back to where it
+    // was on the old canvas.
+    auto onMain = [&](int layerId) {
+      for (auto &l : p.layers)
+        if (l.id == layerId) return l.canvasId == 0;
+      return false;
+    };
+    for (auto &t : p.timelines)
+      for (auto &tr : t.tracks)
+        if ((tr.param == "x" || tr.param == "y") && onMain(tr.layerId))
+          for (auto &k : tr.keys) k.value *= tr.param == "x" ? sx : sy;
+    for (auto &c : p.columns)
+      for (auto &st : c.states)
+        if ((st.param == int(MappingTarget::PositionX) || st.param == int(MappingTarget::PositionY)) && onMain(st.layerId))
+          st.value *= st.param == int(MappingTarget::PositionX) ? sx : sy;
+    for (auto &m : p.mappings)
+      if ((m.target == MappingTarget::PositionX || m.target == MappingTarget::PositionY) && onMain(m.layerId)) {
+        const float f = m.target == MappingTarget::PositionX ? sx : sy;
+        m.outMin *= f;
+        m.outMax *= f;
+      }
     for (auto &m : p.ledMappings)
       if (m.canvasId == 0)
         for (auto &c : m.area.corners) scale(c);
@@ -574,6 +611,7 @@ void applyBlendLayout(Project &p, const BlendLayoutParams &params, int firstMoni
   size_t n = lay.projectors.size();
   std::vector<OutputConfig> mainOuts, others;
   for (auto &o : p.outputs) (o.canvasId == 0 ? mainOuts : others).push_back(o);
+  const size_t had = mainOuts.size();
   p.outputs = mainOuts;
   while (p.outputs.size() < n) p.addOutput();
   p.outputs.resize(n);
@@ -581,8 +619,10 @@ void applyBlendLayout(Project &p, const BlendLayoutParams &params, int firstMoni
   for (size_t i = 0; i < n; ++i) {
     OutputConfig &o = p.outputs[i];
     const BlendProjector &b = lay.projectors[i];
-    o.name = "Projetor " + std::to_string(i + 1);
-    o.enabled = true;
+    if (i >= had) { // new projector; the others keep the name and on/off they were given
+      o.name = "Projetor " + std::to_string(i + 1);
+      o.enabled = true;
+    }
     o.srcX = b.srcX;
     o.srcY = b.srcY;
     o.srcW = b.srcW;
@@ -928,7 +968,7 @@ std::string serializeProject(const Project &p, const std::string &baseDir) {
   {
     const BlendLayoutParams &b = p.outputLayout;
     j["outputLayout"] = {{"cols", b.cols}, {"rows", b.rows}, {"size", {b.projW, b.projH}},
-                         {"gapsX", b.gapsX}, {"gapsY", b.gapsY},
+                         {"gapsX", b.gapsX}, {"gapsY", b.gapsY}, {"overlap", {b.overlapX, b.overlapY}},
                          {"edges", {b.edgeLeft, b.edgeRight, b.edgeTop, b.edgeBottom}}};
   }
   j["dmx"] = {{"master", p.dmxMaster}, {"devices", json::array()}, {"leds", json::array()}};
@@ -959,7 +999,7 @@ std::string serializeProject(const Project &p, const std::string &baseDir) {
     const TimecodeConfig &t = p.timecode;
     j["timecode"] = {{"source", int(t.source)}, {"ltcDevice", t.ltcDevice}, {"ltcChannel", t.ltcChannel},
                      {"freewheel", t.freewheel}, {"delayFrames", t.delayFrames}, {"generate", t.generate}, {"genTimeline", t.genTimelineId},
-                     {"genStart", t.genStart}, {"genFps", t.genFps}, {"genMtc", t.genMtc}, {"genMtcPort", t.genMtcPort},
+                     {"genStart", t.genStart}, {"genStartFrame", std::int64_t(std::llround(t.genStart * t.genFps))}, {"genFps", t.genFps}, {"genMtc", t.genMtc}, {"genMtcPort", t.genMtcPort},
                      {"genLtc", t.genLtc}, {"genLtcChannel", t.genLtcChannel}};
   }
   j["timelines"] = json::array();
@@ -1065,7 +1105,7 @@ std::string serializeProject(const Project &p, const std::string &baseDir) {
     if (c.stingerMediaId >= 0) jc["stinger"] = {{"media", c.stingerMediaId}, {"cut", c.stingerCut}};
     if (!c.commands.empty()) jc["commands"] = c.commands;
     if (c.timecodeCue >= 0) jc["timecodeCue"] = c.timecodeCue;
-    if (!c.timecodeChase) jc["timecodeChase"] = false;
+    jc["timecodeChase"] = c.timecodeChase; // always: a default that changes later cannot flip old shows
     for (auto &st : c.states)
       jc["states"].push_back({{"layer", st.layerId}, {"param", st.param}, {"value", st.value}});
     for (auto &[lid, cell] : c.cells)
@@ -1080,6 +1120,7 @@ std::string serializeProject(const Project &p, const std::string &baseDir) {
   for (auto &o : p.outputs) {
     j["outputs"].push_back(
         {{"id", o.id}, {"name", o.name}, {"enabled", o.enabled}, {"monitor", o.monitor},
+         {"monitorId", {{"name", o.monitorName}, {"pos", {o.monitorX, o.monitorY}}}},
          {"window", {o.winX, o.winY, o.winW, o.winH}},
          {"source", {o.srcX, o.srcY, o.srcW, o.srcH}},
          {"warp", toJson(o.warp)},
@@ -1120,7 +1161,34 @@ std::string serializeProject(const Project &p, const std::string &baseDir) {
                              {"layer", m.layerId}, {"out", {m.outMin, m.outMax}},
                              {"smoothing", m.smoothing}, {"transformer", int(m.transformer)},
                              {"step", m.step}, {"columns", {m.firstColumn, m.lastColumn}}});
-  return j.dump(2);
+  // Text cut inside a UTF-8 character (fixed-size fields, OSC text in Latin-1)
+  // made dump() throw, and the uncaught exception closed Lumen on save.
+  return j.dump(2, ' ', false, json::error_handler_t::replace);
+}
+
+// A value that could not be written as a number (NaN, infinity typed in a
+// field) is saved as null, and value("x", default) throws on null: the whole
+// project failed to open over one field. Null now means "the default".
+static void scrubNulls(json &j) {
+  // Numbers far outside anything a project holds (1e25 typed or damaged):
+  // within a billion, so reading them as int is defined.
+  if (j.is_number_float()) {
+    float v = j.get<float>();
+    if (v > 1e9f) j = 1e9f;
+    else if (v < -1e9f) j = -1e9f;
+    return;
+  }
+  if (j.is_object()) {
+    for (auto it = j.begin(); it != j.end();) {
+      if (it->is_null()) it = j.erase(it);
+      else scrubNulls(*it++);
+    }
+  } else if (j.is_array()) {
+    for (auto &v : j) {
+      if (v.is_null()) v = 0.0f;
+      else scrubNulls(v);
+    }
+  }
 }
 
 bool deserializeProject(const std::string &text, const std::string &baseDir, Project &out,
@@ -1132,11 +1200,26 @@ bool deserializeProject(const std::string &text, const std::string &baseDir, Pro
     if (error) *error = e.what();
     return false;
   }
+  if (!j.is_object()) {
+    if (error) *error = "not a Lumen project";
+    return false;
+  }
+  if (j.contains("format") && j["format"] != "lumen") {
+    if (error) *error = "not a Lumen project (" + j["format"].dump(-1, ' ', false, json::error_handler_t::replace) + ")";
+    return false;
+  }
+  if (j.contains("version") && j["version"].is_number() && j["version"].get<float>() > 1.5f) {
+    if (error) *error = "made by a newer version of Lumen: update Lumen to open it";
+    return false;
+  }
+  scrubNulls(j);
   try {
     Project p;
     if (j.contains("canvas")) {
-      p.canvasW = j["canvas"].value("width", 1920);
-      p.canvasH = j["canvas"].value("height", 1080);
+      // Same limits as the extra canvases: a damaged size asked the GPU for a
+      // buffer of a billion pixels.
+      p.canvasW = std::clamp(j["canvas"].value("width", 1920), 16, 16384);
+      p.canvasH = std::clamp(j["canvas"].value("height", 1080), 16, 16384);
       if (j["canvas"].contains("background")) fromJson(j["canvas"]["background"], p.background);
     }
     p.defaultTransition = j.value("defaultTransition", 1.0f);
@@ -1177,6 +1260,10 @@ bool deserializeProject(const std::string &text, const std::string &baseDir, Pro
       if (b.contains("size")) { p.outputLayout.projW = b["size"][0]; p.outputLayout.projH = b["size"][1]; }
       for (auto &g : b.value("gapsX", json::array())) p.outputLayout.gapsX.push_back(g.get<int>());
       for (auto &g : b.value("gapsY", json::array())) p.outputLayout.gapsY.push_back(g.get<int>());
+      if (b.contains("overlap") && b["overlap"].is_array() && b["overlap"].size() == 2) {
+        p.outputLayout.overlapX = std::clamp(b["overlap"][0].get<float>(), 0.0f, 0.9f);
+        p.outputLayout.overlapY = std::clamp(b["overlap"][1].get<float>(), 0.0f, 0.9f);
+      }
       if (b.contains("edges") && b["edges"].is_array() && b["edges"].size() == 4) {
         BlendLayoutParams &o = p.outputLayout;
         int *e[] = {&o.edgeLeft, &o.edgeRight, &o.edgeTop, &o.edgeBottom};
@@ -1255,6 +1342,21 @@ bool deserializeProject(const std::string &text, const std::string &baseDir, Pro
       t.genTimelineId = x.value("genTimeline", -1);
       t.genStart = x.value("genStart", 3600.0f);
       t.genFps = x.value("genFps", 25.0f);
+      { // only the rates the editor offers; nearest one
+        const float rates[] = {24.0f, 25.0f, 29.97f, 30.0f};
+        float best = 25.0f;
+        for (float r : rates)
+          if (std::fabs(r - t.genFps) < std::fabs(best - t.genFps)) best = r;
+        t.genFps = std::isfinite(t.genFps) ? best : 25.0f;
+      }
+      // The start as a whole number of frames: as a float, 01:00:00;00 came
+      // back as 00:59:59;29 (one frame early) after save and reopen.
+      if (x.contains("genStartFrame") && x["genStartFrame"].is_number())
+        t.genStart = double(x["genStartFrame"].get<std::int64_t>()) / double(t.genFps);
+      else if (std::isfinite(t.genStart))
+        t.genStart = std::round(t.genStart * double(t.genFps)) / double(t.genFps);
+      else
+        t.genStart = 3600.0;
       t.genMtc = x.value("genMtc", true);
       t.genMtcPort = x.value("genMtcPort", "");
       t.genLtc = x.value("genLtc", false);
@@ -1370,7 +1472,9 @@ bool deserializeProject(const std::string &text, const std::string &baseDir, Pro
       l.visible = jl.value("visible", true);
       l.opacity = jl.value("opacity", 1.0f);
       l.blend = enumFrom(jl, "blend", BlendMode::Normal, int(BlendMode::COUNT));
-      l.fit = enumFrom(jl, "fit", MediaFit::Fit, int(MediaFit::COUNT));
+      // Written since 0.10.14: without it the file is older, when media was
+      // always stretched to the canvas (Fit there showed bars on wide walls).
+      l.fit = enumFrom(jl, "fit", MediaFit::Stretch, int(MediaFit::COUNT));
       l.volume = jl.value("volume", 1.0f);
       l.mute = jl.value("mute", false);
       l.audioOutput = std::max(0, jl.value("audioOutput", 0));
@@ -1461,7 +1565,11 @@ bool deserializeProject(const std::string &text, const std::string &baseDir, Pro
       c.timecodeCue = jc.value("timecodeCue", -1.0f);
       c.timecodeChase = jc.value("timecodeChase", true);
       for (auto &x : jc.value("states", json::array()))
-        c.states.push_back({x.value("layer", -1), x.value("param", 0), x.value("value", 0.0f)});
+      {
+        int param = x.value("param", 0);
+        if (param >= 0 && param < int(MappingTarget::COUNT)) // unknown (newer Lumen): dropped
+          c.states.push_back({x.value("layer", -1), param, x.value("value", 0.0f)});
+      }
       for (auto &cell : jc.value("cells", json::array())) {
         Cell ce;
         ce.mediaId = cell.value("media", -1);
@@ -1469,7 +1577,7 @@ bool deserializeProject(const std::string &text, const std::string &baseDir, Pro
         // Files before 0.6 only had "loop": a clip that did not loop held its last frame.
         ce.setEndMode(cell.contains("end") ? enumFrom(cell, "end", EndMode::Loop, int(EndMode::COUNT))
                                            : (ce.loop ? EndMode::Loop : EndMode::Freeze));
-        ce.speed = cell.value("speed", 1.0f);
+        ce.speed = clampSpeed(cell.value("speed", 1.0f));
         c.cells[cell.value("layer", -1)] = ce;
       }
       p.columns.push_back(c);
@@ -1481,6 +1589,15 @@ bool deserializeProject(const std::string &text, const std::string &baseDir, Pro
       o.name = jo.value("name", "Output");
       o.enabled = jo.value("enabled", true);
       o.monitor = jo.value("monitor", -1);
+      if (jo.contains("monitorId") && jo["monitorId"].is_object()) {
+        const auto &mi = jo["monitorId"];
+        o.monitorName = mi.value("name", "");
+        if (mi.contains("pos") && mi["pos"].is_array() && mi["pos"].size() == 2) {
+          o.monitorX = mi["pos"][0].get<int>();
+          o.monitorY = mi["pos"][1].get<int>();
+        }
+        if (!o.monitorName.empty()) o.monitorRecorded = o.monitor;
+      }
       if (jo.contains("window")) {
         auto &w = jo["window"];
         o.winX = w[0]; o.winY = w[1]; o.winW = w[2]; o.winH = w[3];
@@ -1582,6 +1699,25 @@ bool deserializeProject(const std::string &text, const std::string &baseDir, Pro
     for (auto &m : p.ledMappings) if (!p.hasCanvas(m.canvasId)) m.canvasId = 0;
     p.nextId = std::max(j.value("nextId", 1), maxId + 1);
 
+    // Files from before the seams were stored in pixels: read them back from
+    // where the projectors sit (left to right, top to bottom), so editing the
+    // layout keeps the blend instead of resetting it.
+    {
+      BlendLayoutParams &L = p.outputLayout;
+      std::vector<const OutputConfig *> main;
+      for (auto &o : p.outputs)
+        if (o.canvasId == 0) main.push_back(&o);
+      if (main.size() == size_t(L.cols) * size_t(L.rows)) {
+        if (L.gapsX.empty() && L.cols > 1)
+          for (int i = 0; i + 1 < L.cols; ++i)
+            L.gapsX.push_back(std::max(0, int(std::lround(main[size_t(i)]->srcX + main[size_t(i)]->srcW - main[size_t(i + 1)]->srcX))));
+        if (L.gapsY.empty() && L.rows > 1)
+          for (int r = 0; r + 1 < L.rows; ++r) {
+            const OutputConfig *a = main[size_t(r * L.cols)], *b = main[size_t((r + 1) * L.cols)];
+            L.gapsY.push_back(std::max(0, int(std::lround(a->srcY + a->srcH - b->srcY))));
+          }
+      }
+    }
     p.resolveSurfaces();
     out = std::move(p);
     return true;
@@ -1593,7 +1729,7 @@ bool deserializeProject(const std::string &text, const std::string &baseDir, Pro
 
 bool saveProject(Project &p, const std::string &path, std::string *error) {
   std::string baseDir = platform::toUtf8(platform::toPath(path).parent_path());
-  if (!platform::writeFile(path, serializeProject(p, baseDir))) {
+  if (!platform::writeFile(path, serializeProject(p, baseDir), true)) { // the previous save stays as .bak
     if (error) *error = "could not write " + path;
     return false;
   }
@@ -1601,7 +1737,12 @@ bool saveProject(Project &p, const std::string &path, std::string *error) {
   return true;
 }
 
-bool loadProject(const std::string &path, Project &out, std::string *error) {
+bool loadProject(const std::string &relPath, Project &out, std::string *error) {
+  // Absolute: "lumen show.lumen" started by a scheduled task (whose folder is
+  // System32) looked for the media next to System32.
+  std::error_code ec;
+  auto abs = std::filesystem::absolute(platform::toPath(relPath), ec);
+  const std::string path = ec ? relPath : platform::toUtf8(abs.lexically_normal());
   std::string text;
   if (!platform::readFile(path, text)) {
     if (error) *error = "could not read " + path;
@@ -1620,12 +1761,15 @@ namespace lumen {
 std::string serializeOutputSetup(const Project &p, const std::string &baseDir) {
   json full = json::parse(serializeProject(p, baseDir));
   json out = {{"format", "lumen-outputs"}, {"version", 1}, {"outputs", full.value("outputs", json::array())}};
-  return out.dump(2);
+  return out.dump(2, ' ', false, json::error_handler_t::replace);
 }
 
 bool loadOutputSetup(const std::string &text, const std::string &baseDir, Project &p, std::string *error) {
   json preset = json::parse(text, nullptr, false);
-  if (preset.is_discarded() || preset.value("format", std::string()) != "lumen-outputs" ||
+  // A preset is a file anyone can hand over: anything that is not an object
+  // with the right "format" string is refused (value() throws on non-objects).
+  if (preset.is_discarded() || !preset.is_object() || !preset.contains("format") ||
+      !preset["format"].is_string() || preset["format"].get<std::string>() != "lumen-outputs" ||
       !preset.contains("outputs") || !preset["outputs"].is_array()) {
     if (error) *error = "not a Lumen output preset";
     return false;
@@ -1635,7 +1779,7 @@ bool loadOutputSetup(const std::string &text, const std::string &baseDir, Projec
   json full = json::parse(serializeProject(p, baseDir));
   full["outputs"] = preset["outputs"];
   Project tmp;
-  if (!deserializeProject(full.dump(), baseDir, tmp)) {
+  if (!deserializeProject(full.dump(-1, ' ', false, json::error_handler_t::replace), baseDir, tmp)) {
     if (error) *error = "invalid output preset";
     return false;
   }

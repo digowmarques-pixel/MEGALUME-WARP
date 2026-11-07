@@ -16,6 +16,7 @@
 #include <atomic>
 #include <memory>
 #include <mutex>
+#include <future>
 #include <string>
 #include <thread>
 #include <vector>
@@ -102,7 +103,14 @@ public:
   bool saveRecording(const std::string &wavPath) const;
   const std::string &deviceName() const { return deviceName_; }
   const std::string &error() const { return error_; }
+  // Running on something else than what was asked (the chosen card was not
+  // there: the default one, or the silent clock): the engine watches for the
+  // chosen one to come back.
+  const std::string &requested() const { return requested_; }
+  bool onFallback() const { return running_ && (silent_ || (!requested_.empty() && deviceName_ != requested_)); }
   static std::vector<std::string> devices();
+  // Output names, listed on a long-lived thread of its own (no ASIO drivers).
+  static std::future<std::vector<std::string>> listOutputsAsync();
 
   std::shared_ptr<AudioVoice> createVoice();
   // Fades the voice out (a few ms) and drops it at the next purge().
@@ -131,7 +139,7 @@ private:
   std::atomic<int> generation_{0};
   int latencyMs_ = 0;
   bool running_ = false, silent_ = false, exclusive_ = false;
-  std::string deviceName_, error_;
+  std::string deviceName_, error_, requested_;
 };
 
 // Decodes the audio track of a file into an AudioVoice on its own thread.
@@ -173,6 +181,7 @@ public:
   bool latest(Timecode &tc, double &age) const;
   float level() const { return level_.load(); }
   static std::vector<std::string> devices(); // capture devices
+  static std::future<std::vector<std::string>> listInputsAsync();
   void callback(const float *in, size_t frames, int channels); // device thread
 
 private:

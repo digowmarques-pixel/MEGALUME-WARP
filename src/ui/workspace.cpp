@@ -262,6 +262,7 @@ static Vec2 snapPoint(Vec2 pt, const std::vector<float> &xs, const std::vector<f
 
 void Workspace::beginWarpDrag(const Layer &l, Vec2 mouseCanvas) {
   dragWarps_.clear();
+  dragLayerId_ = l.id;
   for (auto &sl : l.slices) dragWarps_.push_back(sl.warp);
   dragPos_ = l.transform.position;
   dragMouse_ = mouseCanvas;
@@ -464,6 +465,13 @@ void Workspace::drawCanvasOverlay(App &app, ImDrawList *dl, ImVec2 origin, float
 
   // ---- end of drag
   if (dragging_ && !ImGui::IsMouseDown(ImGuiMouseButton_Left)) dragging_ = false;
+  // Another layer selected during the drag (OSC /selectLayer, a click in the
+  // layer list): the drag ends here instead of pasting this layer's slices
+  // and position onto that one.
+  if (!dragWarps_.empty() && app.sel.layerId != dragLayerId_) {
+    dragging_ = false;
+    dragWarps_.clear();
+  }
 
   if (drawLedOverlay(app, dl, origin, scale)) return;
 
@@ -1032,7 +1040,9 @@ void Workspace::drawOutputOverlay(App &app, ImDrawList *dl, ImVec2 origin, ImVec
     w.corners[size_t(app.sel.corner)] = outputSnap(mn, xs, ys);
     app.edited();
   }
-  if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
+  // Not with the Hand (or Alt, which pans): it promises not to edit anything.
+  if (tool != Tool::Hand && !ImGui::GetIO().KeyAlt && ImGui::IsItemHovered() &&
+      ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
     Vec2 uv;
     if (w.unmap(mn, uv) && w.insertLines(uv.x, uv.y)) {
       dragging_ = false;
@@ -1055,6 +1065,7 @@ void Workspace::handleShortcuts(App &app) {
   if (ImGui::IsKeyPressed(ImGuiKey_H, false)) tool = Tool::Hand;
   if (showLed && ImGui::IsKeyPressed(ImGuiKey_L, false)) tool = Tool::Led;
   if (ImGui::IsKeyPressed(ImGuiKey_F, false)) fitRequested = true;
+  if (!keysActive) return;
 
   Project &p = app.engine.project;
   OutputConfig *o = viewOutputId >= 0 ? p.output(viewOutputId) : nullptr;

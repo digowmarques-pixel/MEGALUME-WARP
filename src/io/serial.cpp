@@ -164,15 +164,17 @@ std::string SerialPort::read(int timeoutMs, bool *lost) {
 
 SerialReader::~SerialReader() { stop(); }
 
-bool SerialReader::start(const std::string &port, int baud, std::string *error) {
+bool SerialReader::start(const std::string &port, int baud, std::string *) {
   stop();
-  bool ok = port0_.open(port, baud, error);
-  connected_ = ok;
+  // Opened by the reading thread, not here: this runs on the render thread,
+  // and opening a Bluetooth COM port whose device is off blocks for seconds
+  // (the outputs froze when a project with serial input was opened).
+  connected_ = false;
   port_ = port;
   baud_ = baud;
   running_ = true;
   thread_ = std::thread(&SerialReader::run, this);
-  return ok;
+  return true;
 }
 
 void SerialReader::stop() {
@@ -184,9 +186,12 @@ void SerialReader::stop() {
 
 void SerialReader::run() {
   std::string line;
+  bool first = true;
   while (running_) {
     if (!port0_.isOpen()) { // not there yet, or unplugged: try again every second
-      for (int i = 0; i < 20 && running_; ++i) std::this_thread::sleep_for(std::chrono::milliseconds(50));
+      if (!first)
+        for (int i = 0; i < 20 && running_; ++i) std::this_thread::sleep_for(std::chrono::milliseconds(50));
+      first = false;
       if (running_ && port0_.open(port_, baud_)) connected_ = true;
       line.clear();
       continue;

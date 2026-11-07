@@ -187,6 +187,11 @@ enum class EndMode {
 };
 const char *endModeName(EndMode m);
 
+// Playback speed: 0 (still) to 8x. Reverse is not supported: a negative speed
+// froze the clip on its first frame and it never ended (no auto-follow).
+// Anything that is not a number counts as normal speed.
+inline float clampSpeed(float s) { return s == s && s < 1e9f && s > -1e9f ? (s < 0 ? 0.0f : s > 8 ? 8.0f : s) : 1.0f; }
+
 struct Cell {
   int mediaId = -1;
   bool loop = true; // kept in sync with endMode == Loop
@@ -338,6 +343,12 @@ struct OutputConfig {
   std::string name = "Output";
   bool enabled = true;
   int monitor = -1;               // -1: windowed
+  // Which screen `monitor` was when it was chosen (name and desktop position):
+  // the OS renumbers screens when one is unplugged, and by number alone this
+  // output then opened full screen on another projector.
+  std::string monitorName;
+  int monitorX = 0, monitorY = 0;
+  int monitorRecorded = -1;       // the `monitor` they belong to (not saved)
   int winX = 100, winY = 100, winW = 960, winH = 540;
   float srcX = 0, srcY = 0, srcW = 1920, srcH = 1080; // canvas region (px)
   Warp warp;                      // output-normalised space (0..1)

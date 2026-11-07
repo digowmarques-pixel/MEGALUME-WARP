@@ -95,6 +95,44 @@ Ordem pensada para **videomapping** e **instalações interativas**.
 - *Seek* preciso de vídeo e áudio (também por OSC: `/lumen/layer/<l>/time`)
 - Testes de integração no CI (`scripts/test-integration.sh`)
 
+## ✅ v0.10.48 — revisão completa para produção
+Revisão do código inteiro (6 revisores, um por parte do programa), testes com sanitizers (ASan/UBSan e
+TSan), fuzzing dos leitores de arquivo e de rede (milhões de entradas aleatórias), análise estática e
+teste de resistência (1 h de cues em loop: memória, threads e arquivos abertos estáveis). Corrigido:
+- **Travamentos (o programa fechava):** preset de saídas inválido; texto com caractere cortado (ou OSC
+  em Latin-1) ao salvar; projeto com malha gigante; timecode a 0 fps; parâmetro de estado desconhecido
+  (projeto de versão mais nova); arrastar uma célula e desfazer no meio; carregar preset na janela
+  Saídas; transição cruzada quando outro clipe termina no mesmo quadro; formato de vídeo que o
+  conversor não aceita; áudio que muda de 5.1 para estéreo no meio do arquivo.
+- **Show parado ou congelado:** velocidade negativa (OSC/MIDI ou arquivo) congelava o clipe e o
+  "próxima coluna" nunca vinha; auto-GO de 0 s relançava a coluna a cada quadro; janelas de arquivo,
+  diagnóstico, imagem-guia, procura de mídias e porta serial travavam as saídas (agora o show continua
+  atrás); placa de captura sem sinal travava o programa ao parar a layer; erro de leitura num disco
+  USB/rede congelava o clipe em loop (agora reabre e continua); layer pausada continuava congelada ao
+  relançar; ligar o loop depois do fim do clipe; quadro preto no corte enquanto o vídeo novo abre;
+  GO duplo no meio de uma transição dava um salto.
+- **Perda de dados:** salvar agora grava no disco antes de trocar o arquivo e guarda o anterior como
+  `.bak` (aberto sozinho se o arquivo estiver danificado — queda de energia); Arquivo → Sair pergunta
+  sobre alterações e não apaga mais o salvamento automático; a recuperação após falha não oferece mais o
+  projeto errado nem é sobrescrita; um valor infinito num campo não impede mais de abrir o projeto; as
+  configurações da máquina (PIN, reserva, Modo Operador) têm cópia de segurança; as emendas do blend
+  são salvas (antes, editar o layout apagava o soft edge); campos de layout, malha, porta e baud só
+  aplicam ao terminar de digitar (digitar "12" passava por "1" e apagava os outros projetores).
+- **Modo Operador:** fechar a janela (X / Alt+F4) pede o PIN; atalhos (Espaço, B, Ctrl+S, Ctrl+Shift+D)
+  desligados; GO por OSC usa o dashboard da loja; PIN só com dígitos (4 a 12), digitado duas vezes; 5
+  erros seguidos = espera de 30 s; o dashboard é guardado pelo nome.
+- **Equipamentos e saídas:** projetor desligado/desconectado não faz outra saída abrir na tela errada
+  (cada saída lembra o monitor pelo nome e posição); a placa de som e a entrada LTC escolhidas voltam
+  sozinhas quando reconectadas; MIDI volta depois de desplugar; comandos `osc`/`udp` para nomes de
+  rede funcionam; fila de comandos limitada; a máquina principal para de mandar LED/DMX/comandos quando
+  a reserva assume; o ffmpeg do conversor não segura mais as portas OSC/sincronia.
+- **Outros:** vídeos de celular (girados) aparecem em pé; animações de shader não "engasgam" depois
+  de dias ligado; agenda certa na mudança de horário de verão; "Remover colunas vazias" só remove o
+  que está realmente vazio no dashboard atual; setas do teclado só mexem no Workspace quando ele está
+  em uso; projeto da linha de comando em disco que ainda não montou é aguardado (sem tela de teste);
+  o assistente de blend com "escalar conteúdo" também ajusta keyframes, estados e faixas de
+  controladores de posição; duplo clique na malha do editor de saída volta a adicionar linhas.
+
 ## ✅ v0.10.47
 - **Modo Operador: vídeo, tempo e áudio no botão; play só no PLAY** — o botão que está no ar mostra
   o **vídeo passando ao vivo**, uma **linha de tempo** (decorrido / total e o que falta) e o

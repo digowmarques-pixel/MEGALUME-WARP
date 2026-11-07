@@ -166,6 +166,30 @@ void Generators::place(const Texture &src, int W, int H, const std::array<float,
   Framebuffer::unbind();
 }
 
+void Generators::rotate(const Texture &src, int degrees, Framebuffer &fb, DynamicMesh &mesh) {
+  const bool quarter = degrees == 90 || degrees == 270;
+  const float W = float(quarter ? src.height() : src.width()), H = float(quarter ? src.width() : src.height());
+  fb.resize(int(W), int(H));
+  fb.bind();
+  glDisable(GL_BLEND);
+  copy_.use();
+  copy_.set("uTarget", W, H);
+  copy_.set("uTex", 0);
+  src.bind(0);
+  // Texture coordinates of the source pixel shown at each corner of the
+  // target (top-left, top-right, bottom-right, bottom-left).
+  float uv[4][2];
+  // (Checked against FFmpeg's own autorotation for 90, 180 and 270.)
+  if (degrees == 90) { const float c[4][2] = {{1, 1}, {1, 0}, {0, 0}, {0, 1}}; std::copy(&c[0][0], &c[0][0] + 8, &uv[0][0]); }
+  else if (degrees == 180) { const float c[4][2] = {{1, 0}, {0, 0}, {0, 1}, {1, 1}}; std::copy(&c[0][0], &c[0][0] + 8, &uv[0][0]); }
+  else { const float c[4][2] = {{0, 0}, {0, 1}, {1, 1}, {1, 0}}; std::copy(&c[0][0], &c[0][0] + 8, &uv[0][0]); }
+  const float xy[4][2] = {{0, 0}, {W, 0}, {W, H}, {0, H}};
+  std::vector<float> v;
+  for (int i : {0, 1, 2, 0, 2, 3}) v.insert(v.end(), {xy[i][0], xy[i][1], uv[i][0], uv[i][1]});
+  mesh.draw(v);
+  Framebuffer::unbind();
+}
+
 void Generators::copyFlipped(const Texture &src, Framebuffer &fb, DynamicMesh &mesh) {
   fb.resize(src.width(), src.height());
   fb.bind();
@@ -188,7 +212,7 @@ void Generators::render(const MediaItem &m, double time, Framebuffer &fb, Dynami
   s.use();
   s.set("uTarget", float(w), float(h));
   s.set("uRes", float(w), float(h));
-  s.set("uTime", float(time));
+  s.set("uTime", shaderTime(time));
   s.set("uColor1", m.color1.r, m.color1.g, m.color1.b, m.color1.a);
   s.set("uColor2", m.color2.r, m.color2.g, m.color2.b, m.color2.a);
   s.set("uP1", m.param1);
@@ -484,6 +508,7 @@ double Playback::duration() const {
 }
 
 const Texture *Playback::update(double dt, const MediaItem &m, MediaContext &ctx) {
+  speed = clampSpeed(speed); // whoever set it (project, controller, chase)
   switch (type_) {
   case MediaType::Image:
     if (started_) clock_ += dt * (paused ? 0.0 : double(speed));
@@ -533,6 +558,16 @@ const Texture *Playback::update(double dt, const MediaItem &m, MediaContext &ctx
   }
   case MediaType::Video: {
     if (!decoder_) return nullptr;
+    // Loop switched on after the clip already reached its end (Freeze, then a
+    // cue or the cell set to Loop): the decoder had stopped for good and the
+    // picture stayed frozen while the sound started over. Go on from where the
+    // clock is, inside the loop.
+    if (loop && !decoder_->loop() && decoder_->finished()) {
+      double d = duration();
+      decoder_->setLoop(true);
+      if (audioDecoder_) audioDecoder_->setLoop(true);
+      seek(d > 0 ? std::fmod(std::max(0.0, clock_), d) : 0.0);
+    }
     decoder_->setLoop(loop);
     if (audioDecoder_) audioDecoder_->setLoop(loop);
     if (voice_) {
@@ -547,6 +582,11 @@ const Texture *Playback::update(double dt, const MediaItem &m, MediaContext &ctx
     }
     if (decoder_->fetch(clock_, frame_, !hasFrame_)) {
       videoTex_ = uploader_.upload(frame_, ctx.mesh);
+      if (const int rot = decoder_->info().rotation; rot && videoTex_ && !videoTex_->empty()) {
+        if (!rotFb_) rotFb_ = std::make_unique<Framebuffer>();
+        ctx.generators.rotate(*videoTex_, rot, *rotFb_, ctx.mesh); // phone videos upright
+        videoTex_ = &rotFb_->texture();
+      }
       hasFrame_ = videoTex_ != nullptr;
       // If decoding fell far behind (e.g. after a stall), resync the clock.
       if (!audioClock_ && clock_ - frame_.pts > 0.5) clock_ = frame_.pts;

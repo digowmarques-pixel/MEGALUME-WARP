@@ -8,6 +8,7 @@
 #include "ui/i18n.h"
 
 #include <functional>
+#include <future>
 #include <map>
 #include <memory>
 #include <string>
@@ -40,6 +41,10 @@ public:
   int viewCanvas = 0;    // canvas shown when viewOutputId < 0
   bool fitRequested = false;
   bool lockView = false; // embedded use: no canvas/output view selector
+  // The Workspace panel was hovered or focused last frame: only then do the
+  // arrows, Tab and Delete act on its selection (pressed while working in the
+  // Outputs window or the dashboard they moved the canvas mapping too).
+  bool keysActive = false;
   void handleShortcuts(App &app);
 
 private:
@@ -66,6 +71,7 @@ private:
   // Move / scale drags start from these (restored each frame, then the whole
   // movement applied): snapping never accumulates rounding.
   std::vector<Warp> dragWarps_;
+  int dragLayerId_ = -1; // the layer dragWarps_ were taken from
   Vec2 dragPos_, dragMouse_;
   int scaleHandle_ = -1; // 0-3 corners (TL TR BR BL), 4-7 sides (T R B L)
   void beginWarpDrag(const Layer &l, Vec2 mouseCanvas);
@@ -83,6 +89,8 @@ public:
   // Output shown in the mapping page of the Outputs window (-1: none).
   int editedOutput() const { return showOutputs_ && outputsPage_ == 1 ? outputsSel_ : -1; }
   void draw(App &app);
+  // Operator mode: the window's close button (or Alt+F4) asks for the PIN.
+  void requestOperatorPin() { askOperatorPin_ = true; operatorPin_.clear(); operatorPinWrong_ = false; }
   Workspace workspace;
 
 private:
@@ -115,6 +123,8 @@ private:
   bool askOperatorPin_ = false;
   std::string operatorPin_;
   bool operatorPinWrong_ = false;
+  int operatorPinFails_ = 0;        // wrong PINs in a row
+  double operatorPinLockUntil_ = 0; // after 5 wrong: wait (glfw time)
   int operatorSel_ = -1; // column id selected (Play puts it on air)
   // Preview (double click on a cell or a library item, or its menu): plays one
   // media item in its own window, silent and outside the outputs, to check it
@@ -140,6 +150,7 @@ private:
   void mappingSection(App &app, Layer &layer, float CW, float CH);
   struct CellRect { float x0, y0, x1, y1; int column, layerId; };
   std::vector<CellRect> dashCells_;
+  void *dashWindow_ = nullptr; // the ImGui window the cells were drawn in
   void inspector(App &app);
   void statusBar(App &app);
 
@@ -200,6 +211,8 @@ private:
   Framebuffer stagePreview_;
   std::string guideLoaded_; // output guide picture currently in guideTex_
   std::unique_ptr<Texture> guideTex_;
+  std::future<VideoFrame> guideJob_; // decoding (another thread) the picture named guideJobPath_
+  std::string guideJobPath_;
   void screenPanel(App &app, OutputConfig &o, float outW, float outH);
   // Resolume's "Match Output Shape": slice k takes from the canvas the same
   // place and size it has on the projector (pixel-perfect pixel maps).

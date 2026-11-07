@@ -46,7 +46,7 @@ std::vector<std::string> hapArgs(const std::string &ffmpeg, const std::string &s
   // the show, on top of the low priority of the process.
   std::string threads = std::to_string(std::max(2u, std::thread::hardware_concurrency() / 2));
   return {ffmpeg, "-hide_banner", "-nostdin", "-y", "-loglevel", "error", "-nostats", "-progress", "pipe:1",
-          "-threads", threads, "-i", source, "-threads", threads, "-map", "0:v:0", "-map", "0:a?", "-vf", "pad=ceil(iw/4)*4:ceil(ih/4)*4",
+          "-threads", threads, "-i", source, "-threads", threads, "-map", "0:v:0", "-map", "0:a?", "-vf", "pad=ceil(iw/4)*4:ceil(ih/4)*4:color=black@0",
           "-c:v", "hap", "-format", hapFormat(v), "-chunks", std::to_string(chunks), "-c:a", "pcm_s24le",
           "-f", "mov", output};
 }
@@ -228,6 +228,8 @@ void HapConverter::convert(ConvertJob &job) {
   }
   std::filesystem::rename(platform::toPath(part), platform::toPath(job.output), ec);
   if (ec) {
+    std::error_code ignore;
+    std::filesystem::remove(platform::toPath(part), ignore); // no multi-GB leftover
     job.state = ConvertJob::State::Failed;
     job.error = ec.message();
     return;

@@ -53,7 +53,7 @@ void Engine::setParam(Layer &l, MappingTarget t, float v) {
   case MappingTarget::Volume: l.volume = std::clamp(v, 0.0f, 2.0f); break;
   case MappingTarget::Speed: {
     auto it = states_.find(l.id);
-    if (it != states_.end() && it->second.current) it->second.current->speed = v;
+    if (it != states_.end() && it->second.current) it->second.current->speed = clampSpeed(v);
     break;
   }
   default: break;
