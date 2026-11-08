@@ -166,6 +166,21 @@ void Generators::place(const Texture &src, int W, int H, const std::array<float,
   Framebuffer::unbind();
 }
 
+void Generators::overlay(const Texture &src, Framebuffer &fb, const std::array<float, 4> &r, DynamicMesh &mesh) {
+  fb.bind();
+  glEnable(GL_BLEND);
+  glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA, GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
+  copy_.use();
+  copy_.set("uTarget", float(fb.width()), float(fb.height()));
+  copy_.set("uTex", 0);
+  src.bind(0);
+  // The canvas buffers are stored bottom-up, unlike place()'s images: the
+  // texture's row 0 (the top of the text) goes to the top of the canvas.
+  mesh.drawQuad(r[0], r[1], r[0] + r[2], r[1] + r[3], 0, 0, 1, 1);
+  glDisable(GL_BLEND);
+  Framebuffer::unbind();
+}
+
 void Generators::rotate(const Texture &src, int degrees, Framebuffer &fb, DynamicMesh &mesh) {
   const bool quarter = degrees == 90 || degrees == 270;
   const float W = float(quarter ? src.height() : src.width()), H = float(quarter ? src.width() : src.height());
@@ -562,9 +577,10 @@ const Texture *Playback::update(double dt, const MediaItem &m, MediaContext &ctx
     // cue or the cell set to Loop): the decoder had stopped for good and the
     // picture stayed frozen while the sound started over. Go on from where the
     // clock is, inside the loop.
-    if (loop && !decoder_->loop() && decoder_->finished()) {
-      double d = duration();
-      decoder_->setLoop(true);
+    VideoDecoder &dec = *decoder_;
+    if (loop && !dec.loop() && dec.finished()) {
+      double d = dec.info().duration;
+      dec.setLoop(true);
       if (audioDecoder_) audioDecoder_->setLoop(true);
       seek(d > 0 ? std::fmod(std::max(0.0, clock_), d) : 0.0);
     }

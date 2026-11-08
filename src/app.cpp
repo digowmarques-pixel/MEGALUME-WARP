@@ -352,6 +352,35 @@ void App::setOperatorMode(bool on) {
   if (on) showOutputControls = false;    // no calibration handles on the shop's screens
 }
 
+// ---------------------------------------------------------------- licence
+
+void App::refreshLicense() {
+  license_ = {};
+  license_.machine = machineCode();
+  const std::string today = todayLocal();
+  license_.check = checkLicense(storedLicense(), license_.machine, today, license_.lic);
+  if (license_.check == LicenseCheck::Ok) {
+    license_.kind = LicenseState::Licensed;
+  } else {
+    TrialInfo t = trialCheck(license_.machine, today);
+    license_.daysLeft = t.daysLeft;
+    license_.kind = t.expired ? LicenseState::TrialOver : LicenseState::Trial;
+  }
+  engine.watermark = license_.kind == LicenseState::TrialOver;
+}
+
+bool App::activateLicense(const std::string &text, std::string &error) {
+  License lic;
+  LicenseCheck c = installLicense(text, lic);
+  if (c != LicenseCheck::Ok) {
+    error = T(licenseCheckText(c));
+    return false;
+  }
+  refreshLicense(); // the watermark goes at once
+  status(T("Licença ativada: ") + lic.name);
+  return true;
+}
+
 bool App::checkOperatorPin(const std::string &pin) const {
   std::string stored = machineSetting("operatorPin");
   if (stored.empty()) stored = pinHash("546500"); // the PIN until another is set
@@ -588,6 +617,7 @@ int App::run(const Options &opts) {
     platform::fatalError("Falha ao compilar os shaders do renderizador (driver de vídeo).");
     return 1;
   }
+  refreshLicense(); // before the first frame: the watermark (if any) is there from the start
 
   if (opts.diagnose) {
     std::string report = diagnosticReport();
@@ -659,6 +689,8 @@ int App::run(const Options &opts) {
   if (!engine.project.layers.empty() && sel.layerId < 0) sel.layerId = engine.project.layers.front().id;
   showLocked = opts.showMode;
   if (opts.operatorMode || machineSettingInt("operatorAtStart", 0) != 0) setOperatorMode(true);
+  if (license_.kind == LicenseState::TrialOver && !operatorMode && opts.frames == 0 && opts.quitAfter <= 0)
+    ui_->openLicense();
   engine.forceSyncUpload = opts.syncUpload;
   if (opts.launchColumn > 0) engine.startColumnOnTakeover = opts.launchColumn - 1;
   {

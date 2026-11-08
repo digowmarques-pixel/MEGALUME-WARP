@@ -670,6 +670,7 @@ void Ui::draw(App &app) {
     previewWindow(app);
   }
   operatorSetupWindow(app);
+  licenseWindow(app);
   recoveryPopup(app);
   if (showRemoveColumns_) removeColumnsWindow(app);
   if (showAbout_) {
@@ -995,6 +996,7 @@ void Ui::menuBar(App &app) {
     }
     if (app.outputsOpen) ImGui::SetItemTooltip("%s", T("Feche as saídas para rodar o diagnóstico (ele congela a imagem por alguns segundos)."));
     ImGui::MenuItem(T("Demo do ImGui"), nullptr, &showDemo_);
+    if (ImGui::MenuItem(T("Licença..."))) showLicense_ = true;
     if (ImGui::MenuItem(T("Sobre o Lumen..."))) showAbout_ = true;
     ImGui::Separator();
     ImGui::TextDisabled(T("Lumen %s"), LUMEN_VERSION);
@@ -1155,6 +1157,19 @@ void Ui::toolbar(App &app) {
     ImGui::TextColored(kAccent, T("No ar: %d · %s"), col + 1, e.project.columns[size_t(col)].name.c_str());
   else
     ImGui::TextDisabled("%s", T("Nada no ar"));
+  // Trial: how many days are left (a click opens Ajuda → Licença).
+  if (app.license().kind != App::LicenseState::Licensed) {
+    const bool over = app.license().kind == App::LicenseState::TrialOver;
+    ImGui::SameLine(0, 24);
+    ImGui::SetCursorPosY(ImGui::GetCursorPosY() - 3);
+    char label[96];
+    if (over) std::snprintf(label, sizeof(label), "%s##trial", T("Avaliação encerrada"));
+    else std::snprintf(label, sizeof(label), T("Avaliação: %d dia(s)##trial"), app.license().daysLeft);
+    ImGui::PushStyleColor(ImGuiCol_Text, over ? ImVec4(1, 0.45f, 0.4f, 1) : kAccent);
+    if (ImGui::SmallButton(label)) showLicense_ = true;
+    ImGui::PopStyleColor();
+    ImGui::SetItemTooltip("%s", T("Abrir Ajuda > Licença"));
+  }
   ImGui::SameLine(0, 0);
   toolbarRowB_ = ImGui::GetCursorPosX() - rowBx;
 }
@@ -3023,6 +3038,65 @@ void Ui::operatorScreen(App &app) {
     if (bigFont_) ImGui::PopFont();
     ImGui::EndPopup();
   }
+}
+
+// Ajuda → Licença: this computer's code, the state of the licence, and where
+// to paste one (or open the .lumenlic file).
+void Ui::licenseWindow(App &app) {
+  if (!showLicense_) return;
+  const App::LicenseState &L = app.license();
+  ImGuiViewport *vp = ImGui::GetMainViewport();
+  ImGui::SetNextWindowPos({vp->Pos.x + vp->Size.x * 0.5f, vp->Pos.y + vp->Size.y * 0.4f}, ImGuiCond_Appearing, {0.5f, 0.5f});
+  ImGui::SetNextWindowSize({560, 0}, ImGuiCond_Appearing);
+  if (!ImGui::Begin(T("Licença do Lumen###license"), &showLicense_, ImGuiWindowFlags_NoCollapse)) {
+    ImGui::End();
+    return;
+  }
+  const ImVec4 green{0.45f, 0.9f, 0.55f, 1}, red{1, 0.45f, 0.4f, 1}, orange{1, 0.7f, 0.3f, 1};
+  if (L.kind == App::LicenseState::Licensed) {
+    ImGui::TextColored(green, T("Licenciado para %s"), L.lic.name.c_str());
+    ImGui::TextDisabled(T("Licença %s · emitida em %s · %s"), L.lic.id.c_str(), L.lic.issued.c_str(),
+                        L.lic.expires.empty() ? T("sem validade") : (std::string(T("válida até ")) + L.lic.expires).c_str());
+  } else {
+    if (L.kind == App::LicenseState::Trial) {
+      ImGui::TextColored(kAccent, T("Avaliação: %d dia(s) restante(s)"), L.daysLeft);
+      ImGui::TextWrapped("%s", T("Todos os recursos funcionam. Depois da avaliação, as saídas mostram a marca "
+                                 "\"versão de avaliação\" até que uma licença seja ativada. O show nunca é interrompido."));
+    } else {
+      ImGui::TextColored(red, "%s", T("Avaliação encerrada"));
+      ImGui::TextWrapped("%s", T("As saídas mostram a marca \"versão de avaliação\". Ative uma licença para retirá-la."));
+    }
+    if (L.check != LicenseCheck::Empty) ImGui::TextColored(orange, "%s", T(licenseCheckText(L.check)));
+  }
+  ImGui::SeparatorText(T("Código desta máquina"));
+  if (bigFont_) ImGui::PushFont(bigFont_);
+  ImGui::TextUnformatted(L.machine.c_str());
+  if (bigFont_) ImGui::PopFont();
+  ImGui::SameLine(0, 16);
+  if (ImGui::Button(T("Copiar##machine"))) {
+    ImGui::SetClipboardText(L.machine.c_str());
+    app.status(T("Código da máquina copiado"));
+  }
+  ImGui::TextDisabled("%s", T("Envie este código para receber a licença deste computador."));
+  ImGui::SeparatorText(T("Ativar uma licença"));
+  ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+  ImGui::TextWrapped("%s", T("Cole aqui o texto da licença (pode ser o e-mail inteiro) ou abra o arquivo .lumenlic."));
+  ImGui::PopStyleColor();
+  inputTextMultiline("##lictext", licenseText_, {-1, 96});
+  ImGui::BeginDisabled(licenseText_.find("LUMEN1.") == std::string::npos);
+  if (ImGui::Button(T("Ativar"), {120, 0}) && app.activateLicense(licenseText_, licenseError_)) {
+    licenseText_.clear();
+    licenseError_.clear();
+  }
+  ImGui::EndDisabled();
+  ImGui::SameLine();
+  if (ImGui::Button(T("Abrir arquivo .lumenlic..."))) {
+    auto files = platform::openFileDialog(T("Abrir licença"), "Licença do Lumen|*.lumenlic;*.txt", false);
+    std::string text;
+    if (!files.empty() && platform::readFile(files[0], text) && app.activateLicense(text, licenseError_)) licenseError_.clear();
+  }
+  if (!licenseError_.empty()) ImGui::TextColored(red, "%s", licenseError_.c_str());
+  ImGui::End();
 }
 
 // Janela → Modo Operador: which dashboard the shop sees, start in it, the PIN.

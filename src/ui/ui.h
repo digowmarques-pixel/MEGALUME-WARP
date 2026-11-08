@@ -86,6 +86,7 @@ public:
   bool dashboardCellAt(float x, float y, int &column, int &layerId) const;
   void setup();
   void openOutputs() { showOutputs_ = true; outputsPage_ = 0; }
+  void openLicense() { showLicense_ = true; }
   // Output shown in the mapping page of the Outputs window (-1: none).
   int editedOutput() const { return showOutputs_ && outputsPage_ == 1 ? outputsSel_ : -1; }
   void draw(App &app);
@@ -120,6 +121,9 @@ private:
   void operatorScreen(App &app);
   void operatorSetupWindow(App &app);
   bool showOperatorSetup_ = false;
+  void licenseWindow(App &app);
+  bool showLicense_ = false;
+  std::string licenseText_, licenseError_;
   bool askOperatorPin_ = false;
   std::string operatorPin_;
   bool operatorPinWrong_ = false;

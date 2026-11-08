@@ -1,6 +1,7 @@
 // Application shell: windows, main loop, file operations and undo history.
 #pragma once
 
+#include "core/license.h"
 #include "engine/engine.h"
 #include "engine/outputs.h"
 #include "media/convert.h"
@@ -129,6 +130,18 @@ public:
   // Stop, Blackout and volume; leaving it asks for the PIN.
   bool operatorMode = false;
   void setOperatorMode(bool on);
+  // Licence: checked at start-up (a show that is running is never changed by
+  // it, except that entering a licence removes the watermark at once).
+  struct LicenseState {
+    enum Kind { Licensed, Trial, TrialOver } kind = Trial;
+    License lic;
+    LicenseCheck check = LicenseCheck::Empty; // of the licence stored on this computer
+    int daysLeft = kTrialDays;
+    std::string machine;
+  };
+  const LicenseState &license() const { return license_; }
+  void refreshLicense();
+  bool activateLicense(const std::string &text, std::string &error);
   bool checkOperatorPin(const std::string &pin) const;
   void setOperatorPin(const std::string &pin);
   // Missing media: relinks every missing file found (by name) under `dir`.
@@ -160,6 +173,7 @@ private:
   void commitIfNeeded();
   std::function<void()> afterUnsaved_;
   bool askUnsaved_ = false;
+  LicenseState license_;
   bool discardedOnQuit_ = false;
   std::string pendingProject_; // start-up project not reachable yet: retried
   double pendingUntil_ = 0, pendingNextTry_ = 0;

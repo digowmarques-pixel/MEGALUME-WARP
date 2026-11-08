@@ -17,6 +17,7 @@
 #include "platform/platform.h"
 #include "ui/i18n.h"
 #include "core/parallel.h"
+#include "core/license.h"
 #include <atomic>
 #include <thread>
 #include <utility>
@@ -1435,7 +1436,69 @@ static void testProductionReview2() {
   }
 }
 
+// Licences: signed text, machine codes, trial.
+static void testLicense() {
+  uint8_t seed[32], sk[64], pk[32];
+  for (int i = 0; i < 32; ++i) seed[i] = uint8_t(i * 7 + 1);
+  licenseKeyPair(seed, sk, pk);
+  License l;
+  l.name = "Loja Centro São Paulo";
+  l.id = "L-0001";
+  l.machines = {"1a2b-3c4d-5e6f-7a8b", "9999 0000 AAAA BBBB"};
+  l.expires = "2027-12-31";
+  l.issued = "2026-11-08";
+  const std::string text = makeLicense(l, sk);
+  License out;
+  CHECK(checkLicense(text, "1A2B-3C4D-5E6F-7A8B", "2026-11-08", out, pk) == LicenseCheck::Ok);
+  CHECK(out.name == l.name && out.id == "L-0001" && out.machines.size() == 2 && out.expires == "2027-12-31");
+  CHECK(checkLicense(text, "9999-0000-aaaa-bbbb", "2027-12-31", out, pk) == LicenseCheck::Ok); // the last day still counts
+  // Pasted inside an e-mail, with the marks and broken lines.
+  std::string mail = "Olá! Segue a licença:\n-----BEGIN LUMEN LICENSE-----\n" + text.substr(0, 40) + "\n" +
+                     text.substr(40) + "\n-----END LUMEN LICENSE-----\nAbraço";
+  CHECK(checkLicense(mail, "1A2B-3C4D-5E6F-7A8B", "2026-11-08", out, pk) == LicenseCheck::Ok);
+  CHECK(checkLicense(text, "0000-0000-0000-0001", "2026-11-08", out, pk) == LicenseCheck::OtherMachine);
+  CHECK(checkLicense(text, "1A2B-3C4D-5E6F-7A8B", "2028-01-01", out, pk) == LicenseCheck::Expired);
+  CHECK(checkLicense("", "1A2B-3C4D-5E6F-7A8B", "2026-11-08", out, pk) == LicenseCheck::Empty);
+  CHECK(checkLicense("abc", "1A2B-3C4D-5E6F-7A8B", "2026-11-08", out, pk) == LicenseCheck::Malformed);
+  // Another key's licence (a homemade generator): refused.
+  uint8_t seed2[32], sk2[64], pk2[32];
+  for (int i = 0; i < 32; ++i) seed2[i] = uint8_t(255 - i);
+  licenseKeyPair(seed2, sk2, pk2);
+  CHECK(checkLicense(makeLicense(l, sk2), "1A2B-3C4D-5E6F-7A8B", "2026-11-08", out, pk) == LicenseCheck::BadSignature);
+  CHECK(checkLicense(text, "1A2B-3C4D-5E6F-7A8B", "2026-11-08", out) == LicenseCheck::BadSignature); // not the built-in key
+  // Edited data (another machine or a later date written in): the signature no longer matches.
+  {
+    size_t a = text.find('.') + 1, b = text.find('.', a);
+    std::vector<uint8_t> payload;
+    CHECK(fromBase64(text.substr(a, b - a), payload));
+    std::string json(payload.begin(), payload.end());
+    size_t at = json.find("2027-12-31");
+    CHECK(at != std::string::npos);
+    json.replace(at, 10, "2099-12-31");
+    std::string forged = "LUMEN1." + toBase64(reinterpret_cast<const uint8_t *>(json.data()), json.size()) + text.substr(b);
+    CHECK(checkLicense(forged, "1A2B-3C4D-5E6F-7A8B", "2026-11-08", out, pk) == LicenseCheck::BadSignature);
+  }
+  // Machine codes.
+  CHECK(normalizeMachineCode(" 1a2b 3c4d-5e6f7a8b ") == "1A2B-3C4D-5E6F-7A8B");
+  CHECK(normalizeMachineCode("1A2B-3C4D-5E6F-7A8").empty() && normalizeMachineCode("1A2B-3C4D-5E6F-7A8G").empty());
+  CHECK(machineCodeFrom("{ABC-def}") == machineCodeFrom("abc-DEF") && machineCodeFrom("a") != machineCodeFrom("b"));
+  CHECK(!normalizeMachineCode(machineCode()).empty());
+  // Dates.
+  CHECK(dayNumber("1970-01-01") == 0 && dayNumber("2024-03-01") - dayNumber("2024-02-28") == 2);
+  CHECK(dayNumber("2026-13-01") < 0 && dayNumber("x") < 0 && dayNumber(todayLocal()) > 20000);
+  // Trial: 30 days from the first run; edited records or a clock set back end it.
+  const long long d0 = dayNumber("2026-11-08");
+  CHECK(trialFrom(-1, -1, d0, false).daysLeft == 30 && !trialFrom(-1, -1, d0, false).expired);
+  CHECK(trialFrom(d0, d0 + 10, d0 + 10, false).daysLeft == 20);
+  CHECK(trialFrom(d0, d0 + 29, d0 + 29, false).daysLeft == 1);
+  CHECK(trialFrom(d0, d0 + 30, d0 + 30, false).expired);
+  CHECK(trialFrom(d0, d0 + 20, d0 + 2, false).expired); // clock moved back 18 days
+  CHECK(!trialFrom(d0, d0 + 3, d0 + 2, false).expired);  // a day back (time zones): fine
+  CHECK(trialFrom(d0, d0, d0, true).expired);
+}
+
 int main() {
+  testLicense();
   testProductionReview();
   testProductionReview2();
   testAudioRoute();

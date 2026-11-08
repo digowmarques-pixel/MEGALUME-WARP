@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(Lumen VERSION 0.10.48 LANGUAGES C CXX)
+project(Lumen VERSION 0.10.49 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -144,6 +144,9 @@ add_library(lumen_core OBJECT
   src/control/devices.cpp
   src/io/serial.cpp
   src/core/md5.cpp
+  src/core/license.cpp
+  src/core/crypto.cpp
+  src/core/crypto_ed25519.cpp
   src/core/timecode.cpp
   src/core/expr.cpp
   src/control/mapping.cpp
@@ -185,6 +188,15 @@ else()
   target_compile_options(lumen_core PUBLIC -Wall -Wextra -Wno-unused-parameter)
   find_package(Threads REQUIRED)
   target_link_libraries(lumen_core PUBLIC Threads::Threads)
+endif()
+
+# Licence generator: the author's own tool (holds no key; reads the private
+# key file next to it). Not part of the installer.
+add_executable(lumen-keygen tools/lumen-keygen.cpp src/core/license.cpp src/core/crypto.cpp
+               src/core/crypto_ed25519.cpp src/core/md5.cpp src/core/machine_settings.cpp src/platform/platform.cpp)
+target_include_directories(lumen-keygen PRIVATE src third_party)
+if(WIN32)
+  target_link_libraries(lumen-keygen PRIVATE bcrypt shell32 comdlg32 ole32)
 endif()
 
 add_executable(lumen src/main.cpp)
@@ -229,6 +241,9 @@ if(LUMEN_BUILD_TESTS)
     src/core/isf.cpp
     src/core/blob.cpp
     src/core/md5.cpp
+    src/core/license.cpp
+    src/core/crypto.cpp
+    src/core/crypto_ed25519.cpp
     src/core/timecode.cpp
     src/core/expr.cpp
     src/core/parallel.cpp

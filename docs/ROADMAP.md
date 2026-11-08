@@ -95,6 +95,20 @@ Ordem pensada para **videomapping** e **instalações interativas**.
 - *Seek* preciso de vídeo e áudio (também por OSC: `/lumen/layer/<l>/time`)
 - Testes de integração no CI (`scripts/test-integration.sh`)
 
+## ✅ v0.10.49 — licença
+- **Licença por computador** (*Ajuda → Licença...*): o Lumen mostra o **código desta máquina**; a
+  licença recebida (texto ou arquivo `.lumenlic`) é colada na mesma janela. A licença é assinada
+  digitalmente (Ed25519, biblioteca Monocypher): só quem tem a chave privada do autor cria licenças,
+  e a verificação funciona sem internet. Pode ter validade (aluguel) e valer para mais de uma
+  máquina (principal + reserva).
+- **30 dias de avaliação** completa por computador; depois, as saídas (e Spout/NDI) mostram a marca
+  "versão de avaliação" — nunca escurece nem interrompe o show. Datas guardadas com verificação (e,
+  no Windows, também no registro); relógio atrasado de propósito encerra a avaliação.
+- A licença é conferida só ao abrir o Lumen; ativar uma licença tira a marca na hora.
+- Linha de comando: `--machine-code` e `--license arquivo.lumenlic`.
+- **lumen-keygen** (só para o autor, fora do instalador): gera as licenças (modo guiado com
+  duplo clique) e guarda o histórico em `licencas-emitidas.csv`.
+
 ## ✅ v0.10.48 — revisão completa para produção
 Revisão do código inteiro (6 revisores, um por parte do programa), testes com sanitizers (ASan/UBSan e
 TSan), fuzzing dos leitores de arquivo e de rede (milhões de entradas aleatórias), análise estática e

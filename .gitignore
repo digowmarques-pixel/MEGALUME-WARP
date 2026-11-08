@@ -12,3 +12,9 @@ build-mingw/
 # Steinberg ASIO SDK: licensed separately, never committed (build with ASIO_SDK=/path)
 ASIOSDK/
 asiosdk/
+
+# Licences: the private key and what the generator writes never go to the repository
+lumen-chave-privada.txt
+licencas-emitidas.csv
+*.lumenlic
+licencas/

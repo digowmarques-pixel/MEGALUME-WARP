@@ -1,5 +1,6 @@
 #include "engine/engine.h"
 #include "media/asio_out.h"
+#include "media/text.h"
 
 #include <algorithm>
 #include <cmath>
@@ -96,6 +97,26 @@ void Engine::emitBlobs(const Layer &l, const BlobReport &r) {
     if (r.sendOsc) sendOsc(m);
     injected_.push_back(std::move(m));
   }
+}
+
+void Engine::drawWatermark() {
+  if (watermarkTex_.empty()) {
+    const int w = 1600, h = 150;
+    std::vector<unsigned char> rgba;
+    renderText("LUMEN  \xc2\xb7  VERS\xc3\x83O DE AVALIA\xc3\x87\xc3\x83O", defaultFontFile(), 92, 1, 1, 1.0f,
+               Color{1, 1, 1, 0.75f}, Color{0, 0, 0, 0.45f}, w, h, rgba);
+    if (rgba.size() != size_t(w) * h * 4) rgba.assign(size_t(w) * h * 4, 0); // no font: the band alone
+    for (size_t i = 3; i < rgba.size(); i += 4) rgba[i] = std::max<unsigned char>(rgba[i], 110);
+    watermarkTex_.upload(rgba.data(), w, h);
+  }
+  auto stamp = [&](Framebuffer &fb) {
+    const float W = float(fb.width()), H = float(fb.height());
+    if (W <= 0 || H <= 0) return;
+    const float bw = W * 0.62f, bh = bw * float(watermarkTex_.height()) / float(watermarkTex_.width());
+    generators.overlay(watermarkTex_, fb, {(W - bw) * 0.5f, H * 0.80f - bh * 0.5f, bw, bh}, mesh);
+  };
+  stamp(compositor_.canvas());
+  for (auto &[id, c] : extraCompositors_) stamp(c->canvas());
 }
 
 const Texture &Engine::canvasTexture(int id) {
@@ -1319,6 +1340,7 @@ void Engine::render() {
   for (auto it = extraCompositors_.begin(); it != extraCompositors_.end();)
     it = project.extraCanvas(it->first) ? std::next(it) : extraCompositors_.erase(it);
   for (int canvasId : project.canvasIds()) renderCanvas(canvasId);
+  if (watermark) drawWatermark();
   // LEDs sample the final canvases, so master and blackout darken them too;
   // the DMX master dims only the LEDs.
   leds.transmit = !following(); // the main drives the lights; the backup only previews

@@ -34,6 +34,9 @@ public:
   // `src` (row 0 = top) placed at rect {x, y, w, h} of a W x H transparent image.
   void place(const Texture &src, int W, int H, const std::array<float, 4> &rect, Framebuffer &target,
              DynamicMesh &mesh);
+  // `src` (row 0 = top) blended over a canvas buffer (`target`), at rect
+  // {x, y, w, h} (target pixels, y down).
+  void overlay(const Texture &src, Framebuffer &target, const std::array<float, 4> &rect, DynamicMesh &mesh);
   // `src` (row 0 = top) turned clockwise by 90, 180 or 270 degrees into `target`.
   void rotate(const Texture &src, int degrees, Framebuffer &target, DynamicMesh &mesh);
 

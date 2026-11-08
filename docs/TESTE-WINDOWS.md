@@ -13,7 +13,7 @@ um Arduino e o NDI Tools.
 
 ## 0. Instalação e diagnóstico
 
-- [ ] 0.1 Instale com `Lumen-0.10.48-setup.exe` (ou descompacte o .zip). O atalho
+- [ ] 0.1 Instale com `Lumen-0.10.49-setup.exe` (ou descompacte o .zip). O atalho
       aparece no Menu Iniciar, e arquivos `.lumen` abrem com o Lumen.
 - [ ] 0.2 Menu Iniciar → *Lumen (console de diagnóstico)*. O relatório abre no Bloco
       de Notas (também fica em `%APPDATA%\Lumen\diagnostico.txt`).
@@ -233,6 +233,14 @@ um Arduino e o NDI Tools.
 - [ ] 13.33 Vídeo segue o timecode: Cue 1 em 00:00:00:00 e Cue 2 em 00:00:30:00. Play no Reaper,
       pause: o vídeo pausa junto. Play: continua do mesmo ponto. Leve o cursor para 00:00:40:00 e
       dê play: entra a Cue 2, 10 s adiante. Volte para 00:00:05:00: Cue 1, em 5 s.
+- [ ] 13.77 Licença: num PC sem licença, a barra mostra "Avaliação: 30 dia(s)"; Ajuda → Licença mostra o
+      código da máquina (Copiar funciona). Reinstale o Lumen: o código é o mesmo.
+- [ ] 13.78 Cole uma licença de OUTRO computador → "Esta licença é de outro computador". Cole a deste
+      computador → "Licenciado para ..."; a marca da barra some.
+- [ ] 13.79 Teste vencido (peça uma licença de validade passada ou aguarde): as saídas mostram a faixa
+      "LUMEN · VERSÃO DE AVALIAÇÃO"; ativar a licença tira a faixa na hora, sem parar o vídeo.
+- [ ] 13.80 lumen-keygen.exe (duplo clique): gere uma licença; o arquivo .lumenlic aparece na pasta
+      "licencas" e a linha em licencas-emitidas.csv.
 - [ ] 13.71 Produção: salve o projeto duas vezes → ao lado aparece `show.lumen.bak`. Apague o
       conteúdo do `show.lumen` (deixe vazio) e abra: o Lumen abre o .bak e avisa.
 - [ ] 13.72 Arquivo → Salvar como... com um vídeo no ar e as saídas abertas: o vídeo continua

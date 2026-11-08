@@ -100,7 +100,7 @@ código compila para Windows: `./scripts/check-windows-mingw.sh`.
 O instalador (NSIS, também roda no Linux com `sudo apt install nsis`):
 
 ```bash
-cd installer && makensis -DVERSION=0.10.48 -DSRCDIR=../build-mingw/Lumen -DOUTFILE=../Lumen-0.10.48-setup.exe lumen.nsi
+cd installer && makensis -DVERSION=0.10.49 -DSRCDIR=../build-mingw/Lumen -DOUTFILE=../Lumen-0.10.49-setup.exe lumen.nsi
 ```
 
 ## Compilar no Linux (desenvolvimento)
@@ -137,6 +137,16 @@ cmake -S . -B build && cmake --build build -j
 os vídeos de um dashboard em botões grandes, Parar, Blackout e Volume. Para voltar, o cadeado pede
 o PIN (padrão **546500**, troque na mesma janela). "Abrir sempre no Modo Operador" deixa o
 computador da loja ligar direto nessa tela, com as saídas no projetor/TV.
+
+### Licença
+
+Sem licença, o Lumen funciona **completo por 30 dias** neste computador. Depois disso continua
+funcionando, mas as saídas mostram a marca **"versão de avaliação"** (o show nunca é interrompido).
+Para licenciar: *Ajuda → Licença...* mostra o **código desta máquina** (ex. `1A2B-3C4D-5E6F-7A8B`);
+envie esse código e cole a licença recebida (ou abra o arquivo `.lumenlic`) na mesma janela. Pela
+linha de comando: `lumen-console --machine-code` mostra o código e `lumen-console --license
+arquivo.lumenlic` ativa. A licença vale para aquele computador (reinstalar o Lumen não muda o
+código; reinstalar o Windows muda).
 
 ### Dicas de desempenho
 
@@ -223,8 +233,8 @@ As opções `--frames`/`--screenshot-*` servem para testes automáticos (o CI us
 
 Dear ImGui (MIT), nlohmann/json (MIT), miniaudio (MIT-0/domínio público),
 RtMidi (MIT), Spout2 SDK (BSD-2), cabeçalhos Khronos (MIT/Apache-2.0),
-GLFW (zlib), stb_truetype (domínio público, via Dear ImGui) e FFmpeg (LGPL 2.1+,
-link dinâmico). NDI® é marca da Vizrt; o runtime NDI é carregado só se instalado.
+GLFW (zlib), stb_truetype (domínio público, via Dear ImGui), Monocypher (BSD-2/CC0, assinatura
+das licenças) e FFmpeg (LGPL 2.1+, link dinâmico). NDI® é marca da Vizrt; o runtime NDI é carregado só se instalado.
 
 O **Steinberg ASIO SDK** (opcional, Windows) é usado pela licença proprietária da Steinberg, com
 contrato assinado ([docs/ASIO-LICENCA.md](docs/ASIO-LICENCA.md)); o SDK não faz parte deste

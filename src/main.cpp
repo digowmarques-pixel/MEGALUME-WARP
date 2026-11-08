@@ -54,6 +54,8 @@ static void usage() {
       "  --diagnose              testa GPU, shaders, monitores, áudio, MIDI, serial, Spout e NDI e sai\n"
       "  --show-mode             abre com a edição travada (modo show)\n"
       "  --operator              abre no Modo Operador (loja)\n"
+      "  --machine-code          mostra o código desta máquina (para pedir a licença) e sai\n"
+      "  --license ARQUIVO       ativa a licença (.lumenlic) neste computador e sai\n"
       "  --sync-upload           envia os quadros à GPU sem PBO (comparação / driver com problema)\n"
       "  --role main|backup      máquina principal ou reserva (sem salvar a configuração)\n"
       "  --sync-peer IP[:PORTA]  a outra máquina (vazio = broadcast na rede)\n"
@@ -108,6 +110,19 @@ int main(int argc, char **argv) {
       return args[size_t(++i)];
     };
     if (a == "-h" || a == "--help") { usage(); return 0; }
+    else if (a == "--machine-code") { std::printf("%s\n", lumen::machineCode().c_str()); return 0; }
+    else if (a == "--license") { // installation by a script, or support over the phone
+      std::string text;
+      if (!lumen::platform::readFile(next(), text)) { std::fprintf(stderr, "não foi possível ler o arquivo\n"); return 2; }
+      lumen::License lic;
+      lumen::LicenseCheck c = lumen::installLicense(text, lic);
+      if (c != lumen::LicenseCheck::Ok) {
+        std::fprintf(stderr, "%s (código desta máquina: %s)\n", lumen::licenseCheckText(c), lumen::machineCode().c_str());
+        return 1;
+      }
+      std::printf("Licença ativada: %s (%s)\n", lic.name.c_str(), lic.id.c_str());
+      return 0;
+    }
     else if (a == "--launch") opts.launchColumn = std::atoi(next().c_str());
     else if (a == "--no-outputs") opts.noOutputs = true;
     else if (a == "--outputs") opts.openOutputs = true;

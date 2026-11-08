@@ -129,6 +129,9 @@ public:
   static float incomingOpacity(const LayerState &st);
 
   bool blackout = false;
+  // No licence and the trial is over: "evaluation" over every canvas (so on
+  // every output, Spout and NDI). Set at start-up and when a licence is entered.
+  bool watermark = false;
   float masterOpacity = 1;
 
   // Per-frame.
@@ -147,6 +150,7 @@ public:
   // Audio.
   AudioEngine audio;
   void restartAudio();
+  void drawWatermark();
 
   // OSC / MIDI / interaction.
   void restartOsc();
@@ -358,6 +362,7 @@ private:
   std::vector<OscMessage> inbox_;
   std::string audioInUse_ = "\x01"; // device + options in use; forces the first start
   bool syncPeerActive_ = false; // main: the backup reports it is running the show
+  Texture watermarkTex_; // the "evaluation" text, made once
   double audioRetryAt_ = 0;         // next reopen of a sound card that stopped
   double audioRecheckAt_ = 0;       // next look for the chosen card (on a fallback)
   int audioProbePresent_ = -1;      // it was listed at the last look (1), not (0), unknown (-1)

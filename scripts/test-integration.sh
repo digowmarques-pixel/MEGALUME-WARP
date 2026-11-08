@@ -13,6 +13,11 @@ LUMEN="$(cd "${1:-$ROOT/build}" && pwd)/lumen"
 WORK="$(mktemp -d)"
 trap 'pkill -f "$WORK" 2>/dev/null || true; rm -rf "$WORK"' EXIT
 cd "$WORK"
+# Settings of their own (a fresh 30-day evaluation, no licence of this computer):
+# the results never depend on the machine the tests run on.
+export HOME="$WORK/home" APPDATA="$WORK/home"
+unset XDG_CONFIG_HOME
+mkdir -p "$HOME"
 fail=0
 # A sanitizer build (ASan / UBSan / TSan) reports to stderr: any report fails the test.
 sanitizer() { grep -E "ERROR: AddressSanitizer|runtime error:|WARNING: ThreadSanitizer: data race.*src/" "$@" >/dev/null 2>&1; }
