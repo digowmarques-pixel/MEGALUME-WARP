@@ -1022,6 +1022,18 @@ int App::run(const Options &opts) {
     } else if (outputs.openCount() > 0) {
       outputs.shutdown(); // closed by the user
     }
+    // Keys pressed on an output window: Lumen's window back in front (Esc),
+    // or the outputs closed (Ctrl+P, Alt+F4). In operator mode the outputs
+    // stay open: only the shop screen comes in front.
+    if (const OutputManager::Requests rq = outputs.takeRequests(); rq.raiseMain || rq.closeOutputs) {
+      if (rq.closeOutputs && !operatorMode) {
+        outputsOpen = false;
+        status(T("Saídas fechadas (Ctrl+P abre de novo)"));
+      }
+      if (glfwGetWindowAttrib(window, GLFW_ICONIFIED)) glfwRestoreWindow(window);
+      glfwShowWindow(window);
+      glfwFocusWindow(window);
+    }
     step("swap");
     glfwSwapBuffers(window);
 

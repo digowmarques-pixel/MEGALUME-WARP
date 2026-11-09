@@ -692,26 +692,40 @@ void Workspace::drawCanvasOverlay(App &app, ImDrawList *dl, ImVec2 origin, float
     }
     case Tool::Mesh: {
       Warp &w = slice.warp;
+      const int count = int(w.mesh.size());
+      syncMeshSel(app, meshOwnerNow(app), count);
+      auto pointAt = [&](int i) { return tw.meshPointDest(i % w.meshCols, i / w.meshCols); }; // canvas px
       // Grid lines through the control points, along the warp's curves.
       drawMeshGrid(dl, transformedWarp(*sel, slice), toScreen, pal::u32(pal::kCyan, 150));
-      for (int r = 0; r < w.meshRows; ++r)
-        for (int c = 0; c < w.meshCols; ++c)
-          handle(dl, toScreen(tw.meshPointDest(c, r)), pal::u32(pal::kCyan),
-                 app.sel.meshPoint == r * w.meshCols + c, true);
+      for (int i = 0; i < count; ++i) handle(dl, toScreen(pointAt(i)), pal::u32(pal::kCyan), meshSelected(app, i), true);
       if (clicked) {
         int best = -1;
         float bestD = kPick;
-        for (int r = 0; r < w.meshRows; ++r)
-          for (int c = 0; c < w.meshCols; ++c) {
-            float d = dist(mouse, toScreen(tw.meshPointDest(c, r)));
-            if (d < bestD) { bestD = d; best = r * w.meshCols + c; }
-          }
-        if (best >= 0) {
-          app.sel.meshPoint = best;
+        for (int i = 0; i < count; ++i)
+          if (float d = dist(mouse, toScreen(pointAt(i))); d < bestD) { bestD = d; best = i; }
+        switch (meshClick(app, best)) {
+        case 1: dragging_ = true; dragKind_ = 2; break;
+        case 2: // the group: each point moves by the mouse's movement
+          meshDragFrom_.clear();
+          for (int i : meshSel_) meshDragFrom_.push_back(pointAt(i));
+          meshDragMouse_ = mc;
           dragging_ = true;
-          dragKind_ = 2;
+          dragKind_ = 12;
+          break;
+        case 3: dragging_ = true; dragKind_ = 13; break;
+        default: break;
         }
       }
+      meshBox(app, dl, count, [&](int i) { return toScreen(pointAt(i)); });
+      if (dragging_ && dragKind_ == 12 && meshDragFrom_.size() == meshSel_.size()) {
+        const Vec2 d = mc - meshDragMouse_;
+        for (size_t k = 0; k < meshSel_.size(); ++k)
+          w.mesh[size_t(meshSel_[k])] = w.unmapPerspective(untransform(*sel, meshDragFrom_[k] + d));
+        app.edited();
+      }
+      if (meshSel_.size() > 1)
+        dl->AddText({origin.x + 8, origin.y + 26}, IM_COL32(255, 255, 255, 200),
+                    (std::to_string(meshSel_.size()) + T(" pontos selecionados: arraste um deles ou use as setas para mover todos")).c_str());
       if (dragging_ && dragKind_ == 2 && app.sel.meshPoint >= 0 && app.sel.meshPoint < int(w.mesh.size())) {
         Vec2 target = mc;
         if (snap != io.KeyCtrl) { // also the other points of the same row and column
@@ -735,6 +749,7 @@ void Workspace::drawCanvasOverlay(App &app, ImDrawList *dl, ImVec2 origin, float
         Vec2 uv;
         if (w.unmap(untransform(*sel, mc), uv) && w.insertLines(uv.x, uv.y)) {
           dragging_ = false;
+          meshBand_ = false;
           app.sel.meshPoint = -1;
           app.edited();
         }
@@ -742,6 +757,9 @@ void Workspace::drawCanvasOverlay(App &app, ImDrawList *dl, ImVec2 origin, float
       if (w.meshCols == 2 && w.meshRows == 2)
         dl->AddText({origin.x + 8, origin.y + 8}, IM_COL32(255, 255, 255, 200),
                     T("Duplo clique adiciona pontos, ou aumente a malha em Propriedades > Fatias"));
+      else if (meshSel_.size() <= 1)
+        dl->AddText({origin.x + 8, origin.y + 8}, IM_COL32(255, 255, 255, 170),
+                    T("Shift/Ctrl+clique: vários pontos · arraste no vazio: seleção por área · Ctrl+A: todos"));
       break;
     }
     case Tool::Mask: {
@@ -982,6 +1000,9 @@ void Workspace::drawOutputOverlay(App &app, ImDrawList *dl, ImVec2 origin, ImVec
   // move the perspective, the squares move the mesh points (a square on a
   // corner sits inside its ring; the square wins at its centre).
   const float ringR = 16, squareR = 6;
+  const int count = int(w.mesh.size());
+  syncMeshSel(app, meshOwnerNow(app), count);
+  auto pointAt = [&](int i) { return w.meshPointDest(i % w.meshCols, i / w.meshCols); }; // output units
   drawMeshGrid(dl, w, toScreen, pal::u32(pal::kCyan, w.hasMesh() ? 170 : 90));
   int hoverPoint = -1, hoverCorner = -1;
   if (ImGui::IsItemHovered() && !dragging_) {
@@ -1004,7 +1025,7 @@ void Workspace::drawOutputOverlay(App &app, ImDrawList *dl, ImVec2 origin, ImVec
   for (int r = 0; r < w.meshRows; ++r)
     for (int c = 0; c < w.meshCols; ++c) {
       int i = r * w.meshCols + c;
-      bool hot = i == hoverPoint || (dragging_ && dragKind_ == 7 && app.sel.meshPoint == i);
+      bool hot = i == hoverPoint || meshSelected(app, i);
       ImVec2 q = toScreen(w.meshPointDest(c, r));
       float hr = hot ? squareR + 1 : squareR - 1;
       dl->AddRectFilled({q.x - hr, q.y - hr}, {q.x + hr, q.y + hr}, hot ? IM_COL32(255, 255, 255, 255) : IM_COL32(20, 20, 20, 230));
@@ -1014,8 +1035,33 @@ void Workspace::drawOutputOverlay(App &app, ImDrawList *dl, ImVec2 origin, ImVec
   if (hoverCorner >= 0) ImGui::SetItemTooltip("%s", T("Bola: perspectiva (cantos)"));
   else if (hoverPoint >= 0) ImGui::SetItemTooltip("%s", T("Quadrado: ponto da malha (duplo clique na imagem adiciona linha e coluna)"));
   if (clicked) {
-    if (hoverPoint >= 0) { app.sel.meshPoint = hoverPoint; app.sel.corner = -1; dragging_ = true; dragKind_ = 7; }
-    else if (hoverCorner >= 0) { app.sel.corner = hoverCorner; app.sel.meshPoint = -1; dragging_ = true; dragKind_ = 6; }
+    if (hoverCorner >= 0 && hoverPoint < 0) {
+      app.sel.corner = hoverCorner;
+      app.sel.meshPoint = -1;
+      meshSel_.clear();
+      dragging_ = true;
+      dragKind_ = 6;
+    } else {
+      app.sel.corner = -1;
+      switch (meshClick(app, hoverPoint)) {
+      case 1: dragging_ = true; dragKind_ = 7; break;
+      case 2:
+        meshDragFrom_.clear();
+        for (int i : meshSel_) meshDragFrom_.push_back(pointAt(i));
+        meshDragMouse_ = mn;
+        dragging_ = true;
+        dragKind_ = 14;
+        break;
+      case 3: dragging_ = true; dragKind_ = 13; break;
+      default: break;
+      }
+    }
+  }
+  meshBox(app, dl, count, [&](int i) { return toScreen(pointAt(i)); });
+  if (dragging_ && dragKind_ == 14 && meshDragFrom_.size() == meshSel_.size()) {
+    const Vec2 d = mn - meshDragMouse_;
+    for (size_t k = 0; k < meshSel_.size(); ++k) w.mesh[size_t(meshSel_[k])] = w.unmapPerspective(meshDragFrom_[k] + d);
+    app.edited();
   }
   if (dragging_ && dragKind_ == 7 && app.sel.meshPoint >= 0 && app.sel.meshPoint < int(w.mesh.size())) {
     std::vector<float> xs = {0, 0.5f, 1}, ys = {0, 0.5f, 1};
@@ -1046,16 +1092,107 @@ void Workspace::drawOutputOverlay(App &app, ImDrawList *dl, ImVec2 origin, ImVec
     Vec2 uv;
     if (w.unmap(mn, uv) && w.insertLines(uv.x, uv.y)) {
       dragging_ = false;
+      meshBand_ = false;
       app.sel.meshPoint = -1;
       app.edited();
     }
   }
   dl->AddText({origin.x + 8, origin.y + 8}, IM_COL32(255, 255, 255, 220),
-              T("Bola: perspectiva · quadrado: malha · duplo clique adiciona linha e coluna"));
+              meshSel_.size() > 1
+                  ? (std::to_string(meshSel_.size()) + T(" pontos selecionados: arraste um deles ou use as setas para mover todos")).c_str()
+                  : T("Bola: perspectiva · quadrado: malha · duplo clique adiciona linha e coluna · Shift/Ctrl+clique ou área: vários pontos"));
+}
+
+// ---------------------------------------------------------------- several mesh points
+
+void Workspace::syncMeshSel(App &app, const std::string &owner, int count) {
+  if (owner != meshSelOwner_ || count != meshSelCount_) {
+    meshSel_.clear();
+    meshBand_ = false;
+    meshSelOwner_ = owner;
+    meshSelCount_ = count;
+  }
+  meshSel_.erase(std::remove_if(meshSel_.begin(), meshSel_.end(), [&](int i) { return i < 0 || i >= count; }), meshSel_.end());
+  if (app.sel.meshPoint >= count) app.sel.meshPoint = -1;
+}
+
+bool Workspace::meshSelected(const App &app, int i) const {
+  return i == app.sel.meshPoint || std::find(meshSel_.begin(), meshSel_.end(), i) != meshSel_.end();
+}
+
+int Workspace::meshClick(App &app, int hit) {
+  ImGuiIO &io = ImGui::GetIO();
+  const bool add = io.KeyShift || io.KeyCtrl;
+  if (hit < 0) {
+    meshBand_ = true;
+    meshBandAdd_ = add;
+    meshBandFrom_ = io.MousePos;
+    return 3;
+  }
+  // The last point clicked alone may not be in the list yet (Tab, older selection).
+  if (meshSel_.empty() && app.sel.meshPoint >= 0 && app.sel.meshPoint != hit && add) meshSel_.push_back(app.sel.meshPoint);
+  auto it = std::find(meshSel_.begin(), meshSel_.end(), hit);
+  if (add) {
+    if (it != meshSel_.end()) { // Shift/Ctrl on a selected point: out of the selection
+      meshSel_.erase(it);
+      app.sel.meshPoint = meshSel_.empty() ? -1 : meshSel_.back();
+      return 0;
+    }
+    meshSel_.push_back(hit);
+  } else if (it == meshSel_.end()) {
+    meshSel_ = {hit}; // a plain click on another point: only that one
+  }
+  app.sel.meshPoint = hit;
+  return meshSel_.size() > 1 ? 2 : 1;
+}
+
+void Workspace::meshBox(App &app, ImDrawList *dl, int count, const std::function<ImVec2(int)> &screenOf) {
+  if (!meshBand_) return;
+  const ImVec2 a = meshBandFrom_, b = ImGui::GetIO().MousePos;
+  const ImVec2 lo{std::min(a.x, b.x), std::min(a.y, b.y)}, hi{std::max(a.x, b.x), std::max(a.y, b.y)};
+  dl->AddRectFilled(lo, hi, pal::u32(pal::kCyan, 35));
+  dl->AddRect(lo, hi, pal::u32(pal::kCyan), 0, 0, 1.0f);
+  if (ImGui::IsMouseDown(ImGuiMouseButton_Left)) return;
+  meshBand_ = false;
+  if (!meshBandAdd_) {
+    meshSel_.clear();
+    app.sel.meshPoint = -1;
+  }
+  if (hi.x - lo.x < 3 && hi.y - lo.y < 3) return; // a click on empty space: nothing selected
+  for (int i = 0; i < count; ++i) {
+    ImVec2 q = screenOf(i);
+    if (q.x >= lo.x && q.x <= hi.x && q.y >= lo.y && q.y <= hi.y &&
+        std::find(meshSel_.begin(), meshSel_.end(), i) == meshSel_.end())
+      meshSel_.push_back(i);
+  }
+  app.sel.meshPoint = meshSel_.empty() ? -1 : meshSel_.back();
+}
+
+std::string Workspace::meshOwnerNow(const App &app) const {
+  if (viewOutputId >= 0) return "O" + std::to_string(viewOutputId);
+  return "L" + std::to_string(app.sel.layerId) + "/" + std::to_string(app.sel.slice);
 }
 
 void Workspace::handleShortcuts(App &app) {
   ImGuiIO &io = ImGui::GetIO();
+  // Mesh: Ctrl+A takes every point of the mesh being edited, Esc none.
+  if (tool == Tool::Mesh && keysActive && !io.WantTextInput) {
+    Project &p = app.engine.project;
+    const Warp *mw = nullptr;
+    if (const OutputConfig *o = viewOutputId >= 0 ? p.output(viewOutputId) : nullptr) mw = &o->warp;
+    else if (const Layer *l = p.layer(app.sel.layerId); l && !l->slices.empty())
+      mw = &l->slices[size_t(std::clamp(app.sel.slice, 0, int(l->slices.size()) - 1))].warp;
+    if (mw && io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_A, false)) {
+      syncMeshSel(app, meshOwnerNow(app), int(mw->mesh.size()));
+      meshSel_.clear();
+      for (int i = 0; i < int(mw->mesh.size()); ++i) meshSel_.push_back(i);
+      app.sel.meshPoint = meshSel_.empty() ? -1 : meshSel_.back();
+    }
+    if (ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
+      meshSel_.clear();
+      app.sel.meshPoint = -1;
+    }
+  }
   if (io.WantTextInput || io.KeyCtrl) return;
   if (ImGui::IsKeyPressed(ImGuiKey_V, false)) tool = Tool::Select;
   if (ImGui::IsKeyPressed(ImGuiKey_E, false)) tool = Tool::Scale;
@@ -1078,6 +1215,7 @@ void Workspace::handleShortcuts(App &app) {
       if (o) n = int(o->warp.mesh.size());
       else if (l) n = int(l->slices[size_t(std::clamp(app.sel.slice, 0, int(l->slices.size()) - 1))].warp.mesh.size());
       if (n) app.sel.meshPoint = (std::max(app.sel.meshPoint, -1) + 1) % n;
+      meshSel_.clear(); // Tab walks one point at a time
     }
     if (tool == Tool::Mask && l && app.sel.mask >= 0 && app.sel.mask < int(l->masks.size())) {
       int n = int(l->masks[size_t(app.sel.mask)].points.size());
@@ -1107,9 +1245,11 @@ void Workspace::handleShortcuts(App &app) {
   if (o) {
     Vec2 nd{d.x * 0.001f, d.y * 0.001f};
     if (tool == Tool::Perspective && app.sel.corner >= 0) o->warp.corners[size_t(app.sel.corner)] += nd;
-    else if (tool == Tool::Mesh && app.sel.meshPoint >= 0 && app.sel.meshPoint < int(o->warp.mesh.size()))
-      o->warp.mesh[size_t(app.sel.meshPoint)] += nd;
-    else return;
+    else if (tool == Tool::Mesh && (!meshSel_.empty() || app.sel.meshPoint >= 0)) {
+      std::vector<int> pts = meshSel_.empty() ? std::vector<int>{app.sel.meshPoint} : meshSel_;
+      for (int i : pts)
+        if (i >= 0 && i < int(o->warp.mesh.size())) o->warp.mesh[size_t(i)] += nd;
+    } else return;
     app.edited();
     return;
   }
@@ -1125,10 +1265,17 @@ void Workspace::handleShortcuts(App &app) {
     keepInPlace(*l, [&] { s.warp.corners[size_t(app.sel.corner)] += layerDelta(*l, d); });
     break;
   case Tool::Mesh: {
-    if (app.sel.meshPoint < 0 || app.sel.meshPoint >= int(s.warp.mesh.size())) return;
-    // Nudge in canvas pixels, converted back to the mesh's unit space.
-    Vec2 cur = s.warp.meshPointDest(app.sel.meshPoint % s.warp.meshCols, app.sel.meshPoint / s.warp.meshCols);
-    s.warp.mesh[size_t(app.sel.meshPoint)] = s.warp.unmapPerspective(cur + d);
+    // Every selected point (or the last one clicked), nudged in canvas pixels
+    // and converted back to the mesh's unit space.
+    std::vector<int> pts = meshSel_.empty() ? std::vector<int>{app.sel.meshPoint} : meshSel_;
+    bool moved = false;
+    for (int i : pts) {
+      if (i < 0 || i >= int(s.warp.mesh.size())) continue;
+      Vec2 cur = s.warp.meshPointDest(i % s.warp.meshCols, i / s.warp.meshCols);
+      s.warp.mesh[size_t(i)] = s.warp.unmapPerspective(cur + d);
+      moved = true;
+    }
+    if (!moved) return;
     break;
   }
   case Tool::Mask: {

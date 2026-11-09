@@ -365,39 +365,37 @@ std::vector<GLFWwindow *> OutputManager::handles() const {
 
 // Finds the screen an output belongs to. Returns false when it is not
 // connected now: the output stays closed (never on another screen).
-static bool resolveMonitor(OutputConfig &o, const std::vector<MonitorInfo> &mons) {
-  if (o.monitor < 0) {
-    o.monitorRecorded = -1;
-    return true;
-  }
-  if (o.monitorName.empty() || o.monitor != o.monitorRecorded) { // just chosen (or an older file)
-    if (o.monitor >= int(mons.size())) return false;
-    const MonitorInfo &m = mons[size_t(o.monitor)];
-    o.monitorName = m.name;
-    o.monitorX = m.x;
-    o.monitorY = m.y;
-    o.monitorRecorded = o.monitor;
-    return true;
-  }
-  int exact = -1, byName = -1, named = 0;
-  for (size_t i = 0; i < mons.size(); ++i) {
-    if (mons[i].name != o.monitorName) continue;
-    ++named;
-    byName = int(i);
-    if (mons[i].x == o.monitorX && mons[i].y == o.monitorY) exact = int(i);
-  }
-  const int at = exact >= 0 ? exact : named == 1 ? byName : -1; // moved in the arrangement: same name, only one
-  if (at < 0) return false;
-  o.monitor = o.monitorRecorded = at;
-  o.monitorX = mons[size_t(at)].x;
-  o.monitorY = mons[size_t(at)].y;
-  return true;
+// Output windows: Esc brings Lumen's window in front; Ctrl+P and the close
+// button (Alt+F4) close the outputs. Nothing else (a key pressed on the
+// projector's window must not change the show).
+void OutputManager::onKey(GLFWwindow *w, int key, int, int action, int mods) {
+  auto *self = static_cast<OutputManager *>(glfwGetWindowUserPointer(w));
+  if (!self || action != GLFW_PRESS) return;
+  if (key == GLFW_KEY_ESCAPE) self->requests_.raiseMain = true;
+  if (key == GLFW_KEY_P && (mods & GLFW_MOD_CONTROL)) self->requests_.closeOutputs = true;
+}
+
+void OutputManager::onClose(GLFWwindow *w) {
+  glfwSetWindowShouldClose(w, GLFW_FALSE); // the app closes them (or not, in operator mode)
+  if (auto *self = static_cast<OutputManager *>(glfwGetWindowUserPointer(w))) self->requests_.closeOutputs = true;
 }
 
 void OutputManager::sync(Project &p) {
   auto mons = monitors();
   std::map<int, bool> present; // output id -> its screen is connected
   for (auto &o : p.outputs) present[o.id] = resolveMonitor(o, mons);
+  // The screen Lumen's own window is on: an output there is not kept above
+  // every window, so the interface (and the taskbar, Task Manager) can always
+  // be brought in front of it.
+  int mainMonitor = -1;
+  {
+    int mx = 0, my = 0, mw = 0, mh = 0;
+    glfwGetWindowPos(main_, &mx, &my);
+    glfwGetWindowSize(main_, &mw, &mh);
+    const int cx = mx + mw / 2, cy = my + mh / 2;
+    for (size_t i = 0; i < mons.size(); ++i)
+      if (cx >= mons[i].x && cx < mons[i].x + mons[i].w && cy >= mons[i].y && cy < mons[i].y + mons[i].h) mainMonitor = int(i);
+  }
   for (auto *cache : {&masks2_, &previewMasks_}) // mask buffers of removed outputs
     for (auto it = cache->begin(); it != cache->end();)
       it = present.count(it->first) ? std::next(it) : cache->erase(it);
@@ -441,8 +439,9 @@ void OutputManager::sync(Project &p) {
       glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
       glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
       glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GLFW_TRUE);
+      const bool floating = monitor >= 0 && monitor != mainMonitor;
       glfwWindowHint(GLFW_DECORATED, monitor >= 0 ? GLFW_FALSE : GLFW_TRUE);
-      glfwWindowHint(GLFW_FLOATING, monitor >= 0 ? GLFW_TRUE : GLFW_FALSE);
+      glfwWindowHint(GLFW_FLOATING, floating ? GLFW_TRUE : GLFW_FALSE);
       glfwWindowHint(GLFW_AUTO_ICONIFY, GLFW_FALSE);
       glfwWindowHint(GLFW_FOCUS_ON_SHOW, GLFW_FALSE);
       // Borderless window covering the monitor: more reliable than exclusive
@@ -451,9 +450,13 @@ void OutputManager::sync(Project &p) {
       glfwMakeContextCurrent(main_);
       if (!h) continue;
       glfwSetWindowPos(h, x, y);
+      glfwSetWindowUserPointer(h, this);
+      glfwSetKeyCallback(h, &OutputManager::onKey);
+      glfwSetWindowCloseCallback(h, &OutputManager::onClose);
       auto nw = std::make_unique<Window>();
       nw->outputId = o.id;
       nw->handle = h;
+      nw->floating = floating;
       nw->mesh = std::make_unique<DynamicMesh>();
       nw->monitor = monitor;
       nw->x = x; nw->y = y; nw->w = ww; nw->h = hh;
@@ -466,6 +469,10 @@ void OutputManager::sync(Project &p) {
     if (w->x != x || w->y != y || w->monitor != monitor) {
       glfwSetWindowPos(w->handle, x, y);
       w->x = x; w->y = y; w->monitor = monitor;
+    }
+    if (const bool floating = monitor >= 0 && monitor != mainMonitor; floating != w->floating) {
+      glfwSetWindowAttrib(w->handle, GLFW_FLOATING, floating ? GLFW_TRUE : GLFW_FALSE);
+      w->floating = floating;
     }
     if (w->w != ww || w->h != hh) {
       glfwSetWindowSize(w->handle, ww, hh);

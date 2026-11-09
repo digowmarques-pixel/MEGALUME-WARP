@@ -2,6 +2,7 @@
 // on a monitor (or a normal window for testing) sharing the main GL context.
 #pragma once
 
+#include "engine/monitors.h"
 #include "core/project.h"
 #include "render/gpu.h"
 #include "render/stream.h"
@@ -21,11 +22,6 @@ struct GLFWwindow;
 
 namespace lumen {
 
-struct MonitorInfo {
-  std::string name;
-  int x = 0, y = 0, w = 0, h = 0;
-  int refresh = 60;
-};
 
 // Calibration overlay drawn on the real projector ("show controls in output").
 struct OutputControls {
@@ -57,6 +53,17 @@ public:
     return o.monitor >= 0 && o.monitor < int(mons.size());
   }
   int openCount() const { return int(windows_.size()); }
+  // Keys and the close button on an output window (they have no interface of
+  // their own): Esc asks for Lumen's window in front, Ctrl+P and the close
+  // button (Alt+F4) ask to close the outputs. Read and cleared by the app.
+  struct Requests {
+    bool raiseMain = false, closeOutputs = false;
+  };
+  Requests takeRequests() {
+    Requests r = requests_;
+    requests_ = {};
+    return r;
+  }
   bool windowFor(int outputId) const;
   std::vector<GLFWwindow *> handles() const;
   // Shows the numbered test card on every output for a few seconds.
@@ -71,8 +78,12 @@ private:
     std::unique_ptr<DynamicMesh> mesh;
     int monitor = -1;
     int x = 0, y = 0, w = 0, h = 0;
+    bool floating = false; // above every window (only off the screen Lumen's own window is on)
     std::string title;
   };
+  Requests requests_;
+  static void onKey(GLFWwindow *w, int key, int scancode, int action, int mods);
+  static void onClose(GLFWwindow *w);
   void destroy(Window &w);
   void drawControls(const OutputConfig &o, const OutputControls &c, DynamicMesh &mesh, int w, int h);
   // Canvas history for outputs with a frame delay (main-context framebuffers).

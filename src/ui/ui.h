@@ -74,6 +74,24 @@ private:
   int dragLayerId_ = -1; // the layer dragWarps_ were taken from
   Vec2 dragPos_, dragMouse_;
   int scaleHandle_ = -1; // 0-3 corners (TL TR BR BL), 4-7 sides (T R B L)
+  // Several mesh points at once: Shift/Ctrl+click adds or removes one, a box
+  // dragged on empty space takes those inside, Ctrl+A all; a drag on any of
+  // them, or the arrow keys, moves them together. app.sel.meshPoint stays the
+  // last one clicked (the one shown on the projector's calibration handles).
+  std::vector<int> meshSel_;
+  std::string meshSelOwner_;       // "L<layer>/<slice>" or "O<output>": another mesh clears it
+  int meshSelCount_ = 0;           // points of that mesh (a resize clears it)
+  std::vector<Vec2> meshDragFrom_; // the selected points when the group drag started
+  Vec2 meshDragMouse_;
+  bool meshBand_ = false, meshBandAdd_ = false;
+  ImVec2 meshBandFrom_{0, 0};
+  void syncMeshSel(App &app, const std::string &owner, int count);
+  bool meshSelected(const App &app, int i) const;
+  // A click on mesh point `hit` (-1: empty space): 0 nothing to drag, 1 a
+  // single point (the caller's drag, with the magnet), 2 the group, 3 a box.
+  int meshClick(App &app, int hit);
+  void meshBox(App &app, ImDrawList *dl, int count, const std::function<ImVec2(int)> &screenOf);
+  std::string meshOwnerNow(const App &app) const;
   void beginWarpDrag(const Layer &l, Vec2 mouseCanvas);
   void restoreWarpDrag(Layer &l) const;
   Framebuffer preview_;
@@ -209,6 +227,13 @@ private:
   int pendingHistory_ = 0; // -1 undo, +1 redo
   bool stageEditPoints_[2] = {false, false};
   int stageDrag_ = 0, stageHandle_ = -1, stagePoint_ = -1;
+  // Several points of the slice being edited (Shift/Ctrl+click, a box, Ctrl+A),
+  // moved together; cleared for another slice, side or mesh size.
+  std::vector<int> stageSel_;
+  std::string stageSelOwner_;
+  bool stageBand_ = false, stageBandAdd_ = false;
+  ImVec2 stageBandFrom_{0, 0};
+  int stageBandSlice_ = -1; // a click without dragging selects this slice
   ImVec2 stageStartMouse_{0, 0};
   float stageStart_[6] = {};
   Warp stageStartWarp_;

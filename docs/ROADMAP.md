@@ -95,6 +95,19 @@ Ordem pensada para **videomapping** e **instalações interativas**.
 - *Seek* preciso de vídeo e áudio (também por OSC: `/lumen/layer/<l>/time`)
 - Testes de integração no CI (`scripts/test-integration.sh`)
 
+## ✅ v0.10.50
+- **Projetor desligado não prende mais a tela do notebook.** Cada saída só abre na tela que tem o
+  mesmo nome **e** a mesma posição da que foi escolhida (o Windows chama quase todas de "Generic PnP
+  Monitor": desligado o projetor, a saída ia para o notebook, por cima de tudo). Sem a tela dela, a
+  saída fica fechada e volta sozinha quando o projetor liga.
+- Uma saída na mesma tela da janela do Lumen nunca fica "sempre por cima": barra de tarefas, Alt+Tab e
+  Gerenciador de Tarefas sempre aparecem. Na janela da saída: **Esc** traz o Lumen para a frente;
+  **Ctrl+P** e o **X / Alt+F4** fecham as saídas (no Modo Operador só trazem a tela da loja).
+- **Malha: vários pontos de uma vez** — Shift/Ctrl+clique adiciona ou tira um ponto, arrastar num
+  espaço vazio seleciona os pontos dentro do retângulo, Ctrl+A todos, Esc nenhum; arrastar qualquer
+  um deles (ou as setas) move todos juntos. Vale na ferramenta Malha do Workspace (slices e visão da
+  saída) e em Saídas → Transformação de saída / Seleção de entrada → Editar pontos.
+
 ## ✅ v0.10.49 — licença
 - **Licença por computador** (*Ajuda → Licença...*): o Lumen mostra o **código desta máquina**; a
   licença recebida (texto ou arquivo `.lumenlic`) é colada na mesma janela. A licença é assinada

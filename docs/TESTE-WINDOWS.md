@@ -13,7 +13,7 @@ um Arduino e o NDI Tools.
 
 ## 0. Instalação e diagnóstico
 
-- [ ] 0.1 Instale com `Lumen-0.10.49-setup.exe` (ou descompacte o .zip). O atalho
+- [ ] 0.1 Instale com `Lumen-0.10.50-setup.exe` (ou descompacte o .zip). O atalho
       aparece no Menu Iniciar, e arquivos `.lumen` abrem com o Lumen.
 - [ ] 0.2 Menu Iniciar → *Lumen (console de diagnóstico)*. O relatório abre no Bloco
       de Notas (também fica em `%APPDATA%\Lumen\diagnostico.txt`).
@@ -233,6 +233,14 @@ um Arduino e o NDI Tools.
 - [ ] 13.33 Vídeo segue o timecode: Cue 1 em 00:00:00:00 e Cue 2 em 00:00:30:00. Play no Reaper,
       pause: o vídeo pausa junto. Play: continua do mesmo ponto. Leve o cursor para 00:00:40:00 e
       dê play: entra a Cue 2, 10 s adiante. Volte para 00:00:05:00: Cue 1, em 5 s.
+- [ ] 13.81 Notebook + projetor (Estender), saída no projetor, saídas abertas: desligue o projetor (ou tire
+      o cabo). A saída some; o notebook continua com o Lumen, a barra de tarefas e o Gerenciador de
+      Tarefas. Religue: a saída volta no projetor.
+- [ ] 13.82 Escolha a tela do notebook para a saída: clique na imagem e aperte Esc → o Lumen vem para a
+      frente; Ctrl+P (ou Alt+F4) na imagem fecha as saídas.
+- [ ] 13.83 Malha 4×4 (ferramenta Malha, G): arraste um retângulo em volta de 4 pontos → ficam brancos;
+      arraste um deles: os 4 andam juntos; setas também. Shift+clique tira/adiciona; Ctrl+A todos.
+      O mesmo em Saídas → Transformação de saída → Editar pontos.
 - [ ] 13.77 Licença: num PC sem licença, a barra mostra "Avaliação: 30 dia(s)"; Ajuda → Licença mostra o
       código da máquina (Copiar funciona). Reinstale o Lumen: o código é o mesmo.
 - [ ] 13.78 Cole uma licença de OUTRO computador → "Esta licença é de outro computador". Cole a deste

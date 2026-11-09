@@ -447,6 +447,16 @@ void Ui::sliceEditor(App &app, OutputConfig &o, bool out) {
       for (const Vec2 &c : s.warp.corners) corners4.push_back(outPx(c));
     }
   }
+  // The points chosen together belong to this slice, side and mesh size.
+  {
+    const std::string owner = std::to_string(o.id) + (out ? "o" : "i") + std::to_string(sel) + "/" + std::to_string(points.size());
+    if (owner != stageSelOwner_ || !editPoints || screenSel) {
+      stageSel_.clear();
+      stageBand_ = false;
+      stageSelOwner_ = owner;
+    }
+  }
+  auto stageSelected = [&](int i) { return std::find(stageSel_.begin(), stageSel_.end(), i) != stageSel_.end(); };
   // What is under the mouse (when not already dragging).
   int hoverSquare = -1, hoverRing = -1, hoverPoint = -1, hoverCorner = -1, hoverSlice = -1;
   if (hovered && stageDrag_ == 0 && !stageHand_) {
@@ -486,9 +496,30 @@ void Ui::sliceEditor(App &app, OutputConfig &o, bool out) {
     stageDrag_ = 0;
     if (hoverSquare >= 0) { stageDrag_ = 2; stageHandle_ = hoverSquare; }
     else if (hoverRing >= 0) { stageDrag_ = 3; stageHandle_ = hoverRing; }
-    else if (hoverPoint >= 0) { stageDrag_ = 4; stagePoint_ = hoverPoint; }
-    else if (hoverCorner >= 0) { stageDrag_ = 5; stageHandle_ = hoverCorner; }
-    else if (hoverSlice >= 0) {
+    else if (hoverPoint >= 0) {
+      // Shift/Ctrl+click adds or removes the point; a plain click on a point
+      // already chosen keeps them all (the drag moves them together).
+      const bool add = io.KeyShift || io.KeyCtrl;
+      if (stageSel_.empty() && add && stagePoint_ >= 0 && stagePoint_ != hoverPoint && stagePoint_ < int(points.size()))
+        stageSel_.push_back(stagePoint_);
+      if (add && stageSelected(hoverPoint)) {
+        stageSel_.erase(std::find(stageSel_.begin(), stageSel_.end(), hoverPoint));
+        stagePoint_ = stageSel_.empty() ? -1 : stageSel_.back();
+      } else {
+        if (add) stageSel_.push_back(hoverPoint);
+        else if (!stageSelected(hoverPoint)) stageSel_ = {hoverPoint};
+        stageDrag_ = 4;
+        stagePoint_ = hoverPoint;
+      }
+    } else if (hoverCorner >= 0) { stageDrag_ = 5; stageHandle_ = hoverCorner; }
+    else if (editPoints && !screenSel) {
+      // Editing points: a drag on empty space selects the points in a box; a
+      // click without dragging still selects the slice under it.
+      stageBand_ = true;
+      stageBandAdd_ = io.KeyShift || io.KeyCtrl;
+      stageBandFrom_ = io.MousePos;
+      stageBandSlice_ = hoverSlice;
+    } else if (hoverSlice >= 0) {
       sel = hoverSlice; // click selects; dragging moves it
       stageDrag_ = 1;
     }
@@ -497,6 +528,41 @@ void Ui::sliceEditor(App &app, OutputConfig &o, bool out) {
     stageStart_[0] = cur.x; stageStart_[1] = cur.y; stageStart_[2] = cur.w; stageStart_[3] = cur.h;
     stageStart_[4] = cur.inRot; stageStart_[5] = cur.outRot;
     stageStartWarp_ = cur.warp;
+  }
+  if (stageBand_) {
+    const ImVec2 a = stageBandFrom_, b = io.MousePos;
+    const ImVec2 lo{std::min(a.x, b.x), std::min(a.y, b.y)}, hi{std::max(a.x, b.x), std::max(a.y, b.y)};
+    dl->AddRectFilled(lo, hi, IM_COL32(255, 160, 40, 35));
+    dl->AddRect(lo, hi, IM_COL32(255, 160, 40, 220), 0, 0, 1.0f);
+    if (!ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+      stageBand_ = false;
+      if (hi.x - lo.x < 3 && hi.y - lo.y < 3) { // a click: the slice under it, nothing selected
+        if (!stageBandAdd_) {
+          stageSel_.clear();
+          stagePoint_ = -1;
+        }
+        if (stageBandSlice_ >= 0) sel = stageBandSlice_;
+      } else {
+        if (!stageBandAdd_) stageSel_.clear();
+        for (size_t i = 0; i < points.size(); ++i) {
+          ImVec2 q = toScreen(points[i]);
+          if (q.x >= lo.x && q.x <= hi.x && q.y >= lo.y && q.y <= hi.y && !stageSelected(int(i))) stageSel_.push_back(int(i));
+        }
+        stagePoint_ = stageSel_.empty() ? -1 : stageSel_.back();
+      }
+    }
+  }
+  // Ctrl+A: every point of the slice being edited; Esc: none.
+  if (hovered && editPoints && !screenSel && !io.WantTextInput) {
+    if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_A, false)) {
+      stageSel_.clear();
+      for (size_t i = 0; i < points.size(); ++i) stageSel_.push_back(int(i));
+      stagePoint_ = stageSel_.empty() ? -1 : stageSel_.back();
+    }
+    if (ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
+      stageSel_.clear();
+      stagePoint_ = -1;
+    }
   }
   if (!ImGui::IsMouseDown(ImGuiMouseButton_Left)) stageDrag_ = 0;
 
@@ -580,6 +646,14 @@ void Ui::sliceEditor(App &app, OutputConfig &o, bool out) {
         // more is a fixed point of rot - 360 in float) spun here forever.
         rot = std::isfinite(rot) ? std::remainder(rot, 360.0f) : 0.0f;
         cur.inRot = rot;
+      } else if (stageDrag_ == 4 && stageSel_.size() > 1 && stageStartWarp_.uvMesh.size() == cur.warp.uvMesh.size()) {
+        // The group: each point moves by the mouse's movement (in the region's own turn).
+        Vec2 dm = turn(m - toContent(stageStartMouse_), -cur.inRot);
+        Vec2 duv{dm.x / std::max(1.0f, cur.w), dm.y / std::max(1.0f, cur.h)};
+        for (int i : stageSel_)
+          if (i >= 0 && i < int(cur.warp.uvMesh.size()))
+            cur.warp.uvMesh[size_t(i)] = {std::clamp(stageStartWarp_.uvMesh[size_t(i)].x + duv.x, 0.0f, 1.0f),
+                                          std::clamp(stageStartWarp_.uvMesh[size_t(i)].y + duv.y, 0.0f, 1.0f)};
       } else if (stageDrag_ == 4 && stagePoint_ >= 0 && stagePoint_ < int(cur.warp.uvMesh.size())) {
         Vec2 lm = turn(m - c0, -cur.inRot);
         cur.warp.uvMesh[size_t(stagePoint_)] = {std::clamp(lm.x / std::max(1.0f, cur.w) + 0.5f, 0.0f, 1.0f),
@@ -617,6 +691,13 @@ void Ui::sliceEditor(App &app, OutputConfig &o, bool out) {
         if (io.KeyShift) total = std::round(total / 15.0f) * 15.0f;
         turnWarp(cur.warp, b0.center(), total - stageStart_[5], ow, oh);
         cur.outRot = total;
+      } else if (stageDrag_ == 4 && stageSel_.size() > 1) {
+        // The group: from where each point was when the drag started.
+        const Vec2 d{delta.x / ow, delta.y / oh};
+        for (int i : stageSel_)
+          if (i >= 0 && i < int(cur.warp.mesh.size()))
+            cur.warp.mesh[size_t(i)] =
+                cur.warp.unmapPerspective(stageStartWarp_.meshPointDest(i % cur.warp.meshCols, i / cur.warp.meshCols) + d);
       } else if (stageDrag_ == 4 && stagePoint_ >= 0 && stagePoint_ < int(cur.warp.mesh.size())) {
         Vec2 target = m;
         target.x += snapShift({target.x}, tx, guideX);
@@ -652,7 +733,20 @@ void Ui::sliceEditor(App &app, OutputConfig &o, bool out) {
     if (ImGui::IsKeyPressed(ImGuiKey_DownArrow)) d.y += step;
     if (d.x != 0 || d.y != 0) {
       SliceRef cur = sliceRef(o, sel);
-      if (!out) { cur.x += d.x; cur.y += d.y; }
+      std::vector<int> pts = stageSel_;
+      if (pts.empty() && editPoints && stagePoint_ >= 0) pts.push_back(stagePoint_);
+      if (editPoints && !pts.empty()) { // the chosen points (Shift: 10 px)
+        for (int i : pts) {
+          if (out && i >= 0 && i < int(cur.warp.mesh.size())) {
+            Vec2 at = cur.warp.meshPointDest(i % cur.warp.meshCols, i / cur.warp.meshCols);
+            cur.warp.mesh[size_t(i)] = cur.warp.unmapPerspective({at.x + d.x / ow, at.y + d.y / oh});
+          } else if (!out && i >= 0 && i < int(cur.warp.uvMesh.size())) {
+            Vec2 du = turn(d, -cur.inRot);
+            Vec2 &uv = cur.warp.uvMesh[size_t(i)];
+            uv = {std::clamp(uv.x + du.x / std::max(1.0f, cur.w), 0.0f, 1.0f), std::clamp(uv.y + du.y / std::max(1.0f, cur.h), 0.0f, 1.0f)};
+          }
+        }
+      } else if (!out) { cur.x += d.x; cur.y += d.y; }
       else cur.warp.translate({d.x / ow, d.y / oh});
       app.edited();
     }
@@ -687,7 +781,7 @@ void Ui::sliceEditor(App &app, OutputConfig &o, bool out) {
           if (r + 1 < w.meshRows) dl->AddLine(at(c, r), at(c, r + 1), pal::u32(pal::kOrange), 1.5f);
         }
       for (int i = 0; i < int(w.uvMesh.size()); ++i) {
-        bool hot = i == hoverPoint || (stageDrag_ == 4 && stagePoint_ == i);
+        bool hot = i == hoverPoint || stageSelected(i) || (stageDrag_ == 4 && stagePoint_ == i);
         ImVec2 q = at(i % w.meshCols, i / w.meshCols);
         dl->AddCircleFilled(q, hot ? 9.0f : 7.0f, hot ? IM_COL32(255, 255, 255, 255) : IM_COL32(20, 20, 20, 220));
         dl->AddCircle(q, hot ? 9.0f : 7.0f, pal::u32(pal::kOrange), 0, 2);
@@ -704,7 +798,8 @@ void Ui::sliceEditor(App &app, OutputConfig &o, bool out) {
       for (int r = 0; r < w.meshRows; ++r)
         for (int c = 0; c < w.meshCols; ++c) {
           int i = r * w.meshCols + c;
-          squareHandle(dl, toScreen(outPx(w.meshPointDest(c, r))), i == hoverPoint || (stageDrag_ == 4 && stagePoint_ == i), accent);
+          squareHandle(dl, toScreen(outPx(w.meshPointDest(c, r))),
+                       i == hoverPoint || stageSelected(i) || (stageDrag_ == 4 && stagePoint_ == i), accent);
         }
     }
   }
@@ -722,7 +817,7 @@ void Ui::sliceEditor(App &app, OutputConfig &o, bool out) {
   // Hint at the bottom of the stage.
   {
     const char *hint = editPoints
-        ? (out ? T("Editar pontos: quadrados grandes = perspectiva · pequenos = malha · duplo clique adiciona linha e coluna")
+        ? (out ? T("Editar pontos: quadrados grandes = perspectiva · pequenos = malha · duplo clique adiciona linha e coluna · Shift/Ctrl+clique ou área: vários pontos")
                : T("Editar pontos: arraste os pontos para deformar a parte do canvas"))
         : T("Clique num slice para selecionar e arraste para mover · quadrados: tamanho · bolas: girar · setas: 1 px");
     dl->AddText({sp.x + 8, sp.y + ss.y - ImGui::GetTextLineHeight() - 6}, IM_COL32(200, 200, 205, 200), hint);

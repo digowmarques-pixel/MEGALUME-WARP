@@ -18,6 +18,7 @@
 #include "ui/i18n.h"
 #include "core/parallel.h"
 #include "core/license.h"
+#include "engine/monitors.h"
 #include <atomic>
 #include <thread>
 #include <utility>
@@ -1497,7 +1498,33 @@ static void testLicense() {
   CHECK(trialFrom(d0, d0, d0, true).expired);
 }
 
+// Outputs and screens: a projector switched off never sends its output to the
+// notebook's own screen (Windows names both "Generic PnP Monitor").
+static void testMonitors() {
+  std::vector<MonitorInfo> two = {{"Generic PnP Monitor", 0, 0, 1920, 1080}, {"Generic PnP Monitor", 1920, 0, 1920, 1080}};
+  std::vector<MonitorInfo> notebookOnly = {{"Generic PnP Monitor", 0, 0, 1920, 1080}};
+  OutputConfig o;
+  o.monitor = 1; // chosen: the projector
+  CHECK(resolveMonitor(o, two) && o.monitor == 1 && o.monitorX == 1920);
+  CHECK(!resolveMonitor(o, notebookOnly)); // projector off: closed, not on the notebook
+  CHECK(resolveMonitor(o, two) && o.monitor == 1); // back on: the same screen again
+  // The projector plugged in a different order (now first in the list): followed by its place.
+  std::vector<MonitorInfo> swapped = {two[1], two[0]};
+  CHECK(resolveMonitor(o, swapped) && o.monitor == 0 && o.monitorX == 1920);
+  // Chosen by the user afterwards: that one is taken as it is.
+  o.monitor = 1;
+  CHECK(resolveMonitor(o, swapped) && o.monitorX == 0);
+  // An older project (no screen recorded) with its screen missing: closed.
+  OutputConfig old;
+  old.monitor = 1;
+  CHECK(!resolveMonitor(old, notebookOnly));
+  // A window (no screen): always shown.
+  OutputConfig win;
+  CHECK(resolveMonitor(win, notebookOnly));
+}
+
 int main() {
+  testMonitors();
   testLicense();
   testProductionReview();
   testProductionReview2();
