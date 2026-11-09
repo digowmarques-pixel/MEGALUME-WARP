@@ -95,6 +95,17 @@ Ordem pensada para **videomapping** e **instalações interativas**.
 - *Seek* preciso de vídeo e áudio (também por OSC: `/lumen/layer/<l>/time`)
 - Testes de integração no CI (`scripts/test-integration.sh`)
 
+## ✅ v0.10.51
+- **Pontos mais fáceis de pegar em todos os editores.** O ponto sob o mouse acende (e o cursor muda)
+  antes do clique; a distância para pegar subiu de 10 para 16 px; ao pegar um ponto um pouco ao lado
+  ele não pula mais para baixo do cursor (anda junto com o mouse, bom para ajuste fino).
+- **Malha de entrada:** margem em volta da imagem (os pontos da borda e dos cantos podem ser pegos por
+  fora), pontos maiores, e os mesmos recursos de vários pontos: Shift/Ctrl+clique, retângulo num espaço
+  vazio, Ctrl+A, Esc, setas (Shift: 10 px). Duplo clique num ponto não cria mais linha nova.
+- O mesmo no Editor de fatias (forma Livre), nas ferramentas Perspectiva, Malha e Máscara do Workspace,
+  na visão da saída e em Saídas → Editar pontos. Onde um ponto da malha fica em cima de um canto da
+  perspectiva, o quadrado só é pego bem no centro e o anel em volta continua fácil de pegar.
+
 ## ✅ v0.10.50
 - **Projetor desligado não prende mais a tela do notebook.** Cada saída só abre na tela que tem o
   mesmo nome **e** a mesma posição da que foi escolhida (o Windows chama quase todas de "Generic PnP

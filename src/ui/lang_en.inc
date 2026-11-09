@@ -338,7 +338,7 @@
 {"Malha de entrada — ", "Input mesh — "},
 {"Divisão", "Subdivision"},
 {"Grade regular", "Regular grid"},
-{"Arraste os pontos para cima dos detalhes da imagem · duplo clique adiciona linha e coluna", "Drag the points over details of the image · double click adds a row and a column"},
+{"Arraste os pontos para cima dos detalhes da imagem · duplo clique adiciona linha e coluna · Shift/Ctrl+clique ou área: vários pontos", "Drag the points over details of the image · double click adds a row and a column · Shift/Ctrl+click or a box: several points"},
 {"Dispare uma mídia nesta layer para ver a imagem.", "Launch a media on this layer to see the image."},
 {"Selecione uma layer no dashboard.", "Select a layer in the dashboard."},
 {"Mudo", "Mute"},

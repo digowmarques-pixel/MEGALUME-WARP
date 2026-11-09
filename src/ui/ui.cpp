@@ -2335,7 +2335,7 @@ void Ui::sliceEditorWindow(App &app) {
   float aspect = tex && !tex->empty() ? float(tex->width()) / float(std::max(1, tex->height())) : 16.0f / 9.0f;
   float bw = std::max(10.0f, avail.x), bh = bw / aspect;
   if (bh > avail.y) { bh = std::max(10.0f, avail.y); bw = bh * aspect; }
-  const float pad = 12; // handles sit on the border: their whole grab area is inside the item
+  const float pad = 20; // handles sit on the border: their whole grab area is inside the item
   bw = std::max(10.0f, bw - 2 * pad);
   bh = std::max(10.0f, bh - 2 * pad);
   ImVec2 o = ImGui::GetCursorScreenPos();
@@ -2361,7 +2361,7 @@ void Ui::sliceEditorWindow(App &app) {
   bool freeShape = !s.warp.uvMesh.empty();
   // Handles: 0-3 corners, 4-7 sides (rectangle) / the mesh points (free shape).
   static int drag = -1;
-  static Vec2 dragFrom;
+  static Vec2 dragFrom, grabOff; // grabOff: from the mouse to the grabbed handle (no jump on grab)
   static float from[4];
   std::vector<ImVec2> handles;
   float cu = (s.u0 + s.u1) * 0.5f, cv = (s.v0 + s.v1) * 0.5f;
@@ -2378,17 +2378,24 @@ void Ui::sliceEditorWindow(App &app) {
     handles = {scr(s.u0, s.v0), scr(s.u1, s.v0), scr(s.u1, s.v1), scr(s.u0, s.v1),
                scr(cu, s.v0), scr(s.u1, cv), scr(cu, s.v1), scr(s.u0, cv)};
   }
-  for (auto &h : handles) {
-    dl->AddRectFilled({h.x - 5, h.y - 5}, {h.x + 5, h.y + 5}, IM_COL32(30, 30, 32, 255));
-    dl->AddRect({h.x - 5, h.y - 5}, {h.x + 5, h.y + 5}, IM_COL32(255, 255, 255, 255));
+  // The handle under the mouse (16 px of reach) lights up before the click.
+  int hot = -1;
+  if (ImGui::IsItemHovered() && !(drag >= 0 && ImGui::IsMouseDown(ImGuiMouseButton_Left))) {
+    float best = 16;
+    for (size_t i = 0; i < handles.size(); ++i)
+      if (float d = std::hypot(io.MousePos.x - handles[i].x, io.MousePos.y - handles[i].y); d < best) { best = d; hot = int(i); }
+    if (hot >= 0) ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeAll);
+  }
+  for (size_t i = 0; i < handles.size(); ++i) {
+    const ImVec2 h = handles[i];
+    const bool on = int(i) == hot || int(i) == drag;
+    const float r = on ? 8.0f : 6.0f;
+    dl->AddRectFilled({h.x - r, h.y - r}, {h.x + r, h.y + r}, on ? IM_COL32(255, 255, 255, 255) : IM_COL32(30, 30, 32, 255));
+    dl->AddRect({h.x - r, h.y - r}, {h.x + r, h.y + r}, on ? IM_COL32(255, 196, 0, 255) : IM_COL32(255, 255, 255, 255), 0, 0, on ? 2.0f : 1.0f);
   }
   if (ImGui::IsItemClicked()) {
-    drag = -1;
-    float best = 10;
-    for (size_t i = 0; i < handles.size(); ++i) {
-      float d = std::hypot(io.MousePos.x - handles[i].x, io.MousePos.y - handles[i].y);
-      if (d < best) { best = d; drag = int(i); }
-    }
+    drag = hot;
+    if (drag >= 0) grabOff = {(handles[size_t(drag)].x - io.MousePos.x) / bw, (handles[size_t(drag)].y - io.MousePos.y) / bh};
     bool inside = mouse.x >= std::min(s.u0, s.u1) && mouse.x <= std::max(s.u0, s.u1) &&
                   mouse.y >= std::min(s.v0, s.v1) && mouse.y <= std::max(s.v0, s.v1);
     if (drag < 0 && inside) drag = 100; // move the whole part
@@ -2411,7 +2418,8 @@ void Ui::sliceEditorWindow(App &app) {
       s.u0 = from[0] + du; s.v0 = from[1] + dv; s.u1 = from[2] + du; s.v1 = from[3] + dv;
     } else if (freeShape) {
       if (drag < int(s.warp.uvMesh.size())) {
-        Vec2 uv{cl((mouse.x - s.u0) / std::max(1e-4f, s.u1 - s.u0)), cl((mouse.y - s.v0) / std::max(1e-4f, s.v1 - s.v0))};
+        const Vec2 at{mouse.x + grabOff.x, mouse.y + grabOff.y};
+        Vec2 uv{cl((at.x - s.u0) / std::max(1e-4f, s.u1 - s.u0)), cl((at.y - s.v0) / std::max(1e-4f, s.v1 - s.v0))};
         // Like Millumin: the slice is cut to this shape, the picture is not stretched. With
         // only the 4 corners, the matching canvas corner moves too, by the same mapping
         // as the other three (so the media inside keeps its proportions).
@@ -2433,7 +2441,7 @@ void Ui::sliceEditorWindow(App &app) {
         s.warp.uvMesh[size_t(drag)] = uv;
       }
     } else {
-      float u = cl(mouse.x), v = cl(mouse.y);
+      float u = cl(mouse.x + grabOff.x), v = cl(mouse.y + grabOff.y);
       if (drag == 0 || drag == 3 || drag == 7) s.u0 = u;
       if (drag == 1 || drag == 2 || drag == 5) s.u1 = u;
       if (drag == 0 || drag == 1 || drag == 4) s.v0 = v;
@@ -4127,7 +4135,11 @@ void Ui::blobUi(App &app, Layer &l) {
 }
 
 void Ui::openInputMesh(int layerId, int slice, int outputId) {
-  inputMesh_ = {true, layerId, slice, outputId};
+  inputMesh_ = {};
+  inputMesh_.open = true;
+  inputMesh_.layerId = layerId;
+  inputMesh_.slice = slice;
+  inputMesh_.outputId = outputId;
 }
 
 // Input side of a mesh warp: the control points over the content itself.
@@ -4167,13 +4179,20 @@ void Ui::inputMeshWindow(App &app) {
   ImGui::SameLine();
   if (ImGui::Button(T("Grade regular"))) { w->uvMesh.clear(); app.edited(); }
   ImGui::SameLine();
-  ImGui::TextDisabled("%s", T("Arraste os pontos para cima dos detalhes da imagem · duplo clique adiciona linha e coluna"));
+  ImGui::TextDisabled("%s", T("Arraste os pontos para cima dos detalhes da imagem · duplo clique adiciona linha e coluna · Shift/Ctrl+clique ou área: vários pontos"));
   ImVec2 avail = ImGui::GetContentRegionAvail();
+  // A margin around the picture: the points on its border (the corners) can
+  // be grabbed from every side, not only from inside the picture.
+  const float M = 20, kPickPx = 16, kDot = 6;
+  avail.x -= 2 * M;
+  avail.y -= 2 * M;
   float aspect = tex && !tex->empty() ? float(tex->width()) * (u1 - u0) / std::max(1.0f, float(tex->height()) * (v1 - v0)) : 16.0f / 9.0f;
-  float bw = avail.x, bh = bw / aspect;
-  if (bh > avail.y) { bh = avail.y; bw = bh * aspect; }
-  ImVec2 o = ImGui::GetCursorScreenPos();
-  ImGui::InvisibleButton("##inmesh", {std::max(bw, 10.0f), std::max(bh, 10.0f)});
+  float bw = std::max(avail.x, 10.0f), bh = bw / aspect;
+  if (bh > avail.y) { bh = std::max(avail.y, 10.0f); bw = bh * aspect; }
+  const ImVec2 area = ImGui::GetCursorScreenPos();
+  ImGui::InvisibleButton("##inmesh", {bw + 2 * M, bh + 2 * M});
+  const bool hovered = ImGui::IsItemHovered(), active = ImGui::IsItemActive(), clicked = ImGui::IsItemClicked();
+  const ImVec2 o{area.x + M, area.y + M};
   ImDrawList *dl = ImGui::GetWindowDrawList();
   dl->AddRectFilled(o, {o.x + bw, o.y + bh}, IM_COL32(20, 20, 22, 255));
   if (tex && !tex->empty()) {
@@ -4183,6 +4202,14 @@ void Ui::inputMeshWindow(App &app) {
     dl->AddText({o.x + 10, o.y + 10}, IM_COL32(200, 200, 200, 255), T("Dispare uma mídia nesta layer para ver a imagem."));
   }
   w->ensureUvMesh();
+  const int count = int(w->uvMesh.size());
+  InputMeshEdit &E = inputMesh_;
+  if (E.count != count) { // another mesh size: the old indices mean other points
+    E.sel.clear();
+    E.dragging = E.band = false;
+    E.count = count;
+    E.point = -1;
+  }
   auto toScreen = [&](Vec2 uv) { return ImVec2{o.x + uv.x * bw, o.y + uv.y * bh}; };
   for (int r = 0; r < w->meshRows; ++r)
     for (int c = 0; c < w->meshCols; ++c) {
@@ -4191,16 +4218,74 @@ void Ui::inputMeshWindow(App &app) {
     }
   ImGuiIO &io = ImGui::GetIO();
   Vec2 mouse{std::clamp((io.MousePos.x - o.x) / bw, 0.0f, 1.0f), std::clamp((io.MousePos.y - o.y) / bh, 0.0f, 1.0f)};
-  if (ImGui::IsItemClicked()) {
-    inputMesh_.point = -1;
-    float best = 10;
-    for (int i = 0; i < w->meshCols * w->meshRows; ++i) {
+  auto selected = [&](int i) { return i == E.point || std::find(E.sel.begin(), E.sel.end(), i) != E.sel.end(); };
+  // The point under the mouse: the nearest within reach, shown before the click.
+  int hover = -1;
+  if (hovered && !E.dragging && !E.band) {
+    float best = kPickPx;
+    for (int i = 0; i < count; ++i) {
       ImVec2 sp = toScreen(w->uvMesh[size_t(i)]);
-      float d = std::hypot(sp.x - io.MousePos.x, sp.y - io.MousePos.y);
-      if (d < best) { best = d; inputMesh_.point = i; }
+      if (float d = std::hypot(sp.x - io.MousePos.x, sp.y - io.MousePos.y); d < best) { best = d; hover = i; }
+    }
+    if (hover >= 0) ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeAll);
+  }
+  const bool dbl = hovered && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left);
+  if (clicked && !dbl) {
+    const bool add = io.KeyShift || io.KeyCtrl;
+    if (hover >= 0) {
+      if (E.sel.empty() && add && E.point >= 0 && E.point != hover) E.sel.push_back(E.point);
+      auto it = std::find(E.sel.begin(), E.sel.end(), hover);
+      if (add && it != E.sel.end()) { // Shift/Ctrl on a chosen point: out
+        E.sel.erase(it);
+        E.point = E.sel.empty() ? -1 : E.sel.back();
+      } else {
+        if (add) E.sel.push_back(hover);
+        else if (it == E.sel.end()) E.sel = {hover};
+        E.point = hover;
+        E.dragFrom.clear();
+        for (int i : E.sel) E.dragFrom.push_back(w->uvMesh[size_t(i)]);
+        E.dragMouse = mouse;
+        E.dragging = true;
+      }
+    } else { // empty space: a box
+      E.band = true;
+      E.bandAdd = add;
+      E.bandFrom = io.MousePos;
     }
   }
-  if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
+  if (E.dragging) {
+    if (!active || !ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+      E.dragging = false;
+    } else if (ImGui::IsMouseDragging(ImGuiMouseButton_Left, 0) && E.dragFrom.size() == E.sel.size()) {
+      const Vec2 d{mouse.x - E.dragMouse.x, mouse.y - E.dragMouse.y};
+      for (size_t k = 0; k < E.sel.size(); ++k)
+        w->uvMesh[size_t(E.sel[k])] = {std::clamp(E.dragFrom[k].x + d.x, 0.0f, 1.0f), std::clamp(E.dragFrom[k].y + d.y, 0.0f, 1.0f)};
+      app.edited();
+    }
+  }
+  if (E.band) {
+    const ImVec2 a = E.bandFrom, b = io.MousePos;
+    const ImVec2 lo{std::min(a.x, b.x), std::min(a.y, b.y)}, hi{std::max(a.x, b.x), std::max(a.y, b.y)};
+    dl->AddRectFilled(lo, hi, IM_COL32(255, 196, 0, 35));
+    dl->AddRect(lo, hi, IM_COL32(255, 196, 0, 220), 0, 0, 1.0f);
+    if (!ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+      E.band = false;
+      if (!E.bandAdd) {
+        E.sel.clear();
+        E.point = -1;
+      }
+      if (hi.x - lo.x >= 3 || hi.y - lo.y >= 3) {
+        for (int i = 0; i < count; ++i) {
+          ImVec2 q = toScreen(w->uvMesh[size_t(i)]);
+          if (q.x >= lo.x && q.x <= hi.x && q.y >= lo.y && q.y <= hi.y &&
+              std::find(E.sel.begin(), E.sel.end(), i) == E.sel.end())
+            E.sel.push_back(i);
+        }
+        E.point = E.sel.empty() ? -1 : E.sel.back();
+      }
+    }
+  }
+  if (dbl && hover < 0) {
     // The clicked content point becomes a new row / column of the grid.
     Vec2 uv;
     Warp unit; // grid parameter of a content point: invert the input grid
@@ -4209,19 +4294,50 @@ void Ui::inputMeshWindow(App &app) {
     unit.meshRows = w->meshRows;
     unit.mesh = w->uvMesh;
     if (unit.unmap(mouse, uv) && w->insertLines(uv.x, uv.y)) app.edited();
-    inputMesh_.point = -1;
+    E.point = -1;
+    E.sel.clear();
+    E.band = false;
   }
-  if (inputMesh_.point >= 0 && inputMesh_.point < int(w->uvMesh.size()) && ImGui::IsItemActive() &&
-      ImGui::IsMouseDragging(ImGuiMouseButton_Left, 0)) {
-    w->uvMesh[size_t(inputMesh_.point)] = mouse;
-    app.edited();
+  // Keys (window in focus): arrows move the chosen points 1 px (Shift: 10),
+  // Ctrl+A all of them, Esc none.
+  if (ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) && !io.WantTextInput) {
+    if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_A, false)) {
+      E.sel.clear();
+      for (int i = 0; i < count; ++i) E.sel.push_back(i);
+      E.point = count ? count - 1 : -1;
+    }
+    if (ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
+      E.sel.clear();
+      E.point = -1;
+    }
+    const float step = io.KeyShift ? 10.0f : 1.0f;
+    Vec2 d{0, 0};
+    if (ImGui::IsKeyPressed(ImGuiKey_LeftArrow)) d.x -= step;
+    if (ImGui::IsKeyPressed(ImGuiKey_RightArrow)) d.x += step;
+    if (ImGui::IsKeyPressed(ImGuiKey_UpArrow)) d.y -= step;
+    if (ImGui::IsKeyPressed(ImGuiKey_DownArrow)) d.y += step;
+    if (d.x != 0 || d.y != 0) {
+      std::vector<int> pts = E.sel;
+      if (pts.empty() && E.point >= 0) pts.push_back(E.point);
+      for (int i : pts)
+        if (i >= 0 && i < count) {
+          Vec2 &q = w->uvMesh[size_t(i)];
+          q = {std::clamp(q.x + d.x / bw, 0.0f, 1.0f), std::clamp(q.y + d.y / bh, 0.0f, 1.0f)};
+        }
+      if (!pts.empty()) app.edited();
+    }
   }
-  for (int i = 0; i < w->meshCols * w->meshRows; ++i) {
+  // Points last (over the lines), bigger when under the mouse or chosen.
+  for (int i = 0; i < count; ++i) {
     ImVec2 sp = toScreen(w->uvMesh[size_t(i)]);
-    bool selPt = i == inputMesh_.point;
-    dl->AddCircleFilled(sp, selPt ? 6.0f : 4.5f, selPt ? IM_COL32(255, 255, 255, 255) : IM_COL32(20, 20, 20, 230));
-    dl->AddCircle(sp, selPt ? 6.0f : 4.5f, IM_COL32(255, 196, 0, 255), 0, 2);
+    const bool on = selected(i), hot = i == hover;
+    const float r = on || hot ? kDot + 2 : kDot;
+    dl->AddCircleFilled(sp, r, on ? IM_COL32(255, 255, 255, 255) : hot ? IM_COL32(255, 220, 120, 255) : IM_COL32(20, 20, 20, 230));
+    dl->AddCircle(sp, r, IM_COL32(255, 196, 0, 255), 0, 2);
   }
+  if (E.sel.size() > 1)
+    dl->AddText({o.x + 8, o.y + bh + 2}, IM_COL32(255, 255, 255, 200),
+                (std::to_string(E.sel.size()) + T(" pontos selecionados: arraste um deles ou use as setas para mover todos")).c_str());
   if (w->uvIsIdentity()) w->uvMesh.clear();
   ImGui::End();
 }

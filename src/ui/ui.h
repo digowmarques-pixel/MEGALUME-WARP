@@ -83,6 +83,9 @@ private:
   int meshSelCount_ = 0;           // points of that mesh (a resize clears it)
   std::vector<Vec2> meshDragFrom_; // the selected points when the group drag started
   Vec2 meshDragMouse_;
+  // From the mouse to the point grabbed (the drag's own units): a point
+  // grabbed a few pixels off does not jump under the mouse.
+  Vec2 grab_{0, 0};
   bool meshBand_ = false, meshBandAdd_ = false;
   ImVec2 meshBandFrom_{0, 0};
   void syncMeshSel(App &app, const std::string &owner, int count);
@@ -195,7 +198,17 @@ private:
   void virtualMonitorsWindow(App &app);
   std::map<int, std::unique_ptr<Framebuffer>> virtualFbs_; // by output id
   int sliceEditorLayer_ = -1; // layer whose slice editor is open
-  struct InputMeshEdit { bool open = false; int layerId = -1, slice = 0, outputId = -1, point = -1; } inputMesh_;
+  struct InputMeshEdit {
+    bool open = false;
+    int layerId = -1, slice = 0, outputId = -1, point = -1;
+    // Several points (Shift/Ctrl+click, a box, Ctrl+A) moved together.
+    std::vector<int> sel;
+    int count = 0;              // points of the mesh they belong to (a resize clears them)
+    std::vector<Vec2> dragFrom; // the selected points when the drag started
+    Vec2 dragMouse;
+    bool dragging = false, band = false, bandAdd = false;
+    ImVec2 bandFrom{0, 0};
+  } inputMesh_;
   void maskList(App &app, std::vector<Mask> &masks, int &sel, int &selPoint, Vec2 unit, Vec2 area,
                 bool outputSpace);
   void outputMaskControls(App &app, OutputConfig *o, Workspace &ws);
@@ -234,6 +247,7 @@ private:
   bool stageBand_ = false, stageBandAdd_ = false;
   ImVec2 stageBandFrom_{0, 0};
   int stageBandSlice_ = -1; // a click without dragging selects this slice
+  Vec2 stageGrab_{0, 0};    // from the mouse to the handle grabbed (no jump on grab)
   ImVec2 stageStartMouse_{0, 0};
   float stageStart_[6] = {};
   Warp stageStartWarp_;

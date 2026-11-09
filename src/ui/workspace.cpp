@@ -15,7 +15,7 @@ namespace lumen {
 namespace {
 
 constexpr float kHandle = 7.0f;   // handle half-size (screen px)
-constexpr float kPick = 10.0f;    // pick radius (screen px)
+constexpr float kPick = 16.0f;    // pick radius (screen px)
 
 float dist(ImVec2 a, ImVec2 b) { return std::hypot(a.x - b.x, a.y - b.y); }
 
@@ -92,14 +92,16 @@ bool Workspace::editMask(Mask &m, int &point, const std::function<ImVec2(Vec2)> 
     if (dist(io.MousePos, a) < kPick) nearHandle = 0;
     if (dist(io.MousePos, b) < kPick) nearHandle = 1;
   }
-  for (size_t i = 0; i < n; ++i) handle(dl, toScreen(m.points[i]), col, point == int(i), !m.isBezier(i));
-
   int nearIdx = -1;
   float bestD = kPick;
   for (size_t i = 0; i < n; ++i) {
     float d = dist(io.MousePos, toScreen(m.points[i]));
     if (d < bestD) { bestD = d; nearIdx = int(i); }
   }
+  // The point under the mouse lights up before the click.
+  const int hot = hovered && !dragging_ ? nearIdx : -1;
+  if (hot >= 0 || (hovered && !dragging_ && nearHandle >= 0)) ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeAll);
+  for (size_t i = 0; i < n; ++i) handle(dl, toScreen(m.points[i]), col, point == int(i) || hot == int(i), !m.isBezier(i));
   // Right click (or Alt+click) on a point: curve (bezier) <-> corner.
   if ((altClick || rclicked) && nearIdx >= 0) {
     size_t i = size_t(nearIdx);
@@ -121,6 +123,7 @@ bool Workspace::editMask(Mask &m, int &point, const std::function<ImVec2(Vec2)> 
       dragKind_ = base + 2 + nearHandle;
     } else if (nearIdx >= 0) {
       point = nearIdx;
+      grab_ = m.points[size_t(nearIdx)] - mouse;
       dragging_ = true;
       dragKind_ = base;
     } else if ((io.KeyCtrl || !maskAddPoints) && n >= 3 && pointInPolygon(mouse, maskOutline(m))) {
@@ -141,6 +144,7 @@ bool Workspace::editMask(Mask &m, int &point, const std::function<ImVec2(Vec2)> 
         }
       }
       m.points.insert(m.points.begin() + at, mouse);
+      grab_ = {0, 0};
       m.tanIn.insert(m.tanIn.begin() + at, Vec2{});
       m.tanOut.insert(m.tanOut.begin() + at, Vec2{});
       point = at;
@@ -152,19 +156,20 @@ bool Workspace::editMask(Mask &m, int &point, const std::function<ImVec2(Vec2)> 
   if (dragging_ && point >= 0 && point < int(m.points.size())) {
     size_t i = size_t(point);
     if (dragKind_ == base) {
-      Vec2 target = mouse;
+      const Vec2 at = mouse + grab_;
+      Vec2 target = at;
       // Shift: a straight line to a neighbour point (horizontal, vertical or
       // 45°, measured on screen: an output's 0..1 is not square).
       if (io.KeyShift && m.points.size() >= 2) {
         const size_t cnt = m.points.size();
         const ImVec2 o0 = toScreen({0, 0}), ox = toScreen({1, 0}), oy = toScreen({0, 1});
         const float sx = ox.x - o0.x, sy = oy.y - o0.y;
-        const ImVec2 ms = toScreen(mouse);
+        const ImVec2 ms = toScreen(at);
         float best = 1e30f;
         size_t from = i;
         for (size_t q : {(i + cnt - 1) % cnt, (i + 1) % cnt}) {
           if (q == i || std::fabs(sx) < 1e-6f || std::fabs(sy) < 1e-6f) continue;
-          Vec2 c = constrain45(m.points[q], mouse, sx, sy);
+          Vec2 c = constrain45(m.points[q], at, sx, sy);
           ImVec2 cs = toScreen(c);
           float d = std::hypot(cs.x - ms.x, cs.y - ms.y);
           if (d < best) {
@@ -647,16 +652,19 @@ void Workspace::drawCanvasOverlay(App &app, ImDrawList *dl, ImVec2 origin, float
       break;
     }
     case Tool::Perspective: {
-      for (int c = 0; c < 4; ++c) handle(dl, toScreen(tw.corners[size_t(c)]), pal::u32(pal::kCyan), app.sel.corner == c);
-      if (clicked) {
-        int best = -1;
+      // The corner under the mouse lights up before the click.
+      int best = -1;
+      if ((hovered && !dragging_) || clicked) {
         float bestD = kPick;
-        for (int c = 0; c < 4; ++c) {
-          float d = dist(mouse, toScreen(tw.corners[size_t(c)]));
-          if (d < bestD) { bestD = d; best = c; }
-        }
+        for (int c = 0; c < 4; ++c)
+          if (float d = dist(mouse, toScreen(tw.corners[size_t(c)])); d < bestD) { bestD = d; best = c; }
+        if (best >= 0) ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeAll);
+      }
+      for (int c = 0; c < 4; ++c) handle(dl, toScreen(tw.corners[size_t(c)]), pal::u32(pal::kCyan), app.sel.corner == c || best == c);
+      if (clicked) {
         if (best >= 0) {
           app.sel.corner = best;
+          grab_ = tw.corners[size_t(best)] - mc;
           dragging_ = true;
           dragKind_ = 1;
         } else if (pointInPolygon(mc, warpOutline(tw))) {
@@ -672,7 +680,8 @@ void Workspace::drawCanvasOverlay(App &app, ImDrawList *dl, ImVec2 origin, float
         }
       }
       if (dragging_ && dragKind_ == 1 && app.sel.corner >= 0) {
-        Vec2 target = mc;
+        const Vec2 at = mc + grab_;
+        Vec2 target = at;
         if (snap != io.KeyCtrl) { // canvas, outputs, other slices and this slice's other corners
           std::vector<float> xs, ys;
           snapTargets(p, viewCanvas, sel->id, app.sel.slice, xs, ys);
@@ -681,7 +690,7 @@ void Workspace::drawCanvasOverlay(App &app, ImDrawList *dl, ImVec2 origin, float
               xs.push_back(tw.corners[size_t(c)].x);
               ys.push_back(tw.corners[size_t(c)].y);
             }
-          target = snapPoint(mc, xs, ys, kSnapPx / scale, guideX, guideY);
+          target = snapPoint(at, xs, ys, kSnapPx / scale, guideX, guideY);
         }
         keepInPlace(*sel, [&] { slice.warp.corners[size_t(app.sel.corner)] = untransform(*sel, target); });
         app.edited();
@@ -697,14 +706,22 @@ void Workspace::drawCanvasOverlay(App &app, ImDrawList *dl, ImVec2 origin, float
       auto pointAt = [&](int i) { return tw.meshPointDest(i % w.meshCols, i / w.meshCols); }; // canvas px
       // Grid lines through the control points, along the warp's curves.
       drawMeshGrid(dl, transformedWarp(*sel, slice), toScreen, pal::u32(pal::kCyan, 150));
-      for (int i = 0; i < count; ++i) handle(dl, toScreen(pointAt(i)), pal::u32(pal::kCyan), meshSelected(app, i), true);
-      if (clicked) {
-        int best = -1;
+      // The point under the mouse lights up before the click.
+      int best = -1;
+      if ((hovered && !dragging_) || clicked) {
         float bestD = kPick;
         for (int i = 0; i < count; ++i)
           if (float d = dist(mouse, toScreen(pointAt(i))); d < bestD) { bestD = d; best = i; }
+        if (best >= 0) ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeAll);
+      }
+      for (int i = 0; i < count; ++i) handle(dl, toScreen(pointAt(i)), pal::u32(pal::kCyan), meshSelected(app, i) || best == i, true);
+      if (clicked) {
         switch (meshClick(app, best)) {
-        case 1: dragging_ = true; dragKind_ = 2; break;
+        case 1:
+          grab_ = pointAt(app.sel.meshPoint) - mc;
+          dragging_ = true;
+          dragKind_ = 2;
+          break;
         case 2: // the group: each point moves by the mouse's movement
           meshDragFrom_.clear();
           for (int i : meshSel_) meshDragFrom_.push_back(pointAt(i));
@@ -727,7 +744,8 @@ void Workspace::drawCanvasOverlay(App &app, ImDrawList *dl, ImVec2 origin, float
         dl->AddText({origin.x + 8, origin.y + 26}, IM_COL32(255, 255, 255, 200),
                     (std::to_string(meshSel_.size()) + T(" pontos selecionados: arraste um deles ou use as setas para mover todos")).c_str());
       if (dragging_ && dragKind_ == 2 && app.sel.meshPoint >= 0 && app.sel.meshPoint < int(w.mesh.size())) {
-        Vec2 target = mc;
+        const Vec2 at = mc + grab_;
+        Vec2 target = at;
         if (snap != io.KeyCtrl) { // also the other points of the same row and column
           std::vector<float> xs, ys;
           snapTargets(p, viewCanvas, sel->id, app.sel.slice, xs, ys);
@@ -739,7 +757,7 @@ void Workspace::drawCanvasOverlay(App &app, ImDrawList *dl, ImVec2 origin, float
                 xs.push_back(q.x);
                 ys.push_back(q.y);
               }
-          target = snapPoint(mc, xs, ys, kSnapPx / scale, guideX, guideY);
+          target = snapPoint(at, xs, ys, kSnapPx / scale, guideX, guideY);
         }
         w.mesh[size_t(app.sel.meshPoint)] = w.unmapPerspective(untransform(*sel, target));
         app.edited();
@@ -888,6 +906,7 @@ bool Workspace::drawLedOverlay(App &app, ImDrawList *dl, ImVec2 origin, float sc
       }
     if (best >= 0) {
       app.sel.corner = best;
+      grab_ = sel->area.corners[size_t(best)] - mc;
       dragging_ = true;
       dragKind_ = 8;
     } else {
@@ -908,7 +927,7 @@ bool Workspace::drawLedOverlay(App &app, ImDrawList *dl, ImVec2 origin, float sc
   sel = p.ledMapping(app.sel.ledId);
   if (sel && !sel->locked && dragging_) {
     if (dragKind_ == 8 && app.sel.corner >= 0) {
-      sel->area.corners[size_t(app.sel.corner)] = mc;
+      sel->area.corners[size_t(app.sel.corner)] = mc + grab_;
       app.edited();
     } else if (dragKind_ == 9 && (io.MouseDelta.x != 0 || io.MouseDelta.y != 0)) {
       sel->area.translate({io.MouseDelta.x / scale, io.MouseDelta.y / scale});
@@ -1006,12 +1025,19 @@ void Workspace::drawOutputOverlay(App &app, ImDrawList *dl, ImVec2 origin, ImVec
   drawMeshGrid(dl, w, toScreen, pal::u32(pal::kCyan, w.hasMesh() ? 170 : 90));
   int hoverPoint = -1, hoverCorner = -1;
   if (ImGui::IsItemHovered() && !dragging_) {
-    float best = squareR + 3;
+    // 16 px of reach; a point sitting on a perspective corner keeps a tight
+    // one, so the ring around it can still be grabbed.
+    float best = 16;
     for (int r = 0; r < w.meshRows; ++r)
-      for (int c = 0; c < w.meshCols; ++c)
-        if (float d = dist(io.MousePos, toScreen(w.meshPointDest(c, r))); d < best) { best = d; hoverPoint = r * w.meshCols + c; }
+      for (int c = 0; c < w.meshCols; ++c) {
+        const ImVec2 q = toScreen(w.meshPointDest(c, r));
+        bool onCorner = false;
+        for (int k = 0; k < 4; ++k)
+          if (dist(q, toScreen(w.corners[size_t(k)])) < ringR * 0.5f) onCorner = true;
+        if (float d = dist(io.MousePos, q); d < best && (!onCorner || d < squareR + 3)) { best = d; hoverPoint = r * w.meshCols + c; }
+      }
     if (hoverPoint < 0) {
-      float bestC = ringR + 3;
+      float bestC = ringR + 6;
       for (int c = 0; c < 4; ++c)
         if (float d = dist(io.MousePos, toScreen(w.corners[size_t(c)])); d < bestC) { bestC = d; hoverCorner = c; }
     }
@@ -1039,12 +1065,17 @@ void Workspace::drawOutputOverlay(App &app, ImDrawList *dl, ImVec2 origin, ImVec
       app.sel.corner = hoverCorner;
       app.sel.meshPoint = -1;
       meshSel_.clear();
+      grab_ = w.corners[size_t(hoverCorner)] - mn;
       dragging_ = true;
       dragKind_ = 6;
     } else {
       app.sel.corner = -1;
       switch (meshClick(app, hoverPoint)) {
-      case 1: dragging_ = true; dragKind_ = 7; break;
+      case 1:
+        grab_ = pointAt(app.sel.meshPoint) - mn;
+        dragging_ = true;
+        dragKind_ = 7;
+        break;
       case 2:
         meshDragFrom_.clear();
         for (int i : meshSel_) meshDragFrom_.push_back(pointAt(i));
@@ -1073,7 +1104,7 @@ void Workspace::drawOutputOverlay(App &app, ImDrawList *dl, ImVec2 origin, ImVec
           xs.push_back(q.x);
           ys.push_back(q.y);
         }
-    w.mesh[size_t(app.sel.meshPoint)] = w.unmapPerspective(outputSnap(mn, xs, ys));
+    w.mesh[size_t(app.sel.meshPoint)] = w.unmapPerspective(outputSnap(mn + grab_, xs, ys));
     app.edited();
   }
   if (dragging_ && dragKind_ == 6 && app.sel.corner >= 0) {
@@ -1083,7 +1114,7 @@ void Workspace::drawOutputOverlay(App &app, ImDrawList *dl, ImVec2 origin, ImVec
         xs.push_back(w.corners[size_t(c)].x);
         ys.push_back(w.corners[size_t(c)].y);
       }
-    w.corners[size_t(app.sel.corner)] = outputSnap(mn, xs, ys);
+    w.corners[size_t(app.sel.corner)] = outputSnap(mn + grab_, xs, ys);
     app.edited();
   }
   // Not with the Hand (or Alt, which pans): it promises not to edit anything.
@@ -1140,7 +1171,7 @@ int Workspace::meshClick(App &app, int hit) {
     }
     meshSel_.push_back(hit);
   } else if (it == meshSel_.end()) {
-    meshSel_ = {hit}; // a plain click on another point: only that one
+    meshSel_.assign(1, hit); // a plain click on another point: only that one
   }
   app.sel.meshPoint = hit;
   return meshSel_.size() > 1 ? 2 : 1;

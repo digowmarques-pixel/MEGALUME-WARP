@@ -13,7 +13,7 @@ um Arduino e o NDI Tools.
 
 ## 0. Instalação e diagnóstico
 
-- [ ] 0.1 Instale com `Lumen-0.10.50-setup.exe` (ou descompacte o .zip). O atalho
+- [ ] 0.1 Instale com `Lumen-0.10.51-setup.exe` (ou descompacte o .zip). O atalho
       aparece no Menu Iniciar, e arquivos `.lumen` abrem com o Lumen.
 - [ ] 0.2 Menu Iniciar → *Lumen (console de diagnóstico)*. O relatório abre no Bloco
       de Notas (também fica em `%APPDATA%\Lumen\diagnostico.txt`).
@@ -241,6 +241,11 @@ um Arduino e o NDI Tools.
 - [ ] 13.83 Malha 4×4 (ferramenta Malha, G): arraste um retângulo em volta de 4 pontos → ficam brancos;
       arraste um deles: os 4 andam juntos; setas também. Shift+clique tira/adiciona; Ctrl+A todos.
       O mesmo em Saídas → Transformação de saída → Editar pontos.
+- [ ] 13.84 Malha de entrada (Propriedades → Mapping → Malha de entrada...): passe o mouse perto de um
+      ponto → ele acende antes do clique. Pegue o canto superior esquerdo por FORA da imagem e arraste.
+      Pegue um ponto um pouco ao lado: ele não pula para o cursor. Retângulo em volta de 4 pontos,
+      arraste um: os 4 andam juntos; Ctrl+A, Esc e setas funcionam. Mesmo teste nas ferramentas
+      Perspectiva, Malha e Máscara, no Editor de fatias (forma Livre) e em Saídas → Editar pontos.
 - [ ] 13.77 Licença: num PC sem licença, a barra mostra "Avaliação: 30 dia(s)"; Ajuda → Licença mostra o
       código da máquina (Copiar funciona). Reinstale o Lumen: o código é o mesmo.
 - [ ] 13.78 Cole uma licença de OUTRO computador → "Esta licença é de outro computador". Cole a deste

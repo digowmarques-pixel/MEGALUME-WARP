@@ -463,19 +463,30 @@ void Ui::sliceEditor(App &app, OutputConfig &o, bool out) {
     if (screenSel) {
       // only the slices themselves can be picked
     } else if (!editPoints) {
-      float best = kSquare + 3;
+      // The corner squares sit on the rings: they keep a tight reach so the
+      // ring around them stays easy to grab; the side squares reach further.
+      float best = kSquare + 8;
       for (int h = 0; h < 8; ++h)
-        if (float d = dist(toScreen(handles[h])); d < best) { best = d; hoverSquare = h; }
+        if (float d = dist(toScreen(handles[h])); d < best && (h >= 4 || d < kSquare + 3)) { best = d; hoverSquare = h; }
       if (hoverSquare < 0)
         for (int h = 0; h < 4; ++h)
-          if (dist(toScreen(handles[h])) < kRing + 3) { hoverRing = h; break; }
+          if (dist(toScreen(handles[h])) < kRing + 6) { hoverRing = h; break; }
     } else {
-      float best = (out ? kSquare : kRing * 0.6f) + 3;
-      for (size_t i = 0; i < points.size(); ++i)
-        if (float d = dist(toScreen(points[i])); d < best) { best = d; hoverPoint = int(i); }
+      // 16 px of reach; on the output a point sitting on a perspective corner
+      // keeps a tight one, so the corner around it can still be grabbed.
+      float best = 16;
+      for (size_t i = 0; i < points.size(); ++i) {
+        const ImVec2 q = toScreen(points[i]);
+        const float d = dist(q);
+        bool onCorner = false;
+        if (out)
+          for (const Vec2 &c : corners4)
+            if (const ImVec2 k = toScreen(c); std::hypot(q.x - k.x, q.y - k.y) < kBig) onCorner = true;
+        if (d < best && (!onCorner || d < kSquare + 3)) { best = d; hoverPoint = int(i); }
+      }
       if (hoverPoint < 0)
         for (size_t c = 0; c < corners4.size(); ++c)
-          if (dist(toScreen(corners4[c])) < kBig + 4) { hoverCorner = int(c); break; }
+          if (dist(toScreen(corners4[c])) < kBig + 8) { hoverCorner = int(c); break; }
     }
     if (hoverSquare < 0 && hoverRing < 0 && hoverPoint < 0 && hoverCorner < 0)
       for (int k = n - 1; k >= 0; --k) { // the top one (drawn last) first
@@ -494,7 +505,12 @@ void Ui::sliceEditor(App &app, OutputConfig &o, bool out) {
   const bool meshDouble = out && editPoints && !screenSel && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left);
   if (ImGui::IsItemClicked(ImGuiMouseButton_Left) && !stageHand_ && !meshDouble) {
     stageDrag_ = 0;
-    if (hoverSquare >= 0) { stageDrag_ = 2; stageHandle_ = hoverSquare; }
+    stageGrab_ = {0, 0};
+    if (hoverSquare >= 0) {
+      stageDrag_ = 2;
+      stageHandle_ = hoverSquare;
+      stageGrab_ = handles[hoverSquare] - mouse;
+    }
     else if (hoverRing >= 0) { stageDrag_ = 3; stageHandle_ = hoverRing; }
     else if (hoverPoint >= 0) {
       // Shift/Ctrl+click adds or removes the point; a plain click on a point
@@ -510,8 +526,13 @@ void Ui::sliceEditor(App &app, OutputConfig &o, bool out) {
         else if (!stageSelected(hoverPoint)) stageSel_ = {hoverPoint};
         stageDrag_ = 4;
         stagePoint_ = hoverPoint;
+        if (stageSel_.size() <= 1) stageGrab_ = points[size_t(hoverPoint)] - mouse; // the group moves by the mouse's movement
       }
-    } else if (hoverCorner >= 0) { stageDrag_ = 5; stageHandle_ = hoverCorner; }
+    } else if (hoverCorner >= 0) {
+      stageDrag_ = 5;
+      stageHandle_ = hoverCorner;
+      stageGrab_ = corners4[size_t(hoverCorner)] - mouse;
+    }
     else if (editPoints && !screenSel) {
       // Editing points: a drag on empty space selects the points in a box; a
       // click without dragging still selects the slice under it.
@@ -600,7 +621,7 @@ void Ui::sliceEditor(App &app, OutputConfig &o, bool out) {
     SliceRef cur = sliceRef(o, sel);
     const float sx = stageStart_[0], sy = stageStart_[1], sw = stageStart_[2];
     const Vec2 delta{(io.MousePos.x - stageStartMouse_.x) / z, (io.MousePos.y - stageStartMouse_.y) / z};
-    const Vec2 m = mouse;
+    const Vec2 m = mouse + stageGrab_; // stageGrab_ is zero but for one handle or point
     if (!out) {
       const float H = stageStart_[3];
       const Vec2 c0{sx + sw * 0.5f, sy + H * 0.5f};
