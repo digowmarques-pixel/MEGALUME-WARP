@@ -13,7 +13,7 @@ um Arduino e o NDI Tools.
 
 ## 0. Instalação e diagnóstico
 
-- [ ] 0.1 Instale com `Lumen-0.10.51-setup.exe` (ou descompacte o .zip). O atalho
+- [ ] 0.1 Instale com `Lumen-0.10.52-setup.exe` (ou descompacte o .zip). O atalho
       aparece no Menu Iniciar, e arquivos `.lumen` abrem com o Lumen.
 - [ ] 0.2 Menu Iniciar → *Lumen (console de diagnóstico)*. O relatório abre no Bloco
       de Notas (também fica em `%APPDATA%\Lumen\diagnostico.txt`).
@@ -241,6 +241,15 @@ um Arduino e o NDI Tools.
 - [ ] 13.83 Malha 4×4 (ferramenta Malha, G): arraste um retângulo em volta de 4 pontos → ficam brancos;
       arraste um deles: os 4 andam juntos; setas também. Shift+clique tira/adiciona; Ctrl+A todos.
       O mesmo em Saídas → Transformação de saída → Editar pontos.
+- [ ] 13.85 Notebook + projetor (Estender), saída no projetor, vídeo rodando: aperte **Win+D**. O
+      notebook mostra a área de trabalho, o projetor continua com o vídeo. Volte ao Lumen pela barra
+      de tarefas: tudo normal. Repita com Win+M. Ctrl+P desliga e liga as saídas sempre, várias vezes
+      seguidas (também logo depois do Win+D).
+- [ ] 13.86 Modo Operador: desligue as saídas antes de entrar (ou por OSC /millumin/action/exitFullscreen):
+      aparece o botão vermelho LIGAR TELAS e o aviso; toque: o vídeo volta no projetor e o botão fica
+      verde, "Reabrir telas". Toque em "Reabrir telas": a imagem pisca e volta.
+- [ ] 13.87 Com as saídas abertas, clique na imagem do projetor e aperte Ctrl+P (fecha as saídas); em
+      seguida, Ctrl+P na janela do Lumen abre de novo.
 - [ ] 13.84 Malha de entrada (Propriedades → Mapping → Malha de entrada...): passe o mouse perto de um
       ponto → ele acende antes do clique. Pegue o canto superior esquerdo por FORA da imagem e arraste.
       Pegue um ponto um pouco ao lado: ele não pula para o cursor. Retângulo em volta de 4 pontos,

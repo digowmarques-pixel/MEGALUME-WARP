@@ -22,6 +22,7 @@
 #include <thread>
 #include <sstream>
 #include <filesystem>
+#include <cctype>
 #include <map>
 
 namespace lumen {
@@ -38,6 +39,37 @@ void onDrop(GLFWwindow *, int count, const char **paths) {
 void onClose(GLFWwindow *w) {
   g_closeRequested = true;
   glfwSetWindowShouldClose(w, GLFW_FALSE); // the app decides (unsaved changes)
+}
+
+// Ctrl shortcuts are read from the key events, each with the modifiers held
+// at that moment. Read from the state of the frame instead, a Ctrl released in
+// the same frame as the letter was pressed (quick fingers, a slow frame with
+// heavy outputs) lost the shortcut: Ctrl+P "did nothing" now and then.
+struct KeyPress {
+  char letter; // as on the keyboard's layout (what ImGui calls the key)
+  int mods;
+  bool repeat; // held down
+};
+std::vector<KeyPress> g_keyPresses; // since the last frame
+
+void onMainKey(GLFWwindow *, int key, int scancode, int action, int mods) {
+  if (action == GLFW_RELEASE) return;
+  char letter = 0;
+  if (const char *name = glfwGetKeyName(key, scancode); name && name[0] && !name[1])
+    letter = char(std::toupper(static_cast<unsigned char>(name[0])));
+  else if (key >= GLFW_KEY_A && key <= GLFW_KEY_Z)
+    letter = char('A' + (key - GLFW_KEY_A));
+  if (letter >= 'A' && letter <= 'Z' && g_keyPresses.size() < 64) g_keyPresses.push_back({letter, mods, action == GLFW_REPEAT});
+}
+
+// Ctrl+letter pressed since the last frame. shift: 0 without, 1 with, -1 either.
+// Not with Alt (AltGr is Ctrl+Alt on Windows: it types characters).
+bool chord(char letter, int shift, bool repeat = false) {
+  for (const KeyPress &k : g_keyPresses)
+    if (k.letter == letter && (k.mods & GLFW_MOD_CONTROL) && !(k.mods & GLFW_MOD_ALT) &&
+        (shift < 0 || ((k.mods & GLFW_MOD_SHIFT) != 0) == (shift == 1)) && (repeat || !k.repeat))
+      return true;
+  return false;
 }
 
 void onGlfwError(int code, const char *desc) {
@@ -605,6 +637,7 @@ int App::run(const Options &opts) {
               reinterpret_cast<const char *>(glGetString(GL_VERSION)));
   glfwSetDropCallback(window, onDrop);
   glfwSetWindowCloseCallback(window, onClose);
+  glfwSetKeyCallback(window, onMainKey); // before ImGui's, which calls it in turn
 
   IMGUI_CHECKVERSION();
   ImGui::CreateContext();
@@ -733,6 +766,7 @@ int App::run(const Options &opts) {
   platform::setDialogPump([this, &last, &opts] {
     glfwPollEvents();                // no "not responding" ghost on the projectors
     ImGui::GetIO().ClearEventsQueue(); // clicks behind the dialog act on nothing later
+    g_keyPresses.clear();
     double now = glfwGetTime();
     double dt = std::clamp(now - last, 0.0, 0.1);
     last = now;
@@ -852,7 +886,7 @@ int App::run(const Options &opts) {
 
     if (!io.WantTextInput) {
       bool ctrl = io.KeyCtrl, shift = io.KeyShift;
-      if (ctrl && shift && ImGui::IsKeyPressed(ImGuiKey_L, false) && !operatorMode) {
+      if (chord('L', 1) && !operatorMode) {
         showLocked = !showLocked;
         status(showLocked ? T("Modo show: edição travada (Ctrl+Shift+L destrava)") : T("Edição liberada"));
       }
@@ -866,19 +900,21 @@ int App::run(const Options &opts) {
       // or a field must not take the media off the air.
       if (!ctrl && ImGui::IsKeyPressed(ImGuiKey_Escape, false) && popupWasOpen_) ImGui::ClosePopupsExceptModals();
       if (!op && !ctrl && ImGui::IsKeyPressed(ImGuiKey_B, false)) engine.blackout = !engine.blackout;
-      if (!op && ctrl && ImGui::IsKeyPressed(ImGuiKey_S, false)) saveProject(shift);
-      if (!showLocked && ctrl && ImGui::IsKeyPressed(ImGuiKey_O, false)) unlessUnsaved([this] { openDialog(); });
-      if (!showLocked && ctrl && ImGui::IsKeyPressed(ImGuiKey_N, false)) unlessUnsaved([this] { newProject(); });
-      if (!showLocked && ctrl && ImGui::IsKeyPressed(ImGuiKey_I, false)) importDialog();
-      if (ctrl && !shift && ImGui::IsKeyPressed(ImGuiKey_P, false) && !operatorMode) outputsOpen = !outputsOpen;
-      if (ctrl && shift && ImGui::IsKeyPressed(ImGuiKey_P, false) && !operatorMode) ui_->openOutputs();
-      if (!op && ctrl && shift && ImGui::IsKeyPressed(ImGuiKey_D, false)) showOutputControls = !showOutputControls;
+      if (!op && chord('S', 0)) saveProject(false);
+      else if (!op && chord('S', 1)) saveProject(true);
+      if (!showLocked && chord('O', -1)) unlessUnsaved([this] { openDialog(); });
+      if (!showLocked && chord('N', -1)) unlessUnsaved([this] { newProject(); });
+      if (!showLocked && chord('I', -1)) importDialog();
+      if (chord('P', 0) && !operatorMode) outputsOpen = !outputsOpen;
+      if (chord('P', 1) && !operatorMode) ui_->openOutputs();
+      if (!op && chord('D', 1)) showOutputControls = !showOutputControls;
       if (!showLocked) {
-        if (ctrl && ImGui::IsKeyPressed(ImGuiKey_Z)) shift ? redo() : undo();
-        if (ctrl && ImGui::IsKeyPressed(ImGuiKey_Y)) redo();
+        if (chord('Z', 0, true)) undo();
+        if (chord('Z', 1, true) || chord('Y', -1, true)) redo();
         ui_->workspace.handleShortcuts(*this);
       }
     }
+    g_keyPresses.clear(); // read above (or typed in a field: not shortcuts)
     if (engine.project.keyboardInput) pollKeyboard(!io.WantTextInput);
 
     ui_->draw(*this);
@@ -1008,6 +1044,11 @@ int App::run(const Options &opts) {
       }
     }
 
+    if (reopenOutputs) {
+      reopenOutputs = false;
+      if (outputs.openCount() > 0) outputs.shutdown(); // sync below opens them again
+      if (outputsOpen) status(T("Telas reabertas"));
+    }
     if (!opts.noOutputs && outputsOpen) {
       step("outputs sync");
       outputs.sync(engine.project);

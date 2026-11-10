@@ -95,6 +95,27 @@ Ordem pensada para **videomapping** e **instalações interativas**.
 - *Seek* preciso de vídeo e áudio (também por OSC: `/lumen/layer/<l>/time`)
 - Testes de integração no CI (`scripts/test-integration.sh`)
 
+## ✅ v0.10.52
+- **Win+D (mostrar a área de trabalho) não tira mais a imagem dos projetores.** O Windows minimizava
+  as janelas das saídas e, ao voltar para o Lumen, só a janela dele voltava: o projetor ficava com a
+  área de trabalho. Agora uma saída em outra tela (projetor) volta na hora, sozinha, sem tirar o
+  teclado da janela do Lumen; e, uma vez por segundo, é posta de novo por cima de tudo naquela tela.
+  Uma saída na mesma tela do Lumen continua minimizada (para não cobrir a interface): Ctrl+P ou o
+  botão de saídas a trazem de volta.
+- **Ctrl+P (ligar/desligar saídas) não falha mais.** Os atalhos com Ctrl (Ctrl+P, Ctrl+S, Ctrl+O,
+  Ctrl+Z...) passam a ser lidos do próprio evento da tecla: com o programa pesado, soltar o Ctrl no
+  mesmo quadro em que o P chegava fazia o atalho se perder. E quando uma saída que estava com o
+  teclado fecha, o teclado volta para a janela do Lumen.
+- Enquanto a janela do Lumen está minimizada, a tela dela continua conhecida (antes, uma saída na
+  tela do notebook virava "sempre por cima"). Uma saída em janela não grava mais a posição de
+  minimizada (-32000) e, se aparecer fora de todas as telas, abre na tela do Lumen.
+- Uma saída que o sistema empurrou para outra tela (projetor desligado antes de o Lumen saber) volta
+  para o lugar dela, nunca fica por cima da tela do notebook.
+- **Modo Operador (loja): botão LIGAR TELAS** no alto, vermelho, com o aviso "As telas estão
+  desligadas"; com as telas ligadas ele fica verde, **Reabrir telas**: um toque fecha e abre as saídas
+  de novo (um projetor mostrando a área de trabalho do Windows volta a ter a imagem). Desligar as
+  telas continua fora do alcance da loja.
+
 ## ✅ v0.10.51
 - **Pontos mais fáceis de pegar em todos os editores.** O ponto sob o mouse acende (e o cursor muda)
   antes do clique; a distância para pegar subiu de 10 para 16 px; ao pegar um ponto um pouco ao lado

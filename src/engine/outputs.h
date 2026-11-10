@@ -94,6 +94,14 @@ private:
   void draw(const Project &p, const OutputConfig &o, int index, const Texture &canvas,
             const Texture *mask, DynamicMesh &mesh, int w, int h, double time, bool blackout);
   void updateSwapIntervals();
+  // An open output on another screen than Lumen's window (a projector) stays
+  // on it: put back at once when Windows minimised or hid it (Win+D, Win+M,
+  // "Show desktop"), without taking the keyboard from Lumen's window. One on
+  // Lumen's own screen is left alone (it would cover the interface); Ctrl+P
+  // or "Reabrir telas" bring it back. An output also stays on its own screen:
+  // one the system moved to another screen (its projector switched off before
+  // Lumen heard of it) is put back, never over the notebook's screen.
+  void keepShowing(const std::vector<MonitorInfo> &mons);
   const Texture *outputMask(const OutputConfig &o, int w, int h, bool preview, DynamicMesh &mesh);
 
   GLFWwindow *main_ = nullptr;
@@ -123,6 +131,8 @@ private:
   std::map<int, std::unique_ptr<Framebuffer>> masks2_, previewMasks_;
   DynamicMesh mainMesh_; // main-context mesh for mask rendering
   double identifyUntil_ = 0;
+  int mainMonitor_ = -1;          // the screen Lumen's window was last seen on (kept while it is minimised)
+  double lastRaise_ = 0;          // the outputs on other screens were last put on top
   float renderMs_ = 0;
 };
 

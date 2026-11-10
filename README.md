@@ -100,7 +100,7 @@ código compila para Windows: `./scripts/check-windows-mingw.sh`.
 O instalador (NSIS, também roda no Linux com `sudo apt install nsis`):
 
 ```bash
-cd installer && makensis -DVERSION=0.10.51 -DSRCDIR=../build-mingw/Lumen -DOUTFILE=../Lumen-0.10.51-setup.exe lumen.nsi
+cd installer && makensis -DVERSION=0.10.52 -DSRCDIR=../build-mingw/Lumen -DOUTFILE=../Lumen-0.10.52-setup.exe lumen.nsi
 ```
 
 ## Compilar no Linux (desenvolvimento)
@@ -136,7 +136,10 @@ cmake -S . -B build && cmake --build build -j
 *Janela → Modo Operador (loja)...* troca a interface por uma tela simples para quem só dá play:
 os vídeos de um dashboard em botões grandes, Parar, Blackout e Volume. Para voltar, o cadeado pede
 o PIN (padrão **546500**, troque na mesma janela). "Abrir sempre no Modo Operador" deixa o
-computador da loja ligar direto nessa tela, com as saídas no projetor/TV.
+computador da loja ligar direto nessa tela, com as saídas no projetor/TV. No alto, **LIGAR TELAS**
+(vermelho) liga a imagem nos projetores quando estão desligadas; com as telas ligadas o botão fica
+verde, **Reabrir telas**: se um projetor mostrar a área de trabalho do Windows, um toque devolve a
+imagem.
 
 ### Licença
 

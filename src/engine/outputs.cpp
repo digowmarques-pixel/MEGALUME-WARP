@@ -4,6 +4,8 @@
 
 #ifdef _WIN32
 #include <windows.h>
+#define GLFW_EXPOSE_NATIVE_WIN32
+#include <GLFW/glfw3native.h>
 #endif
 
 #include <algorithm>
@@ -204,12 +206,17 @@ bool OutputManager::identifying() const { return glfwGetTime() < identifyUntil_;
 
 void OutputManager::destroy(Window &w) {
   if (!w.handle) return;
+  // The keyboard was on it (a key pressed on the projector's window): it goes
+  // back to Lumen's window, not to whatever window Windows picks next (then
+  // Ctrl+P "stopped working" until Lumen was clicked).
+  const bool hadKeyboard = glfwGetWindowAttrib(w.handle, GLFW_FOCUSED) != 0;
   glfwMakeContextCurrent(w.handle);
   w.mesh.reset(); // VAO belongs to this context
   glfwMakeContextCurrent(main_);
   glfwDestroyWindow(w.handle);
   w.handle = nullptr;
   swapDirty_ = true;
+  if (hadKeyboard && !glfwGetWindowAttrib(main_, GLFW_ICONIFIED)) glfwFocusWindow(main_);
 }
 
 void OutputManager::shutdown() {
@@ -386,16 +393,18 @@ void OutputManager::sync(Project &p) {
   for (auto &o : p.outputs) present[o.id] = resolveMonitor(o, mons);
   // The screen Lumen's own window is on: an output there is not kept above
   // every window, so the interface (and the taskbar, Task Manager) can always
-  // be brought in front of it.
-  int mainMonitor = -1;
-  {
+  // be brought in front of it. While that window is minimised (Win+D) its
+  // place is off every screen: the last screen seen is kept (otherwise an
+  // output on the notebook's screen turned "always on top").
+  const bool mainIconified = glfwGetWindowAttrib(main_, GLFW_ICONIFIED) != 0;
+  if (!mainIconified) {
     int mx = 0, my = 0, mw = 0, mh = 0;
     glfwGetWindowPos(main_, &mx, &my);
     glfwGetWindowSize(main_, &mw, &mh);
-    const int cx = mx + mw / 2, cy = my + mh / 2;
-    for (size_t i = 0; i < mons.size(); ++i)
-      if (cx >= mons[i].x && cx < mons[i].x + mons[i].w && cy >= mons[i].y && cy < mons[i].y + mons[i].h) mainMonitor = int(i);
+    if (const int at = monitorAt(mx + mw / 2, my + mh / 2, mons); at >= 0) mainMonitor_ = at;
   }
+  if (mainMonitor_ >= int(mons.size())) mainMonitor_ = -1;
+  const int mainMonitor = mainMonitor_;
   for (auto *cache : {&masks2_, &previewMasks_}) // mask buffers of removed outputs
     for (auto it = cache->begin(); it != cache->end();)
       it = present.count(it->first) ? std::next(it) : cache->erase(it);
@@ -421,6 +430,13 @@ void OutputManager::sync(Project &p) {
 
     bool onMonitor = o.monitor >= 0 && o.monitor < int(mons.size());
     int monitor = onMonitor ? o.monitor : -1;
+    // A windowed output recorded off every screen (minimised when it was
+    // saved, or a screen since removed) opens on Lumen's screen instead.
+    if (!onMonitor && !w && !mons.empty() && !windowReachable(o.winX, o.winY, std::max(64, o.winW), mons)) {
+      const MonitorInfo &m = mons[size_t(mainMonitor >= 0 ? mainMonitor : 0)];
+      o.winX = m.x + 80;
+      o.winY = m.y + 80;
+    }
     int x = onMonitor ? mons[size_t(monitor)].x : o.winX;
     int y = onMonitor ? mons[size_t(monitor)].y : o.winY;
     int ww = onMonitor ? mons[size_t(monitor)].w : std::max(64, o.winW);
@@ -444,6 +460,10 @@ void OutputManager::sync(Project &p) {
       glfwWindowHint(GLFW_FLOATING, floating ? GLFW_TRUE : GLFW_FALSE);
       glfwWindowHint(GLFW_AUTO_ICONIFY, GLFW_FALSE);
       glfwWindowHint(GLFW_FOCUS_ON_SHOW, GLFW_FALSE);
+      // A projector's window does not take the keyboard from Lumen's window
+      // (GO, shortcuts) when it opens; one on Lumen's own screen does (Esc on
+      // it brings Lumen back).
+      glfwWindowHint(GLFW_FOCUSED, floating ? GLFW_FALSE : GLFW_TRUE);
       // Borderless window covering the monitor: more reliable than exclusive
       // fullscreen with several outputs, and does not minimise on focus loss.
       GLFWwindow *h = glfwCreateWindow(ww, hh, o.name.c_str(), nullptr, main_);
@@ -482,14 +502,65 @@ void OutputManager::sync(Project &p) {
       glfwSetWindowTitle(w->handle, o.name.c_str());
       w->title = o.name;
     }
-    // Remember where the user dragged a windowed output.
-    if (monitor < 0) {
+    // Remember where the user dragged a windowed output (not while it is
+    // minimised: its place is then -32000, off every screen).
+    if (monitor < 0 && !glfwGetWindowAttrib(w->handle, GLFW_ICONIFIED)) {
       int cx, cy, cw, ch;
       glfwGetWindowPos(w->handle, &cx, &cy);
       glfwGetWindowSize(w->handle, &cw, &ch);
-      o.winX = w->x = cx; o.winY = w->y = cy;
+      if (windowReachable(cx, cy, std::max(cw, 64), mons)) {
+        o.winX = w->x = cx;
+        o.winY = w->y = cy;
+      }
       if (cw > 0 && ch > 0) { o.winW = w->w = cw; o.winH = w->h = ch; }
     }
+  }
+  keepShowing(mons);
+}
+
+void OutputManager::keepShowing(const std::vector<MonitorInfo> &mons) {
+  const double now = glfwGetTime();
+  const bool raise = now - lastRaise_ >= 1.0; // once a second is plenty
+  if (raise) lastRaise_ = now;
+  for (auto &w : windows_) {
+    GLFWwindow *h = w->handle;
+    const bool hidden = glfwGetWindowAttrib(h, GLFW_ICONIFIED) || !glfwGetWindowAttrib(h, GLFW_VISIBLE);
+    // floating = on another screen than Lumen's window (a projector).
+    if (hidden && w->floating) {
+#ifdef _WIN32
+      HWND hw = glfwGetWin32Window(h);
+      ShowWindow(hw, SW_SHOWNOACTIVATE); // back, without taking the keyboard
+      SetWindowPos(hw, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
+#else
+      if (glfwGetWindowAttrib(h, GLFW_ICONIFIED)) glfwRestoreWindow(h);
+      glfwShowWindow(h);
+#endif
+      if (w->monitor >= 0) { // exactly over its screen again
+        glfwSetWindowPos(h, w->x, w->y);
+        glfwSetWindowSize(h, w->w, w->h);
+      }
+      continue;
+    }
+    if (!raise || hidden) continue;
+    // Moved to another screen by the system (Windows moves the windows of a
+    // screen that went away, before telling the programs): back to its own
+    // screen, never over the notebook's.
+    if (w->monitor >= 0) {
+      int cx = 0, cy = 0, cw = 0, ch = 0;
+      glfwGetWindowPos(h, &cx, &cy);
+      glfwGetWindowSize(h, &cw, &ch);
+      if (monitorAt(cx + cw / 2, cy + ch / 2, mons) != w->monitor) {
+        glfwSetWindowPos(h, w->x, w->y);
+        glfwSetWindowSize(h, w->w, w->h);
+      }
+    }
+#ifdef _WIN32
+    // "Show desktop" can also bring the desktop in front of the windows
+    // without minimising them: a projector's output is put back on top.
+    if (w->floating)
+      SetWindowPos(glfwGetWin32Window(h), HWND_TOPMOST, 0, 0, 0, 0,
+                   SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER);
+#endif
   }
 }
 

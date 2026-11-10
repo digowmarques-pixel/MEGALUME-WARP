@@ -1521,6 +1521,20 @@ static void testMonitors() {
   // A window (no screen): always shown.
   OutputConfig win;
   CHECK(resolveMonitor(win, notebookOnly));
+
+  // Win+D: a minimised window reports -32000, -32000, on no screen. Lumen's
+  // screen is then unknown (the last one seen is kept) and a windowed output
+  // recorded there is opened back on a screen.
+  CHECK(monitorAt(960, 540, two) == 0 && monitorAt(1920 + 5, 10, two) == 1);
+  CHECK(monitorAt(-32000 + 640, -32000 + 360, two) == -1);
+  CHECK(monitorAt(3840, 0, two) == -1); // right edge: outside
+  CHECK(windowReachable(100, 100, 800, two));
+  CHECK(windowReachable(1900, 500, 800, two));     // across both screens
+  CHECK(!windowReachable(-32000, -32000, 800, two));
+  CHECK(windowReachable(-760, 10, 800, two));      // mostly off, 40 px still on the left screen
+  CHECK(!windowReachable(-790, 10, 800, two));     // only 10 px left: not grabbable
+  CHECK(!windowReachable(2500, 1075, 800, two));   // top strip below the screens
+  CHECK(!windowReachable(100, 100, 800, {}));      // no screens at all
 }
 
 int main() {

@@ -122,6 +122,9 @@ public:
   bool requestQuit = false;
   // Output windows open only when the user asks (toolbar / Ctrl+P / --outputs).
   bool outputsOpen = false;
+  // Closes and opens the output windows again, at once (Operator mode's
+  // "Reabrir telas": a projector showing Windows' desktop gets its image back).
+  bool reopenOutputs = false;
   // Draws the selected output's warp handles on the projector itself.
   bool showOutputControls = false;
   // Show mode: editing is locked, only show control (GO, stop, blackout...).

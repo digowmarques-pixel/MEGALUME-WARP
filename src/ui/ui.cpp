@@ -2805,6 +2805,23 @@ void Ui::operatorScreen(App &app) {
   ImGui::SameLine(0, 18);
   ImGui::TextUnformatted(board < int(p.boards.size()) ? p.boards[size_t(board)].c_str() : "");
   if (bigFont_) ImGui::PopFont();
+  // The screens (projectors). The shop can turn them on, never off (that
+  // would black out the shop); on, the button opens them again: a projector
+  // left showing Windows' desktop gets its image back.
+  ImGui::SameLine(ImGui::GetWindowWidth() - 150 - 12 - 220);
+  {
+    const bool on = app.outputsOpen;
+    ImGui::PushStyleColor(ImGuiCol_Button, on ? ImVec4(0.13f, 0.40f, 0.22f, 1) : ImVec4(0.78f, 0.20f, 0.18f, 1));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, on ? ImVec4(0.17f, 0.52f, 0.29f, 1) : ImVec4(0.90f, 0.27f, 0.24f, 1));
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive, on ? ImVec4(0.21f, 0.62f, 0.35f, 1) : ImVec4(0.98f, 0.33f, 0.29f, 1));
+    if (ImGui::Button(on ? T("Reabrir telas##opout") : T("LIGAR TELAS##opout"), {220, 34})) {
+      if (on) app.reopenOutputs = true;
+      else app.outputsOpen = true;
+    }
+    ImGui::PopStyleColor(3);
+    ImGui::SetItemTooltip("%s", on ? T("As telas estão ligadas. Se um projetor mostrar a área de trabalho do Windows, toque aqui.")
+                                   : T("Liga a imagem nos projetores / telas."));
+  }
   ImGui::SameLine(ImGui::GetWindowWidth() - 150);
   bool lockHit = ImGui::Button(T("      Bloqueado##oplock"), {136, 34});
   {
@@ -2815,6 +2832,11 @@ void Ui::operatorScreen(App &app) {
   if (lockHit) requestOperatorPin();
   ImGui::SetItemTooltip("%s", T("Sair do Modo Operador (pede o PIN)"));
   ImGui::Separator();
+  if (!app.outputsOpen) { // nothing reaches the projectors: say it where the eyes are
+    if (bigFont_) ImGui::PushFont(bigFont_);
+    ImGui::TextColored({1, 0.42f, 0.38f, 1}, "%s", T("As telas estão desligadas: toque em LIGAR TELAS (no alto) para o vídeo aparecer."));
+    if (bigFont_) ImGui::PopFont();
+  }
 
   // The cues: one button per column of the chosen dashboard.
   std::vector<int> cols;
@@ -3117,7 +3139,7 @@ void Ui::operatorSetupWindow(App &app) {
     return;
   }
   ImGui::TextWrapped("%s", T("Uma tela simples para quem dá play na loja: só os vídeos de um dashboard em botões "
-                             "grandes, Parar, Blackout e volume. Mapping, saídas e ajustes ficam escondidos; para "
+                             "grandes, Ligar telas, Parar, Blackout e volume. Mapping, saídas e ajustes ficam escondidos; para "
                              "sair, o cadeado pede o PIN."));
   ImGui::Spacing();
   int board = operatorBoard(p);

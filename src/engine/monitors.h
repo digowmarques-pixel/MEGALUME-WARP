@@ -4,6 +4,7 @@
 
 #include "core/project.h"
 
+#include <algorithm>
 #include <string>
 #include <vector>
 
@@ -41,6 +42,26 @@ inline bool resolveMonitor(OutputConfig &o, const std::vector<MonitorInfo> &mons
   if (at < 0) return false; // not connected (or moved in Windows' display settings: choose it again)
   o.monitor = o.monitorRecorded = at;
   return true;
+}
+
+// The screen that contains the point, or -1 (a minimised window reports
+// -32000, -32000: on no screen).
+inline int monitorAt(int x, int y, const std::vector<MonitorInfo> &mons) {
+  for (size_t i = 0; i < mons.size(); ++i)
+    if (x >= mons[i].x && x < mons[i].x + mons[i].w && y >= mons[i].y && y < mons[i].y + mons[i].h) return int(i);
+  return -1;
+}
+
+// Whether a window at (x, y), w wide, can be seen and grabbed: its top strip
+// overlaps a screen by at least 40 x 20 px. A windowed output whose place was
+// recorded while it was minimised (-32000) opened off every screen.
+inline bool windowReachable(int x, int y, int w, const std::vector<MonitorInfo> &mons) {
+  for (const MonitorInfo &m : mons) {
+    const int ix = std::min(x + w, m.x + m.w) - std::max(x, m.x);
+    const int iy = std::min(y + 30, m.y + m.h) - std::max(y, m.y);
+    if (ix >= 40 && iy >= 20) return true;
+  }
+  return false;
 }
 
 } // namespace lumen
